@@ -21,6 +21,10 @@ const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 const LOCAL_EOF_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
 const PROCESS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
 
+#[cfg(test)]
+#[path = "tests/startup.rs"]
+mod startup_tests;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "kind", content = "tunnel_profile_id", rename_all = "snake_case")]
 pub enum ProcessKey {
@@ -75,6 +79,7 @@ struct ManagedProcess {
     exit_code: Option<i32>,
     stdout_task: JoinHandle<()>,
     stderr_task: JoinHandle<()>,
+    logs: Arc<Mutex<VecDeque<String>>>,
 }
 
 #[derive(Default)]
@@ -356,9 +361,18 @@ impl ProcessSupervisor {
                 exit_code: None,
                 stdout_task,
                 stderr_task,
+                logs,
             },
         );
         Ok(machine_rx)
+    }
+
+    // Clone the current generation's buffer before cleanup removes the process.
+    // Read it after cleanup has given both existing drain tasks time to finish.
+    pub(crate) fn server_startup_diagnostics(&self) -> Option<super::startup::StartupDiagnostics> {
+        self.processes
+            .get(&ProcessKey::LocalServer)
+            .map(|process| super::startup::StartupDiagnostics(Arc::clone(&process.logs)))
     }
 
     pub fn refresh(&mut self) {

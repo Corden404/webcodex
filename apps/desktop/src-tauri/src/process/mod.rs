@@ -1,3 +1,4 @@
+pub(crate) mod startup;
 mod supervisor;
 
 #[cfg(test)]

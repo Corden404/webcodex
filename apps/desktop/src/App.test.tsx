@@ -819,8 +819,8 @@ beforeEach(() => {
     api.getState.mockResolvedValue(setupState);
     api.refresh.mockResolvedValue(setupState);
     api.resumeSavedRuntime.mockRejectedValue({
-      code: "server_unreachable",
-      message: "WebCodex Service did not become ready",
+      code: "server_start_failed",
+      message: "The Desktop-owned WebCodex Server exited during startup (exit code 1). failed to bind HTTP listener 127.0.0.1:54611 (os error 10013)",
       next_action: "Check diagnostics.",
     });
 
@@ -830,7 +830,9 @@ beforeEach(() => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("WebCodex 服务不可用");
-    expect(alert).toHaveTextContent("server_unreachable");
+    expect(alert).toHaveTextContent("server_start_failed");
+    expect(alert).toHaveTextContent("127.0.0.1:54611 (os error 10013)");
+    expect(alert).toHaveTextContent("exit code 1");
   });
 
   it("offers a product recovery action when the selected project did not load", async () => {

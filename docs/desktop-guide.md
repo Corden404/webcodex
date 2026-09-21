@@ -66,6 +66,8 @@ Desktop's own permission results do not prove that a separately launched Runner 
 
 ## Activity, settings, and background operation
 
+If the local Server exits during startup, expand the error's **Details**. Desktop shows the exit code when available and, for a recognized HTTP listener bind failure, the socket address and OS error code (for example, `127.0.0.1:54611` and `os error 10013`). These diagnostics are extracted from bounded process output; arbitrary log text is not displayed. This does not change port selection or recovery behavior.
+
 **Activity** shows newest entries first. Search content or sources, or select **Warnings and errors only**. Filtering never deletes records.
 
 **Settings** contains language, launch at login, Computer Use permissions on macOS, Tunnel networking, and diagnostics. You can also switch language at the bottom of the sidebar. Supported languages are 简体中文, English, 日本語, 한국어, Deutsch, and Français. The selection is remembered across restarts, and activity times follow the selected locale. System tray menus and raw backend diagnostics remain in English; the operating system controls native file-picker language.

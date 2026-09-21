@@ -1978,16 +1978,16 @@ impl DesktopCore {
             }
             if let Some(process) = self.process_snapshot(ProcessKey::LocalServer).await {
                 if matches!(process.phase, ProcessPhase::Exited | ProcessPhase::Failed) {
+                    let diagnostics = self.supervisor.lock().await.server_startup_diagnostics();
                     self.cleanup_readiness_process(
                         ProcessKey::LocalServer,
                         deadline,
                         cleanup_owned_process,
                     )
                     .await;
-                    return Err(DesktopError::new(
-                        "server_start_failed",
-                        "The Desktop-owned WebCodex Server exited during startup",
-                        "Open Activity for safe diagnostics and retry.",
+                    return Err(crate::process::startup::server_start_error(
+                        process.exit_code,
+                        diagnostics.as_ref(),
                     ));
                 }
             }
