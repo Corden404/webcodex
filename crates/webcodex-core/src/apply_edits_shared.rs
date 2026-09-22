@@ -99,6 +99,11 @@ impl ApplyTextEditKind {
     }
 }
 
+/// Canonical model-facing advisory for the narrow duplicate-anchor insertion case.
+/// The Runner may report this evidence, but the Server projects only this exact text.
+pub const APPLY_TEXT_EDIT_DUPLICATE_ANCHOR_WARNING: &str =
+    "Inserted text already contains the full anchor at the insertion boundary; the original anchor remains.";
+
 /// Optional source-line safety fence for one exact edit. Lines are 1-based and
 /// inclusive against the canonicalized original file content for the batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

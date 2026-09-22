@@ -692,7 +692,7 @@ fn edit_plan(
         });
         if duplicate_anchors[index] {
             summary["warning"] = serde_json::json!(
-                "Inserted text already contains the full anchor at the insertion boundary; the original anchor remains."
+                webcodex_core::apply_edits_shared::APPLY_TEXT_EDIT_DUPLICATE_ANCHOR_WARNING
             );
         }
         summaries.push(summary);
