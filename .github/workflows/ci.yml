@@ -137,7 +137,7 @@ jobs:
             plugins/campus-application/package-lock.json
             plugins/agent-browser/package-lock.json
       - name: Install frontend dependencies
-        if: needs.changes.outputs.needs_frontend == 'true'
+        if: needs.changes.outputs.needs_frontend == 'true' || needs.changes.outputs.needs_desktop_frontend == 'true'
         run: npm ci --prefix frontend
       - name: Check frontend contracts
         if: needs.changes.outputs.needs_frontend == 'true'
@@ -456,7 +456,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            apps/desktop/package-lock.json
       - name: Verify native macOS host
         env:
           EXPECTED_HOST_ARCH: ${{ matrix.host_arch }}
@@ -465,6 +467,8 @@ jobs:
           test "$(uname -m)" = "$EXPECTED_HOST_ARCH"
           rust_host="$(rustc -vV | sed -n 's/^host: //p')"
           test "$rust_host" = "$EXPECTED_RUST_HOST"
+      - name: Install shared frontend dependencies
+        run: npm ci --prefix frontend
       - name: Install Desktop dependencies
         run: npm ci --prefix apps/desktop
       - name: Check Desktop frontend
@@ -669,7 +673,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            apps/desktop/package-lock.json
+      - name: Install shared frontend dependencies
+        run: npm ci --prefix frontend
       - name: Install Desktop dependencies
         run: npm ci --prefix apps/desktop
       - name: Check Desktop frontend

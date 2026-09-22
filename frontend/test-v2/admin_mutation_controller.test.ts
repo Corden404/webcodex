@@ -1,6 +1,6 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { AdminMutationController, AdminMutationError } from "../dist/admin_mutation_controller.js";
+import { AdminMutationController, AdminMutationError } from "../src/admin_mutation_controller.js";
 
 function deferred() { let resolve, reject; const promise = new Promise((a,b)=>{resolve=a;reject=b}); return {promise,resolve,reject}; }
 function harness() {

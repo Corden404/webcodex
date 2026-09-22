@@ -14,6 +14,8 @@ import { useLocale } from "../../i18n/locale";
 import { useProduct } from "../../i18n/product";
 import { projectName, useWorkspace, workspaceQuery } from "../workspace/WorkspaceContext";
 import { WorkspaceDialog } from "../workspace/WorkspaceDialog";
+import { ProjectPicker } from "../../../../../frontend/src/ui/ProjectPicker";
+import { WorkspaceEmptyState } from "../../components/WorkspaceEmptyState";
 
 type ExtensionTab = "codingAgents" | "sshResources" | "instructions" | "skills" | "mcpProviders";
 const TABS: ExtensionTab[] = ["codingAgents", "sshResources", "mcpProviders", "skills", "instructions"];
@@ -78,7 +80,7 @@ export function ExtensionsPanel({ state, onState }: { state: DesktopState; onSta
   const skills = catalog?.skills.catalog?.skills || [];
   return <div className="page-section workspace-page" data-webcodex-page="extensions">
     <header className="page-heading-row"><h1 id="extensions-title">{t("extensions.title")}</h1>{(projectTab || tab === "mcpProviders") && <button className="secondary-button" onClick={refresh} disabled={disabled || loading}>{p("refresh")}</button>}</header>
-    {projectTab && <div className="activity-project-filter"><label htmlFor="extensions-project">{p("projects")}</label><select id="extensions-project" value={project} onChange={event => setProject(event.target.value)} disabled={disabled}>{workspace.projects.filter(row => row.id).map(row => <option key={row.id} value={row.id}>{projectName(row)}</option>)}</select></div>}
+    {projectTab && <div className="activity-project-filter"><span className="filter-label">{p("projects")}</span><ProjectPicker label={p("projects")} emptyLabel={p("noMatches")} searchLabel={p("search")} value={project} onChange={setProject} disabled={disabled} options={workspace.projects.filter(row => row.id).map(row => ({ value: row.id, label: projectName(row), detail: row.path }))} /></div>}
     <div className="workspace-tabs" role="tablist" aria-label={t("extensions.title")}>
       {TABS.map(value => <button type="button" role="tab" key={value} id={`extension-tab-${value}`} aria-controls={`extension-view-${value}`} aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} onClick={() => setTab(value)} onKeyDown={event => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -92,15 +94,15 @@ export function ExtensionsPanel({ state, onState }: { state: DesktopState; onSta
       {tab === "codingAgents" && <CodingAgentsPanel state={state} onState={onState} settings={settings} onRestarted={() => { setPendingRestart(false); refresh(); }} />}
       {tab === "sshResources" && <SshResourcesPanel state={state} onState={onState} settings={settings} onRestarted={() => { setPendingRestart(false); refresh(); }} />}
       {tab === "instructions" && <>
-        <div className="extension-toolbar"><button type="button" className="secondary-button" disabled={!settings || disabled} onClick={() => void addFile("instructions")}>{p("addInstructions")}</button></div>
+        {!!catalog?.instructions.files.length && <div className="extension-toolbar"><button type="button" className="secondary-button" disabled={!settings || disabled} onClick={() => void addFile("instructions")}>{p("addInstructions")}</button></div>}
         {catalog?.instructions.files.map(file => <article className="extension-row" key={`${file.source_scope}:${file.path}`}><div><strong>{file.source_scope === "runner" ? p("globalInstructions") : file.path.split(/[\\/]/).pop()}</strong><span>{file.source_scope === "runner" ? "Runner" : projectName(workspace.projects.find(row => row.id === project) || { id: project })} · {p("available")}</span><details><summary>{p("details")}</summary><code>{file.path}</code></details></div><button className="secondary-button" onClick={() => setDocument(file)} aria-label={`${p("open")} ${file.path.split(/[\\/]/).pop()}`}>{p("open")}</button></article>)}
-        {catalog?.instructions.scan_complete && !catalog.instructions.files.length && <p className="workspace-empty">{p("noInstructions")}</p>}
+        {catalog?.instructions.scan_complete && !catalog.instructions.files.length && <WorkspaceEmptyState kind="document" message={p("noInstructions")} action={<button type="button" className="primary-button" disabled={!settings || disabled} onClick={() => void addFile("instructions")}>{p("addInstructions")}</button>} />}
         {catalog && !catalog.instructions.scan_complete && <p className="workspace-notice">{p("unavailable")}</p>}
       </>}
       {tab === "skills" && <>
-        <div className="extension-toolbar"><button type="button" className="secondary-button" onClick={() => void addFile("skills")} disabled={!settings || disabled}>{p("addSkill")}</button></div>
+        {!!skills.length && <div className="extension-toolbar"><button type="button" className="secondary-button" onClick={() => void addFile("skills")} disabled={!settings || disabled}>{p("addSkill")}</button></div>}
         {skills.map(skill => <article className="extension-row" key={skill.skill_id}><div><strong>{skill.name}</strong><p>{skill.description}</p><span>{skill.source_scope === "project" ? projectName(workspace.projects.find(row => row.id === project) || { id: project }) : "Runner"} · {p("available")}</span></div><details><summary>{p("details")}</summary><code>{skill.trust}</code></details></article>)}
-        {catalog?.skills.available && !skills.length && <p className="workspace-empty">{p("noExtensions")}</p>}
+        {catalog?.skills.available && !skills.length && <WorkspaceEmptyState kind="skill" message={p("noExtensions")} action={<button type="button" className="primary-button" onClick={() => void addFile("skills")} disabled={!settings || disabled}>{p("addSkill")}</button>} />}
         {catalog && !catalog.skills.available && <p className="workspace-notice">{p("unavailable")}</p>}
         {catalog?.skills.catalog?.truncated && <p>{p("partial")}</p>}
       </>}

@@ -1,9 +1,9 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   AdminHttpError,
   AdminRefreshController,
-} from "../dist/admin_controller.js";
+} from "../src/admin_controller.js";
 
 function deferred() {
   let resolve;
@@ -256,4 +256,27 @@ test("current unauthorized delegates to unified lock callback", async () => {
   requests[0].task.reject(new AdminHttpError(401, "unauthorized"));
   await run;
   assert.equal(unauthorized, 1);
+});
+
+
+test("dispose forgets the credential and requires an explicit new session", async () => {
+  const { controller, requests, state } = harness();
+  const old = controller.beginSession("old-secret");
+  controller.startAutoRefresh(10000);
+  controller.dispose();
+  assert.equal(requests[0].signal.aborted, true);
+  assert.equal(state.timerCleared, true);
+  requests[0].task.resolve({ owner: "old" });
+  await old;
+  await controller.refresh();
+  await controller.invalidateAndRefresh();
+  controller.startAutoRefresh(10000);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(state.rendered, []);
+  assert.equal(state.timerCallback, null);
+  const next = controller.beginSession("new-secret");
+  requests[1].task.resolve({ owner: "new" });
+  await next;
+  assert.deepEqual(state.rendered, [{ owner: "new" }]);
+  controller.dispose();
 });

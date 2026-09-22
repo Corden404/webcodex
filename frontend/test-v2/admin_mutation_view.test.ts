@@ -1,7 +1,7 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { AdminMutationController, AdminMutationError } from "../dist/admin_mutation_controller.js";
-import { AdminMutationDialogCoordinator } from "../dist/admin_mutation_view.js";
+import { AdminMutationController, AdminMutationError } from "../src/admin_mutation_controller.js";
+import { AdminMutationDialogCoordinator } from "../src/admin_mutation_view.js";
 
 function deferred() { let resolve, reject; const promise = new Promise((a,b)=>{resolve=a;reject=b}); return {promise,resolve,reject}; }
 function harness() {
@@ -47,12 +47,12 @@ test("active jobs conflict keeps context while revision conflict invalidates it"
 
 test("dashboard unauthorized orchestration aborts mutation and closes dialog", async()=>{
   const h=harness(); const dashboard=[]; let locked=0;
-  const refresh=new (await import("../dist/admin_controller.js")).AdminRefreshController({
+  const refresh=new (await import("../src/admin_controller.js")).AdminRefreshController({
     request(token,signal){const task=deferred();dashboard.push({token,signal,task});return task.promise;}, render(){},showAuthenticated(){},showLocked(){},setStatus(){},showError(){},clearError(){},
     onUnauthorized(){ h.view.closeForSessionEnd(); h.mutation.lock(); refresh.lock(); locked++; },
   });
   const body={project:"agent:oe:p",expected_revision:"sha256:x",confirm:true}; const context=h.mutation.start("disable","agent:oe:p",body); h.view.open("agent:oe:p",context,body); const mutationRun=h.mutation.submit(context);
-  const dashboardRun=refresh.beginSession("token"); dashboard[0].task.reject(new (await import("../dist/admin_controller.js")).AdminHttpError(401,"unauthorized")); await dashboardRun;
+  const dashboardRun=refresh.beginSession("token"); dashboard[0].task.reject(new (await import("../src/admin_controller.js")).AdminHttpError(401,"unauthorized")); await dashboardRun;
   assert.equal(locked,1); assert.equal(h.calls[0].signal.aborted,true); assert.equal(h.mutation.has("agent:oe:p"),false); assert.equal(h.state().open,false);
   h.calls[0].task.resolve({}); await mutationRun;
 });

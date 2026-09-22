@@ -2,6 +2,7 @@ import { useState } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../i18n/locale";
+import { DesktopMantineProvider } from "../components/DesktopMantineProvider";
 import { PRODUCT_LOCALES } from "../i18n/product";
 import { RUNNER_CAPABILITIES_MESSAGES, runnerCapabilitiesText } from "../i18n/runner-capabilities";
 import type { DesktopState, RunnerSettings } from "../models/topology";
@@ -37,9 +38,9 @@ function resource(name: string, source: "static" | "managed" = "managed", pendin
 }
 function Harness({ mode = "acp", initial = state() }: { mode?: "acp" | "ssh"; initial?: DesktopState }) {
   const [snapshot, setSnapshot] = useState(initial);
-  return <LocaleProvider>{mode === "acp"
+  return <LocaleProvider><DesktopMantineProvider>{mode === "acp"
     ? <CodingAgentsPanel state={snapshot} onState={setSnapshot} settings={settings} onRestarted={() => undefined} />
-    : <SshResourcesPanel state={snapshot} onState={setSnapshot} settings={settings} onRestarted={() => undefined} />}</LocaleProvider>;
+    : <SshResourcesPanel state={snapshot} onState={setSnapshot} settings={settings} onRestarted={() => undefined} />}</DesktopMantineProvider></LocaleProvider>;
 }
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.setItem("webcodex.desktop.locale", "en-US");
@@ -239,7 +240,7 @@ describe("Desktop SSH Resources", () => {
 
 it("connection replacement discards an open shared authorization confirmation", async () => {
   api.runnerCapabilityAuthorization.mockResolvedValue({ target, can_authorize:true, coding_agents:false, ssh_resources:false });
-  const renderFlow=(value: RunnerSettings) => <LocaleProvider><RunnerCapabilityAuthorization settings={value} capability="coding_agents" disabled={false} onAuthorized={() => undefined} /></LocaleProvider>;
+  const renderFlow=(value: RunnerSettings) => <LocaleProvider><DesktopMantineProvider><RunnerCapabilityAuthorization settings={value} capability="coding_agents" disabled={false} onAuthorized={() => undefined} /></DesktopMantineProvider></LocaleProvider>;
   const view=render(renderFlow(settings));
   fireEvent.click(await screen.findByRole("button", {name:"Authorize Runner Capabilities"}));
   expect(screen.getByRole("dialog")).toBeInTheDocument();
