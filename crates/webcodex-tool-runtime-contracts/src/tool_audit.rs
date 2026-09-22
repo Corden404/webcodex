@@ -4081,9 +4081,13 @@ impl ToolCallAuditProjection for ToolCall {
                     .iter()
                     .filter(|item| item.after_observation_token.is_some())
                     .count(),
+                "observation_ref_count": items
+                    .iter()
+                    .filter(|item| item.observation_ref.is_some())
+                    .count(),
                 "job_ids": items
                     .iter()
-                    .map(|item| item.job_id.as_str())
+                    .filter_map(|item| (!item.job_id.is_empty()).then_some(item.job_id.as_str()))
                     .collect::<Vec<_>>(),
                 "tail_lines": tail_lines,
                 "wait_secs": wait_secs,
