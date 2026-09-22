@@ -1593,6 +1593,12 @@ pub enum ToolCall {
         /// context-scoped and never resolves, accepts, executes, or gates work.
         #[serde(default)]
         requires_ack: bool,
+        /// Optional stable sender-scoped replay key. While the keyed message/replay metadata remains
+        /// retained, exact retries with the same canonical payload return the original message and survive
+        /// Server restart; reusing the key with a different retained payload fails closed.
+        #[schemars(length(min = 1, max = 128))]
+        #[serde(default)]
+        delivery_key: Option<String>,
     },
 
     /// Send a bounded collaboration message to another recent ChatGPT/host window owned by the
@@ -1622,6 +1628,12 @@ pub enum ToolCall {
         /// again. ACK never grants authority, resolves the message, or requires a reply.
         #[serde(default)]
         requires_ack: bool,
+        /// Optional stable sender-window-scoped replay key. While the keyed peer message remains
+        /// retained, exact retries return the original message and survive Server restart; reusing the key
+        /// with a different retained payload fails closed.
+        #[schemars(length(min = 1, max = 128))]
+        #[serde(default)]
+        delivery_key: Option<String>,
     },
 
     /// List session-local ledger messages in stable newest-first order.
