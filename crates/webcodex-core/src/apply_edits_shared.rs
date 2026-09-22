@@ -138,6 +138,12 @@ pub struct ApplyTextEditInput {
     #[schemars(length(min = 1, max = 524288))]
     #[serde(default)]
     pub old_text: Option<String>,
+    /// Insertions preserve this text and the original anchor. On supporting
+    /// Runners, dry-run and successful results include files[].edits[].warning
+    /// when this text ends with the full anchor_text for insert_before or starts
+    /// with it for insert_after, after existing LF/CRLF canonicalization of both.
+    /// An anchor only in the middle does not warn; no other whitespace or fuzzy
+    /// comparison applies. The advisory never changes text, success, or change flags.
     #[schemars(length(max = 524288))]
     #[serde(default)]
     pub new_text: Option<String>,
