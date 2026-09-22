@@ -277,6 +277,7 @@ fn startup_brief_schema(detail: &str) -> Value {
             "continuation": startup_continuation_schema(detail),
             "semantic_navigation": startup_semantic_navigation_schema(),
             "extensions": startup_extensions_schema(),
+            "coding_agent_providers": super::coding_agents::provider_inventory_schema(),
             "repository": startup_repository_schema(),
             "blockers": startup_issue_list_schema(true),
             "warnings": startup_issue_list_schema(false),
@@ -547,11 +548,13 @@ fn startup_workflow_schema() -> Value {
                     "session_message_ack": {"type": "string", "maxLength": 720},
                     "session_message_resolution": {"type": "string", "maxLength": 480},
                     "context_sidecar": {"type": "string", "maxLength": 320},
+                    "control_sidecars": {"type": "string", "maxLength": 640},
                     "runner_targeting": {"type": "string", "maxLength": 320},
                     "persistent_shell": {"type": "string", "maxLength": 320},
                     "goal_workflow": {"type": "string", "maxLength": 720},
                     "goal_continuation": {"type": "string", "maxLength": 720},
                     "goal_checkpoint": {"type": "string", "maxLength": 480},
+                    "work_result_presentation": {"type": "string", "maxLength": 640},
                     "normal_closeout": {"type": "string", "maxLength": 480}
                 },
                 "required": [
@@ -560,11 +563,13 @@ fn startup_workflow_schema() -> Value {
                     "session_message_ack",
                     "session_message_resolution",
                     "context_sidecar",
+                    "control_sidecars",
                     "runner_targeting",
                     "persistent_shell",
                     "goal_workflow",
                     "goal_continuation",
                     "goal_checkpoint",
+                    "work_result_presentation",
                     "normal_closeout"
                 ],
                 "additionalProperties": false
@@ -1336,6 +1341,7 @@ fn work_on_project_output_schema() -> Value {
         ("instructions", compact_instructions),
         ("semantic_navigation", compact_semantic_navigation),
         ("extensions", startup_extensions_schema()),
+        ("coding_agent_providers", super::coding_agents::provider_inventory_schema()),
         ("jobs", compact_jobs),
         (
             "blockers",
