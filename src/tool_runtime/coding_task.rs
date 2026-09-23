@@ -1755,6 +1755,27 @@ impl ToolRuntime {
             })
         };
 
+        // Reuse the handoff's exact read when present. An omitted or failed
+        // handoff still gets a single local report read for its own brief.
+        let external_observations = handoff
+            .pointer("/handoff_brief/external_observations")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| {
+                self.handoff_external_observations(
+                    &session_id,
+                    projection_closeout_session_summary.project.as_deref(),
+                )
+            });
+        // When a nested handoff supplied the first snapshot, this comparison also
+        // spans the rest of closeout. With include_handoff=false it still fences
+        // the local read against a concurrent accepted external report.
+        let external_observations_changed_during_snapshot = external_observations
+            != self.handoff_external_observations(
+                &session_id,
+                projection_closeout_session_summary.project.as_deref(),
+            );
+
         let mut output = json!({
             "project": project,
             "resolved_project": resolved_project_payload(&resolved),
@@ -1793,9 +1814,11 @@ impl ToolRuntime {
             validation_requested: include_validation_summary,
             validation: output.get("validation"),
             jobs: output.get("jobs"),
+            external_observations: Some(&external_observations),
             guidance_available,
             existing_suggested_actions: output.get("suggested_next_actions"),
             session_changed_during_snapshot: false,
+            external_observations_changed_during_snapshot,
         });
         if let Some(follow_up) = self.active_goal_context_for_session(auth, &session_id) {
             output["goal_follow_up"] = follow_up;

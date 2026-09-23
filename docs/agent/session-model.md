@@ -164,14 +164,18 @@ evidence. `include_workspace`, `include_validation`, `include_checkpoints`, and
 reported truthfully in the brief. There is no implicit handoff or ACK baseline.
 
 Handoff assembly captures an internal Session snapshot fence before gathering
-workspace/Job/Session evidence and compares it again afterwards. The fence has
-exactly two independent Session mutation dimensions: `events_observed` for ledger
-event mutations and `message_observation_revision` for collaboration/message
-mutations. If either changes, or the Session disappears, the brief reports
-`basis.complete=false` and `session_changed_during_snapshot`; the caller can
-explicitly re-observe before dependent work. This detects Session evidence races
-without claiming atomicity across independent Runner workspace or Job reads. No
-handoff generation or replacement model-context revision is introduced or
+workspace/Job/Session evidence and compares it again afterwards. The Session fence
+has exactly two independent mutation dimensions: `events_observed` for ledger event
+mutations and `message_observation_revision` for collaboration/message mutations.
+External reports remain a separate evidence plane, so the handoff also captures a
+bounded external-report snapshot and compares that retained projection again after
+the other recovery reads. A Session fence change reports
+`session_changed_during_snapshot`; an accepted external-report change reports
+`external_observations_changed_during_snapshot`. Either makes `basis.complete=false`
+so the caller can explicitly re-observe before dependent work. This detects evidence
+races without claiming atomicity across independent Runner workspace or Job reads,
+and without promoting external reports into Session revision or native execution
+truth. No handoff generation or replacement model-context revision is introduced or
 returned.
 
 Collaboration is independent: `ack_session_message_ids` still proves that the
@@ -595,7 +599,17 @@ adapter has no durable source sequence, so list results explicitly report incomp
 coverage and must not be interpreted as complete capture or source execution order.
 See [`../../integrations/codex/README.md`](../../integrations/codex/README.md) for
 the optional adapter, capacity/recovery contract and unverified Host boundaries.
-These reports are read separately; `handoff_brief` does not yet integrate them.
+The authorized `session_handoff_summary` handoff brief now includes a bounded
+`external_observations` section, separate from native progress and validation.
+It shows the last five retained reports in server timestamp and identity order,
+with exact adapter/event IDs, tool,
+reported status, and server receipt time, plus total/returned/truncated and
+unknown counts. The section's `provenance` is always `external_report` and its
+`coverage.complete` is always false: receipt ordering cannot prove source
+execution ordering or complete capture. No Session Project, unavailable store,
+or failed read produces `status=unavailable` with null observations and counts,
+never an apparent empty result. The exact Project and Session association comes
+from the surrounding handoff output and `handoff_brief.session.session_id`.
 
 ### Task handoff brief (`handoff_brief`)
 
@@ -608,7 +622,7 @@ brief is not Session replay, does not reconstruct chat or hidden model
 context, and does not decide that implementation work is complete.
 
 The builder consumes only the bounded Session summary, continuation feedback,
-workspace, validation, Job, guidance, exploration, and suggested-action
+workspace, validation, Job, guidance, exploration, external-report, and suggested-action
 snapshots that its caller already obtained. It performs no shell, Git, file,
 search, LSP, Agent, or Runner request; does not refresh activity, consume
 guidance, append a ledger event, or call an LLM; and stores no new Session
@@ -640,6 +654,10 @@ The projection has these stable bounds and semantics:
   are capped at 5. Each bounded evidence list preserves
   `total`/`returned`/`truncated`. Recent files are only continuity hints, not
   complete history.
+- external reports are an independent read-only claim section capped at five
+  identities. A byte-budget reduction updates `returned` and `truncated` as it
+  removes reports; `unknown_count` still counts all retained reports. Store
+  unavailability is local to this section and does not change native closeout.
 - `progress.state` is selected in order: a non-mutable lifecycle is `closed`;
   a workspace conflict, blocking/recovering Job, unresolved validation
   failure, or open risk is `blocked`; workspace changes without a proven
@@ -653,8 +671,9 @@ The projection has these stable bounds and semantics:
   `passed`, `failed`, `not_run`, `not_requested`, or `unavailable`;
   `include_validation=false` never masquerades as `not_run`.
 - `basis.complete` is false whenever a sorted fixed `reason_codes` entry
-  identifies omitted or unavailable evidence, including an evicted attempt
-  boundary. Internal error text is never a reason code.
+  identifies omitted, unavailable, or raced recovery evidence, including an evicted
+  attempt boundary or an external-report change during snapshot assembly. Internal
+  error text is never a reason code.
 
 The complete object is checked against its actual serialized JSON size and
 hard-capped at 8192 bytes. Stable reduction removes recent files, changed
