@@ -3,8 +3,9 @@
 This integration records bounded **external reports** in an explicitly selected
 WebCodex Workflow Session. It does not install Hooks, change trust, create a
 Session/Goal, execute commands, or migrate a conversation. The Server now projects
-these claims read-only in `session_handoff_summary`; a local Codex recovery/export
-consumer and Goal linkage remain follow-up work. This does not establish real
+these claims read-only in `session_handoff_summary`. The optional read-only local
+consumer below can inspect that brief; automatic entry, export and Goal linkage
+remain follow-up work. This does not establish real
 two-sided UI acceptance.
 
 ## Server contract
@@ -108,12 +109,45 @@ nonzero incomplete result; it does not claim the new event was captured. Complet
 of the original native tool is independent of recording success. A client that does
 not expose Hook failure cannot provide a complete capture guarantee.
 
+## Read an existing Session when local Codex takes over
+
+From the configured project directory, run:
+
+```text
+python3 /absolute/path/read_handoff.py --config /private/operator/observation.json
+```
+
+This uses the same private operator configuration and calls the hidden
+`session_handoff_state` API ingress for its exact Project and Workflow Session.
+That ingress reuses the canonical `session_handoff_summary` projection, but it is
+non-meaningful adapter traffic and deliberately does not expose its business
+Session through generic recorder semantics. It therefore does not append Workflow
+Session tool-call telemetry or refresh Goal liveness. Standard request/audit
+telemetry may still be retained outside the Workflow Session.
+
+The reader rejects a different current project, response identity, missing evidence
+basis, a missing/invalid external-report section, or a nondeterministic/LLM summary.
+The JSON output retains the bounded `handoff_brief`, including incomplete basis,
+unknown reports and incomplete source coverage. A successful read means only that
+the brief was obtained; inspect current project rules, files, Git status, Jobs and
+unknown operations before continuing. The command does not select a Session by
+directory or recency, bind the new local conversation, mark work complete, replay
+an operation, install a Hook, or write a handoff file.
+
+This is a deliberate recovery command, not automatic SessionStart injection.
+It requires an already selected Workflow Session and the normal authorized
+credential; a new local Codex conversation must not inherit an old conversation's
+write binding merely because it can read the brief. Real client and MCP roundtrip
+acceptance is still required before general rollout.
+
 ## Verification boundary
 
 Python unit tests use synthetic Hook payloads and controlled senders, including
-uncertain delivery/retry, changed associations, private-file checks and redaction.
-Rust tests cover transactional replay/reopen/conflict/capacity and authenticated
-runtime dispatch. These do **not** establish real Codex Hook lifecycle or ChatGPT
+uncertain delivery/retry, changed associations, private-file checks, redaction,
+and the read-only consumer's exact identity checks.
+Rust tests cover transactional replay/reopen/conflict/capacity, authenticated
+runtime dispatch, and the actual `/api/tools/call` non-recording handoff path. These
+do **not** establish real Codex Hook lifecycle or ChatGPT
 browser acceptance of this proposed adapter. The separately deployed downstream
 prototype's acceptance is not acceptance of these new endpoints.
 
