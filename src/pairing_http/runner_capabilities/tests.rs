@@ -25,26 +25,36 @@ async fn operator_grant_reads_canonical_runner_owner_and_rejects_wrong_or_offlin
                 "client_id":client_id, "agent_instance_id":"inst",
                 "agent_protocol_generation":2, "owner":runner_owner,
                 "capabilities":{"shell":true}
-            })).unwrap();
-            registry.register(crate::test_support::current_runner_registration(registration)).await.unwrap();
+            }))
+            .unwrap();
+            registry
+                .register(crate::test_support::current_runner_registration(
+                    registration,
+                ))
+                .await
+                .unwrap();
         }
         if !online {
             registry.reconcile_disconnect("target", "inst").await;
         }
         let runtime = Arc::new(crate::tool_runtime::ToolRuntime::new(
-            registry, Arc::new(crate::tool_runtime::RuntimeInfo::default()),
+            registry,
+            Arc::new(crate::tool_runtime::RuntimeInfo::default()),
         ));
         let mut auth = AuthContext::new(AuthKind::Bootstrap);
         auth.is_bootstrap = true;
         auth.scopes = vec![crate::auth::SCOPE_ADMIN.into()];
-        let service = Service::new(Router::new()
-            .hoop(affix_state::inject(auth))
-            .hoop(affix_state::inject(Arc::new(db)))
-            .hoop(affix_state::inject(runtime))
-            .push(Router::with_path("grant").post(grant_runner_capabilities)));
+        let service = Service::new(
+            Router::new()
+                .hoop(affix_state::inject(auth))
+                .hoop(affix_state::inject(Arc::new(db)))
+                .hoop(affix_state::inject(runtime))
+                .push(Router::with_path("grant").post(grant_runner_capabilities)),
+        );
         let mut response = TestClient::post("http://localhost/grant")
             .json(&json!({"client_id":target,"user_token_hash":hash}))
-            .send(&service).await;
+            .send(&service)
+            .await;
         assert_eq!(response.status_code.unwrap_or(StatusCode::OK), expected);
         if expected == StatusCode::OK {
             let body: Value = response.take_json().await.unwrap();

@@ -501,9 +501,14 @@ fn runtime_status_fixture() -> Value {
 fn ops_reports_emit_only_runner_keys_from_canonical_input() {
     let runtime = Some(runtime_status_fixture());
     let status = ops_status_report("http://runtime.example", &runtime);
-    assert_eq!(status.summary["runners"]["clients"][0]["client_id"], "ops-agent");
+    assert_eq!(
+        status.summary["runners"]["clients"][0]["client_id"],
+        "ops-agent"
+    );
     assert!(status.summary.get("agents").is_none());
-    assert!(render_ops_status(&status, false).unwrap().contains("ops-agent"));
+    assert!(render_ops_status(&status, false)
+        .unwrap()
+        .contains("ops-agent"));
     let runners = ops_runners_report("http://runtime.example", &runtime);
     assert_eq!(runners.summary["runners"][0]["projects_count"], 1);
     assert!(runners.summary.get("agents").is_none());
@@ -515,10 +520,16 @@ fn ops_reports_emit_only_runner_keys_from_canonical_input() {
     let empty = ops_runners_report("http://runtime.example", &Some(empty));
     assert_eq!(empty.summary["runners"], json!([]));
     assert!(empty.summary.get("agents").is_none());
-    let focused = ops_runner_report("http://runtime.example", "msi", &Some(runner_runtime_status_fixture()));
+    let focused = ops_runner_report(
+        "http://runtime.example",
+        "msi",
+        &Some(runner_runtime_status_fixture()),
+    );
     assert_eq!(focused.summary["runner_instance_id"], "instance-new");
     assert!(focused.summary.get("agent_instance_id").is_none());
-    assert!(render_ops_runner(&focused, false).unwrap().contains("instance-new"));
+    assert!(render_ops_runner(&focused, false)
+        .unwrap()
+        .contains("instance-new"));
 }
 
 fn runner_runtime_status_fixture() -> Value {

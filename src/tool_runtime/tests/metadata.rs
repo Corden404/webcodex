@@ -33,16 +33,36 @@ async fn runner_observability_has_one_collection_and_preserves_health_across_mod
     assert!(full.success, "{:?}", full.error);
     let expected = &full.output["runners"]["clients"][0];
     assert_eq!(expected["runner_instance_id"], "projection-instance");
-    assert_eq!(expected["runner_protocol_generation"], RUNNER_PROTOCOL_GENERATION_V2.get());
+    assert_eq!(
+        expected["runner_protocol_generation"],
+        RUNNER_PROTOCOL_GENERATION_V2.get()
+    );
     assert_eq!(expected["owner"], "projection-owner");
-    for arguments in [json!({}), json!({"compact": true}), json!({"summary_only": true}), json!({"client_id": "projection-runner"})] {
-        let result = runtime.dispatch(ToolCall::from_tool_name("runtime_status", arguments.clone()).unwrap()).await;
+    for arguments in [
+        json!({}),
+        json!({"compact": true}),
+        json!({"summary_only": true}),
+        json!({"client_id": "projection-runner"}),
+    ] {
+        let result = runtime
+            .dispatch(ToolCall::from_tool_name("runtime_status", arguments.clone()).unwrap())
+            .await;
         assert!(result.success, "{:?}", result.error);
         assert!(result.output.get("agents").is_none());
         assert!(result.output["runners"]["summary"].get("clients").is_none());
         let clients = result.output["runners"]["clients"].as_array().unwrap();
         assert_eq!(clients.len(), 1);
-        for key in ["client_id", "runner_instance_id", "status", "transport", "projects_count", "project_inventory", "pending_requests", "active_jobs", "job_concurrency"] {
+        for key in [
+            "client_id",
+            "runner_instance_id",
+            "status",
+            "transport",
+            "projects_count",
+            "project_inventory",
+            "pending_requests",
+            "active_jobs",
+            "job_concurrency",
+        ] {
             assert_eq!(clients[0][key], expected[key], "{arguments}: {key}");
         }
         assert!(clients[0].get("agent_instance_id").is_none());
@@ -52,16 +72,30 @@ async fn runner_observability_has_one_collection_and_preserves_health_across_mod
             assert!(clients[0].get("policy").is_none());
         }
     }
-    for arguments in [json!({"client_id":"projection-runner", "compact":true}), json!({"client_id":"projection-runner", "summary_only":true})] {
-        let result = runtime.dispatch(ToolCall::from_tool_name("runtime_status", arguments).unwrap()).await;
+    for arguments in [
+        json!({"client_id":"projection-runner", "compact":true}),
+        json!({"client_id":"projection-runner", "summary_only":true}),
+    ] {
+        let result = runtime
+            .dispatch(ToolCall::from_tool_name("runtime_status", arguments).unwrap())
+            .await;
         assert!(result.success);
         assert!(result.output.get("runners").is_none());
         assert!(result.output.get("agents").is_none());
-        assert_eq!(result.output["focus"]["runner_instance_id"], "projection-instance");
+        assert_eq!(
+            result.output["focus"]["runner_instance_id"],
+            "projection-instance"
+        );
         assert!(result.output["focus"].get("agent_instance_id").is_none());
     }
-    for arguments in [json!({}), json!({"summary_only":true}), json!({"include_projects":false})] {
-        let result = runtime.dispatch(ToolCall::from_tool_name("list_runners", arguments.clone()).unwrap()).await;
+    for arguments in [
+        json!({}),
+        json!({"summary_only":true}),
+        json!({"include_projects":false}),
+    ] {
+        let result = runtime
+            .dispatch(ToolCall::from_tool_name("list_runners", arguments.clone()).unwrap())
+            .await;
         assert!(result.success);
         assert!(result.output.get("agents").is_none());
         assert!(result.output.get("clients").is_none());

@@ -3631,9 +3631,17 @@ mod startup_runner_tests {
             {"client_id":"target","status":"stale"},
             {"client_id":"peer","status":"online"}
         ]}});
-        assert_eq!(owning_runner_available(&resolved_agent("target"), &status, false), Some(false));
-        assert_eq!(owning_runner_available(&resolved_agent("target"), &status, true), None);
-        assert_eq!(startup_agent_check(&json!({}), None), ("warn", Some("agent_health_unknown")));
+        assert_eq!(
+            owning_runner_available(&resolved_agent("target"), &status, false),
+            Some(false)
+        );
+        assert_eq!(
+            owning_runner_available(&resolved_agent("target"), &status, true),
+            None
+        );
+        assert_eq!(
+            startup_agent_check(&json!({}), None),
+            ("warn", Some("agent_health_unknown"))
+        );
     }
-
 }

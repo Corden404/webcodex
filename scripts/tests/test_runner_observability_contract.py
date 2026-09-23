@@ -46,7 +46,7 @@ class RunnerObservabilityContract(unittest.TestCase):
             with self.subTest(path=relative):
                 # Only inline test modules are excluded; all production code,
                 # including both Console DTOs, remains in the guarded scope.
-                source = read_source(relative).split("#[cfg(test)]", 1)[0]
+                source = re.split(r"(?m)^#\[cfg\(test\)\]\s*\nmod \w+\s*\{", read_source(relative), maxsplit=1)[0]
                 self.assertTrue(source.strip(), relative)
                 self.assertEqual(projection_violations(source), [], relative)
 

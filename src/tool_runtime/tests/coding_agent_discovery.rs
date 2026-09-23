@@ -138,7 +138,10 @@ async fn coding_agent_discovery_keeps_old_runners_compatible_and_other_owners_pr
             .runtime_status_with_options(Some(&alice), compact, false, None)
             .await;
         assert_eq!(
-            result.output["runners"]["clients"].as_array().unwrap().len(),
+            result.output["runners"]["clients"]
+                .as_array()
+                .unwrap()
+                .len(),
             1
         );
         assert_eq!(
