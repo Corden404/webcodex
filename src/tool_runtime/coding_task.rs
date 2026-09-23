@@ -3239,7 +3239,7 @@ pub(crate) fn project_coding_agent_providers(
     runtime_status: &Value,
 ) -> Vec<webcodex_core::coding_agent::CodingAgentProviderSummary> {
     runtime_status
-        .pointer("/agents/clients")
+        .pointer("/runners/clients")
         .and_then(Value::as_array)
         .and_then(|clients| {
             clients.iter().find(|client| {
@@ -3270,7 +3270,7 @@ fn owning_runner_available(
     }
     Some(
         runtime_status
-            .pointer("/agents/summary/clients")
+            .pointer("/runners/clients")
             .and_then(Value::as_array)
             .and_then(|clients| {
                 clients.iter().find(|client| {
@@ -3600,10 +3600,8 @@ mod startup_runner_tests {
     #[test]
     fn missing_target_runner_is_unavailable_even_when_a_peer_is_online() {
         let runtime_status = json!({
-            "agents": {
-                "summary": {
-                    "clients": [{"client_id": "peer", "status": "online"}]
-                }
+            "runners": {
+                "clients": [{"client_id": "peer", "status": "online"}]
             }
         });
         assert_eq!(
@@ -3615,13 +3613,11 @@ mod startup_runner_tests {
     #[test]
     fn target_runner_online_is_available_even_when_a_peer_is_stale() {
         let runtime_status = json!({
-            "agents": {
-                "summary": {
-                    "clients": [
-                        {"client_id": "peer", "status": "stale"},
-                        {"client_id": "target", "status": "online"}
-                    ]
-                }
+            "runners": {
+                "clients": [
+                    {"client_id": "peer", "status": "stale"},
+                    {"client_id": "target", "status": "online"}
+                ]
             }
         });
         assert_eq!(
@@ -3629,4 +3625,15 @@ mod startup_runner_tests {
             Some(true)
         );
     }
+    #[test]
+    fn runner_health_failure_stays_unknown_and_peer_does_not_mask_offline_target() {
+        let status = json!({"runners":{"clients":[
+            {"client_id":"target","status":"stale"},
+            {"client_id":"peer","status":"online"}
+        ]}});
+        assert_eq!(owning_runner_available(&resolved_agent("target"), &status, false), Some(false));
+        assert_eq!(owning_runner_available(&resolved_agent("target"), &status, true), None);
+        assert_eq!(startup_agent_check(&json!({}), None), ("warn", Some("agent_health_unknown")));
+    }
+
 }

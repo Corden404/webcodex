@@ -304,7 +304,7 @@ export function AdminApp() {
   const overview = dashboard.overview;
   const overviewItems = [
     ["Server", display(overview.version), `${display(overview.build_commit)} · ${display(overview.authority_mode)}`],
-    ["Agents", `${display(overview.agents_online || 0)} / ${display(overview.agents_total || 0)}`, "online now"],
+    ["Runners", `${display(overview.runners_online || 0)} / ${display(overview.runners_total || 0)}`, "online now"],
     ["Projects", `${display(overview.projects_online || 0)} / ${display(overview.projects_total || 0)}`, "ready for work"],
     ["Jobs", display(overview.active_jobs || 0), display(overview.version_compatibility || "compatibility unknown")],
   ];
