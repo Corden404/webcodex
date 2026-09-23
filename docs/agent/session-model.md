@@ -440,14 +440,38 @@ through `context_request`. Omission means no static material, not an inferred
 retention state. `include_extension_catalog` remains a separate caller-explicit
 selection-metadata preference.
 
-`guidance_profile` is a request-local presentation enum: `direct` by default, or
-`code_mode` only in Experimental Code Mode builds. Exact resume may choose either
+`guidance_profile` is a request-local presentation enum: `direct` by default,
+`host_code_mode` for Host-supplied native orchestration in every build, or
+`code_mode` for WebCodex nested orchestration only in Experimental Code Mode
+builds. Host-native guidance favors canonical batches and `search_and_read`,
+allows independent cross-tool observations and dependent branching within one
+Host cell, keeps raw ToolResults in that cell, and warns against Job polling and
+stale validation after covered source changes. It does not assert that WebCodex
+verified Host capability or require nested Code Mode. Exact resume may choose any available profile
 without a Session transition; omission always selects `direct`, never a remembered
 choice. It is not persisted in Session state or event arguments and changes no
 admission, authority, effects, validation or Job semantics. An unavailable profile
 fails parsing. When `work_on_project` explicitly requests `webcodex.workflow`, its
 sidecar uses that request-local profile; unrelated tools without profile context
 continue to project the canonical default `direct`.
+
+`current_window_activity` observes persisted ActionAudit activity for the exact
+ClientWindow supplied by the current adapter request. Its input cannot select
+another Window. It remains available through the canonical adaptive runtime
+gateway and `tool_manifest` without expanding the default direct tool inventory.
+It requires `runtime:read` and a non-anonymous authenticated
+principal, fixes that principal,
+and reapplies current Project visibility to every event and Workflow Session
+link. Runtime Console and the model tool share the sanitized event and timing
+projection. The tool scans at most 200 records and returns at most 50 events
+within a smaller serialized byte ceiling. It exposes descriptive timing and
+counts only, without arguments, outputs, paths, credentials, or principal IDs.
+`response_handed_at_ms` means WebCodex constructed the response and handed it
+to the HTTP framework or returned from the handler. It does not prove client
+receipt, MCP Host receipt, ChatGPT ingestion, or model continuation. A
+`next_call_gap_ms` exists only when a later canonical meaningful call was
+actually observed; elapsed wall time alone never supplies that value. The
+diagnostic call is nonmeaningful and excludes itself from active requests.
 
 Repository instruction files are still re-observed and Session metadata/delta
 status still update even though instruction bodies are absent from the primary

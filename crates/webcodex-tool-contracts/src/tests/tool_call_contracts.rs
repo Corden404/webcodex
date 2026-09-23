@@ -2141,11 +2141,11 @@ fn guidance_profile_defaults_and_schema_follow_compiled_availability() {
         .as_array()
         .unwrap()
         .contains(&json!("guidance_profile")));
-    let mut profiles = vec!["direct"];
+    let mut profiles = vec!["direct", "host_code_mode"];
     if cfg!(feature = "experimental-code-mode") {
         profiles.push("code_mode");
     }
-    assert_eq!(property["enum"], json!(profiles));
+    assert_eq!(property["enum"], json!(profiles), "{property}");
     let output_schema = output_schema_for_tool("work_on_project");
     let output_properties = output_schema["properties"]["output"]["properties"]
         .as_object()
@@ -2169,6 +2169,29 @@ fn guidance_profile_defaults_and_schema_follow_compiled_availability() {
         args["guidance_profile"] = invalid;
         assert!(ToolCall::from_tool_name("work_on_project", args).is_err());
     }
+}
+
+#[test]
+fn current_window_activity_has_no_model_supplied_window_selector() {
+    let input = crate::request_schema::input_schema_for_tool("current_window_activity");
+    let properties = input["properties"].as_object().unwrap();
+    assert!(properties.contains_key("limit"));
+    assert!(properties.contains_key("include_nonmeaningful"));
+    assert!(!properties.contains_key("client_window_key"));
+    assert!(!properties.contains_key("window"));
+    assert!(ToolCall::from_tool_name(
+        "current_window_activity",
+        json!({
+            "client_window_key": "foreign"
+        })
+    )
+    .is_err());
+    assert_eq!(
+        ToolCall::from_tool_name("current_window_activity", json!({"limit":20}))
+            .unwrap()
+            .tool_name(),
+        "current_window_activity"
+    );
 }
 
 #[cfg(not(feature = "experimental-code-mode"))]
