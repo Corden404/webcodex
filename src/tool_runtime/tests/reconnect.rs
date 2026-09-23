@@ -628,6 +628,14 @@ async fn version_compatibility_reports_stable_mismatch_facts() {
     // Same package version + supported protocol remains compatible even when
     // exact source differs. Source alignment is a separate diagnostic axis.
     let server_build = crate::build_info::runtime_build_info();
+    let expected_old_build_alignment = webcodex_core::desktop_runtime_contract::build_alignment(
+        Some("0.0.1"),
+        None,
+        None,
+        Some(server_version),
+        server_build.git_commit,
+        server_build.git_dirty,
+    );
     let different_commit = format!(
         "{}-different",
         server_build.git_commit.unwrap_or("server-source")
@@ -649,7 +657,7 @@ async fn version_compatibility_reports_stable_mismatch_facts() {
         ))
         .await
         .unwrap();
-    // Different build version → version_mismatch (connected ≠ compatible).
+    // Different package version remains protocol-compatible; build alignment is advisory.
     runtime
         .runner_registry
         .register(register_request(
@@ -681,7 +689,8 @@ async fn version_compatibility_reports_stable_mismatch_facts() {
     let status = runtime.runtime_status(None).await;
     assert!(status.success);
     let compat = &status.output["version_compatibility"];
-    assert_eq!(compat["status"], "version_mismatch");
+    assert_eq!(compat["status"], "compatible");
+    assert_eq!(compat["protocol_compatibility"], "compatible");
     assert_eq!(compat["server"]["version"], server_version);
     let runners = compat["runners"].as_array().unwrap();
     let by_id = |id: &str| {
@@ -701,15 +710,15 @@ async fn version_compatibility_reports_stable_mismatch_facts() {
     assert_eq!(compat["source_alignment"]["status"], "different");
     assert!(different_source.get("build_matches_server").is_none());
 
-    assert_eq!(by_id("old-build")["status"], "version_mismatch");
+    assert_eq!(by_id("old-build")["status"], "compatible");
+    assert_eq!(by_id("old-build")["protocol_compatibility"], "compatible");
     assert_eq!(
-        by_id("old-build")["reason_code"],
-        "runner_version_differs_from_server"
+        by_id("old-build")["build_alignment"],
+        serde_json::json!(expected_old_build_alignment)
     );
-    assert!(by_id("old-build")["action"]
-        .as_str()
-        .unwrap()
-        .contains("align"));
+    assert_eq!(by_id("old-build")["version_matches_server"], false);
+    assert!(by_id("old-build")["reason_code"].is_null());
+    assert!(by_id("old-build")["action"].is_null());
     let compact = crate::tool_runtime::runtime_info::compact_runtime_status(&status.output);
     let compact_runner = compact["agents"]["clients"]
         .as_array()

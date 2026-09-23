@@ -833,13 +833,19 @@ async fn runtime_status_focus_is_not_polluted_by_unrelated_runner_mismatch() {
     assert!(global.success);
     assert_eq!(
         global.output["version_compatibility"]["status"],
-        "version_mismatch"
+        "compatible"
     );
     let global_special = global.output["version_compatibility"]["runners"]
         .as_array()
         .unwrap()
         .iter()
         .find(|runner| runner["client_id"] == "special")
+        .unwrap();
+    let global_mini = global.output["version_compatibility"]["runners"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|runner| runner["client_id"] == "mini")
         .unwrap();
 
     let special = runtime
@@ -863,7 +869,7 @@ async fn runtime_status_focus_is_not_polluted_by_unrelated_runner_mismatch() {
     );
     assert_eq!(
         special.output["fleet_summary"]["mismatched_agents_count"],
-        1
+        0
     );
     let serialized = special.output.to_string();
     assert!(!serialized.contains("inst-mini"));
@@ -874,10 +880,12 @@ async fn runtime_status_focus_is_not_polluted_by_unrelated_runner_mismatch() {
         .await;
     assert!(mini.success);
     assert_eq!(mini.output["focus"]["client_id"], "mini");
+    assert_eq!(mini.output["focus"]["protocol_compatibility"], "compatible");
     assert_eq!(
-        mini.output["version_compatibility"]["status"],
-        "version_mismatch"
+        mini.output["focus"]["build_alignment"],
+        global_mini["build_alignment"]
     );
+    assert_eq!(mini.output["version_compatibility"]["status"], "compatible");
 
     let unknown = runtime
         .dispatch(runtime_status_call(Some("missing"), true))
