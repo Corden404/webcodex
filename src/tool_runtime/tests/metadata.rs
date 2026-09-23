@@ -20,6 +20,65 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[tokio::test]
+async fn runner_observability_has_one_collection_and_preserves_health_across_modes() {
+    let registry = Arc::new(RunnerRegistry::default());
+    let mut registration = metadata_agent_registration("projection-runner");
+    registration.runner_instance_id = "projection-instance".into();
+    registration.owner = Some("projection-owner".into());
+    registration.job_concurrency_limit = Some(4);
+    registry.register(registration).await.unwrap();
+    let runtime = ToolRuntime::new(registry, Arc::new(RuntimeInfo::default()));
+    let full = runtime.dispatch(runtime_status_call()).await;
+    assert!(full.success, "{:?}", full.error);
+    let expected = &full.output["runners"]["clients"][0];
+    assert_eq!(expected["runner_instance_id"], "projection-instance");
+    assert_eq!(expected["runner_protocol_generation"], RUNNER_PROTOCOL_GENERATION_V2.get());
+    assert_eq!(expected["owner"], "projection-owner");
+    for arguments in [json!({}), json!({"compact": true}), json!({"summary_only": true}), json!({"client_id": "projection-runner"})] {
+        let result = runtime.dispatch(ToolCall::from_tool_name("runtime_status", arguments.clone()).unwrap()).await;
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.output.get("agents").is_none());
+        assert!(result.output["runners"]["summary"].get("clients").is_none());
+        let clients = result.output["runners"]["clients"].as_array().unwrap();
+        assert_eq!(clients.len(), 1);
+        for key in ["client_id", "runner_instance_id", "status", "transport", "projects_count", "project_inventory", "pending_requests", "active_jobs", "job_concurrency"] {
+            assert_eq!(clients[0][key], expected[key], "{arguments}: {key}");
+        }
+        assert!(clients[0].get("agent_instance_id").is_none());
+        assert!(clients[0].get("agent_protocol_generation").is_none());
+        if arguments.get("compact").is_some() || arguments.get("summary_only").is_some() {
+            assert!(clients[0].get("owner").is_none());
+            assert!(clients[0].get("policy").is_none());
+        }
+    }
+    for arguments in [json!({"client_id":"projection-runner", "compact":true}), json!({"client_id":"projection-runner", "summary_only":true})] {
+        let result = runtime.dispatch(ToolCall::from_tool_name("runtime_status", arguments).unwrap()).await;
+        assert!(result.success);
+        assert!(result.output.get("runners").is_none());
+        assert!(result.output.get("agents").is_none());
+        assert_eq!(result.output["focus"]["runner_instance_id"], "projection-instance");
+        assert!(result.output["focus"].get("agent_instance_id").is_none());
+    }
+    for arguments in [json!({}), json!({"summary_only":true}), json!({"include_projects":false})] {
+        let result = runtime.dispatch(ToolCall::from_tool_name("list_runners", arguments.clone()).unwrap()).await;
+        assert!(result.success);
+        assert!(result.output.get("agents").is_none());
+        assert!(result.output.get("clients").is_none());
+        assert!(result.output["summary"].get("clients").is_none());
+        let runners = result.output["runners"].as_array().unwrap();
+        assert_eq!(runners.len(), 1);
+        assert_eq!(runners[0]["runner_instance_id"], "projection-instance");
+        assert_eq!(runners[0]["job_concurrency"]["limit"], 4);
+        if arguments.get("summary_only").is_none() {
+            assert_eq!(runners[0]["owner"], "projection-owner");
+        }
+        if arguments.get("include_projects") == Some(&json!(false)) {
+            assert!(runners[0].get("projects").is_none());
+        }
+    }
+}
+
 fn shared_key_auth(hash: &str) -> crate::auth::AuthContext {
     crate::auth::AuthContext {
         kind: crate::auth::AuthKind::SharedKey,
