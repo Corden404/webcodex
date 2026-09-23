@@ -12,8 +12,71 @@ use super::common::{
     session_mode_schema, task_outcome_schema, validation_delta_schema, wrapped_output_schema,
 };
 
+fn external_observation_schema(description: &str) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "description": description,
+        "properties": {
+            "adapter_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "maxLength": 64
+            },
+            "event_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "maxLength": 64
+            },
+            "tool": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+                "maxLength": 64
+            },
+            "exit_code": {
+                "anyOf": [{"type": "integer"}, {"type": "null"}]
+            },
+            "recorded_at": {"type": "integer"},
+            "status": {
+                "type": "string",
+                "enum": ["unknown", "reported_success", "reported_failure"]
+            }
+        },
+        "required": ["adapter_id", "event_id", "tool", "exit_code", "recorded_at", "status"]
+    })
+}
+
 pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
     match name {
+        "record_external_observation" => Some(wrapped_output_schema(vec![
+            ("session_id", schema_type("string", "Exact Workflow Session.")),
+            ("project", schema_type("string", "Exact authorized Project.")),
+            ("provenance", schema_type("string", "Always external_report; not native execution evidence.")),
+            ("inserted", schema_type("boolean", "False for an identical retained replay.")),
+            ("observation", external_observation_schema("Bounded external claim; missing exit_code produces unknown.")),
+        ])),
+        "list_external_observations" => Some(wrapped_output_schema(vec![
+            ("session_id", schema_type("string", "Exact Workflow Session.")),
+            ("project", schema_type("string", "Exact authorized Project.")),
+            ("provenance", schema_type("string", "Always external_report; not native execution evidence.")),
+            ("coverage", json!({
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Capture/ordering truth for this external-report projection. The first adapter has no durable source sequence, so completeness cannot be proven.",
+                "properties": {
+                    "complete": {"type": "boolean", "const": false},
+                    "reason": {"type": "string", "enum": ["source_sequence_unavailable"]},
+                    "ordering": {"type": "string", "enum": ["server_recorded_at_then_identity"]}
+                },
+                "required": ["complete", "reason", "ordering"]
+            })),
+            ("observations", json!({
+                "type": "array",
+                "maxItems": 256,
+                "items": external_observation_schema("Untrusted external report."),
+                "description": "At most 256 retained reports. Ordering is server recorded-at plus identity, not proven source execution order."
+            })),
+        ])),
         "start_session" => Some(wrapped_output_schema(vec![
             (
                 "success",

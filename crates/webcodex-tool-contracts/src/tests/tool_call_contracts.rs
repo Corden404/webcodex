@@ -1986,3 +1986,68 @@ fn guidance_profile_code_mode_fails_closed_when_feature_is_unavailable() {
         "{error}"
     );
 }
+
+#[test]
+fn external_observation_contract_uses_explicit_identities_and_no_raw_payload() {
+    let mut value = json!({"project":"agent:r:p", "session_id":format!("wc_sess_{}","1".repeat(32)),
+        "adapter_id":"a".repeat(64),"event_id":"b".repeat(64),"observed_tool":"Bash"});
+    let call = ToolCall::from_tool_name("record_external_observation", value.clone()).unwrap();
+    assert_eq!(call.project(), Some("agent:r:p"));
+    assert_eq!(call.session_id(), None);
+    assert!(matches!(
+        call,
+        ToolCall::RecordExternalObservation {
+            exit_code: None,
+            ..
+        }
+    ));
+    value["command"] = json!("must not be accepted");
+    assert!(ToolCall::from_tool_name("record_external_observation", value).is_err());
+    assert!(!crate::is_model_visible_tool_name(
+        "record_external_observation"
+    ));
+    assert!(crate::is_model_visible_tool_name(
+        "list_external_observations"
+    ));
+    assert!(registered_tool_specs()
+        .into_iter()
+        .all(|spec| spec.name != "record_external_observation"));
+
+    for name in ["record_external_observation", "list_external_observations"] {
+        let activity = crate::runtime_tool_activity_semantics(name);
+        assert_eq!(activity.presentation.as_str(), "support");
+        assert!(!activity.interaction.is_meaningful());
+    }
+
+    let list_spec = registered_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == "list_external_observations")
+        .unwrap();
+    for field in ["session_id", "project"] {
+        assert!(list_spec.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(field)));
+    }
+
+    let record_schema = crate::registry::output_schema_for_tool("record_external_observation");
+    let record_output = &record_schema["properties"]["output"]["properties"];
+    let observation = &record_output["observation"];
+    assert_eq!(observation["additionalProperties"], false);
+    assert_eq!(
+        observation["properties"]["status"]["enum"],
+        json!(["unknown", "reported_success", "reported_failure"])
+    );
+
+    let list_output = &list_spec.output_schema["properties"]["output"]["properties"];
+    let observations = &list_output["observations"];
+    assert_eq!(observations["maxItems"], 256);
+    assert_eq!(observations["items"]["additionalProperties"], false);
+    let coverage = &list_output["coverage"];
+    assert_eq!(coverage["additionalProperties"], false);
+    assert_eq!(coverage["properties"]["complete"]["const"], false);
+    assert_eq!(
+        coverage["properties"]["reason"]["enum"],
+        json!(["source_sequence_unavailable"])
+    );
+}
