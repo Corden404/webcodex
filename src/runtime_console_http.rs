@@ -3772,6 +3772,9 @@ mod tests {
         let rows = runner_fleet_rows(&runners, &status, &scan);
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
+        let serialized = serde_json::to_value(row).unwrap();
+        assert_eq!(serialized["runner_protocol_generation"], 2);
+        assert!(serialized.get("agent_protocol_generation").is_none());
         assert_eq!(row.client_id, "runner-a");
         assert_eq!(row.active_jobs, 3);
         assert_eq!(row.job_concurrency_limit, Some(8));
