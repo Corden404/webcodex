@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
+use webcodex_core::coding_agent::CodingAgentConfigValue;
 
 const DEFAULT_SYSTEM_CONFIG_DIR: &str = "/etc/webcodex";
 pub(crate) const CLIENT_PROFILE_ERROR: &str =
@@ -140,6 +141,10 @@ pub(crate) struct AcpConfig {
     pub(crate) max_concurrent_runs: usize,
     #[serde(default = "default_acp_permission_timeout_secs")]
     pub(crate) permission_timeout_secs: u64,
+    /// Runner-owned admission policy applied to every ACP Coding Agent session.
+    /// The upstream default is intentionally empty and provider-neutral.
+    #[serde(default)]
+    pub(crate) forced_config: BTreeMap<String, CodingAgentConfigValue>,
     #[serde(default)]
     pub(crate) agents: Vec<AcpAgentConfig>,
 }
@@ -173,6 +178,7 @@ impl Default for AcpConfig {
         Self {
             max_concurrent_runs: default_acp_max_concurrent_runs(),
             permission_timeout_secs: default_acp_permission_timeout_secs(),
+            forced_config: BTreeMap::new(),
             agents: Vec::new(),
         }
     }
@@ -1779,7 +1785,8 @@ fn validate_acp_env_name(value: &str) -> Result<(), ()> {
 fn validate_acp_config(config: &AcpConfig) -> Result<(), String> {
     use std::collections::HashSet;
     use webcodex_core::coding_agent::{
-        validate_provider_id, CODING_AGENT_MAX_CONFIG_KEY_BYTES, CODING_AGENT_MAX_PROVIDERS,
+        validate_provider_id, CODING_AGENT_MAX_CONFIG_KEY_BYTES, CODING_AGENT_MAX_CONFIG_OPTIONS,
+        CODING_AGENT_MAX_CONFIG_VALUE_BYTES, CODING_AGENT_MAX_PROVIDERS,
         CODING_AGENT_MAX_PROVIDER_NAME_BYTES,
     };
 
@@ -1799,6 +1806,25 @@ fn validate_acp_config(config: &AcpConfig) -> Result<(), String> {
         return Err(format!(
             "acp.agents may contain at most {CODING_AGENT_MAX_PROVIDERS} entries"
         ));
+    }
+    if config.forced_config.len() > CODING_AGENT_MAX_CONFIG_OPTIONS {
+        return Err(format!(
+            "acp.forced_config may contain at most {CODING_AGENT_MAX_CONFIG_OPTIONS} entries"
+        ));
+    }
+    for (option, value) in &config.forced_config {
+        if option.is_empty()
+            || option.len() > CODING_AGENT_MAX_CONFIG_KEY_BYTES
+            || option.chars().any(char::is_control)
+            || value.serialized_len() > CODING_AGENT_MAX_CONFIG_VALUE_BYTES
+        {
+            return Err("acp.forced_config contains an invalid option".to_string());
+        }
+        if matches!(value, CodingAgentConfigValue::Integer(_)) {
+            return Err(
+                "acp.forced_config supports only string/select and boolean values".to_string(),
+            );
+        }
     }
     let mut ids = HashSet::new();
     for agent in &config.agents {
@@ -1894,6 +1920,16 @@ fn validate_acp_config(config: &AcpConfig) -> Result<(), String> {
                     agent.id
                 ));
             }
+        }
+        if config
+            .forced_config
+            .keys()
+            .any(|option| config_ids.contains(option.as_str()))
+        {
+            return Err(format!(
+                "ACP agent '{}' cannot allow an option that is forced globally",
+                agent.id
+            ));
         }
     }
     Ok(())
@@ -2149,6 +2185,40 @@ OPENAI_API_KEY = "SUB2API_API_KEY"
             config.agents[0].env_from_env["OPENAI_API_KEY"],
             "SUB2API_API_KEY"
         );
+    }
+
+    #[test]
+    fn acp_global_forced_config_is_empty_by_default() {
+        assert!(AcpConfig::default().forced_config.is_empty());
+    }
+
+    #[test]
+    fn acp_global_forced_config_rejects_allowed_overlap() {
+        let mut configured = agent();
+        configured.allowed_config_options.push("model".to_string());
+        let mut config = AcpConfig {
+            agents: vec![configured],
+            ..AcpConfig::default()
+        };
+        config.forced_config.insert(
+            "model".to_string(),
+            CodingAgentConfigValue::String("policy-model".to_string()),
+        );
+        assert!(validate_acp_config(&config)
+            .unwrap_err()
+            .contains("forced globally"));
+    }
+
+    #[test]
+    fn acp_global_forced_config_rejects_integer_values() {
+        let mut config = AcpConfig::default();
+        config.forced_config.insert(
+            "integer-option".to_string(),
+            CodingAgentConfigValue::Integer(7),
+        );
+        assert!(validate_acp_config(&config)
+            .unwrap_err()
+            .contains("string/select and boolean"));
     }
 
     #[test]

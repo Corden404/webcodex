@@ -116,3 +116,11 @@ allow_cwd_anywhere = false
 # allowed_roots = ["/root/git"]
 max_timeout_secs = 3600
 max_output_bytes = 262144
+
+
+# Optional Runner-global ACP admission policy. Empty/omitted is the default.
+# Values must be advertised by every provider session that is expected to run
+# under this Runner. Unsupported providers fail closed before session/prompt.
+# [acp.forced_config]
+# model = "provider-model"
+# feature_flag = true

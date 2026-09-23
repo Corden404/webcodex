@@ -2068,8 +2068,9 @@ pub enum ToolCall {
         /// telemetry bodies.
         #[schemars(length(min = 1, max = 65536))]
         instruction: String,
-        /// Optional explicit run-level ACP config overrides. Omission or {} sends zero set_config_option
-        /// calls. Every key/value must be live-advertised and operator-allowed before prompt dispatch.
+        /// Optional explicit run-level ACP config overrides. Omission or {} sends no caller-requested
+        /// set_config_option calls; Runner-owned forced_config policy may still apply its own values.
+        /// Every caller key/value must be live-advertised and operator-allowed before prompt dispatch.
         #[serde(default)]
         config: Option<BTreeMap<String, webcodex_core::coding_agent::CodingAgentConfigValue>>,
         #[schemars(extend("default" = 300))]
