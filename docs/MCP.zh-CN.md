@@ -10,6 +10,18 @@ WebCodex 通过 MCP endpoint，让 ChatGPT、Claude 与其他 MCP client 使用�
 
 如果只是临时试用一个仓库，再使用下面的 `share` 路径。
 
+## ChatGPT Host 侧的 Developer MCP 错误
+
+如果 ChatGPT 返回：
+
+```text
+FORBIDDEN: This conversation does not support developer MCPs
+```
+
+该拒绝来自 ChatGPT Host 或会话级 Developer MCP 准入与路由层。它本身并不表示 WebCodex 永久关闭了开发者访问权限，也不能证明 Runner 已离线或项目注册已失效。
+
+请独立检查 Runner 与项目状态。如果两者仍然可用，而且请求没有到达 WebCodex，请在 ChatGPT 允许 Developer MCP 的会话中重试。不要仅因出现这个 Host 侧错误就修改 WebCodex 配置。
+
 ## ChatGPT：临时 `share`
 
 显式 `share` 支持 Linux、macOS 与 Windows，并由当前前台进程持有临时单项目环境。Windows x64 可直接使用 managed 默认 Cloudflare Quick Tunnel；固定版本 Cloudflare 没有官方 Windows ARM64 artifact，因此 ARM64 需要受信任的显式/`PATH` `cloudflared`。managed OpenAI `tunnel-client` 支持 Windows x64/arm64。

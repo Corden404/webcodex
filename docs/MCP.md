@@ -10,6 +10,18 @@ For everyday use, run a regular Server + Runner. Follow the [Full Setup guide](P
 
 If you only want to try one repository temporarily, use the `share` path below.
 
+## ChatGPT host-side Developer MCP errors
+
+If ChatGPT reports:
+
+```text
+FORBIDDEN: This conversation does not support developer MCPs
+```
+
+The rejection comes from the ChatGPT host or the conversation-level Developer MCP admission and routing layer. It does not by itself mean that WebCodex permanently disabled developer access, that the Runner is offline, or that the project registration is invalid.
+
+Check the Runner and project state independently. If they remain available and the request did not reach WebCodex, retry in a conversation where ChatGPT admits Developer MCPs. No WebCodex configuration change is required solely because this host-side error appeared.
+
 ## ChatGPT: temporary `share`
 
 Explicit `share` is supported on Linux, macOS, and Windows and owns a temporary single-project environment for that foreground run. Windows x64 can use the managed default Cloudflare Quick Tunnel; Windows ARM64 needs a trusted explicit/PATH `cloudflared` because the pinned Cloudflare release publishes no official ARM64 artifact. Managed OpenAI `tunnel-client` supports both Windows x64 and arm64.
