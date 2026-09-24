@@ -8,7 +8,7 @@ observations on one vocabulary. Implementation baseline:
 | --- | --- |
 | `runtime_status.agents` | `runtime_status.runners` |
 | `agents.clients` and `agents.summary.clients` | `runners.clients` |
-| `list_runners.clients` and `list_runners.runners` | `list_runners.runners` |
+| `list_runners.agents`, `list_runners.clients`, and `list_runners.summary.clients` | `list_runners.runners` |
 | `agent_instance_id` | `runner_instance_id` |
 | `agent_protocol_generation` | `runner_protocol_generation` |
 | `mismatched_agents_count`, `source_mismatched_agents_count` | `mismatched_runners_count`, `source_mismatched_runners_count` |
@@ -37,20 +37,38 @@ a Runner wire-generation migration and does not add permanent observation aliase
 
 ## Upgrade status
 
-The management contract stays `[1, 1]` and the Runner wire generation stays
-unchanged while the coordinated upgrade strategy is awaiting upstream
-confirmation. This is an unresolved integration/release condition, not evidence
-that old and new observation clients interoperate.
+The owner clarified that this migration keeps `DESKTOP_RUNTIME_CONTRACT` at
+`[1, 1]`. Its scope is the raw `runtime_status` / `list_runners` observations and
+their first-party consumers, not the management command contracts Desktop
+deserializes. Runner registration, transport, and build-info wire fields and
+Runner wire generation remain unchanged.
 
 Older CLI versions read `/agents/clients` or `/agents/summary/clients`; against
-the new Server they may report an empty fleet or an unavailable Runner. Desktop
-indirectly consumes these observations through CLI commands. The existing
-management-generation check cannot detect this schema difference.
+the new Server they may report an empty fleet or an unavailable Runner. Preserving
+mixed-version compatibility for these raw observation clients is not required
+by #579. The management-generation check is not an observation-schema version.
 
-The candidate implementation updates Server, CLI, Console/Admin, and scripts
-together and must be reviewed as one change. Supported mixed Desktop/CLI/Server
-combinations and the deployment order remain to be agreed upstream before
-publication. Do not publish the intermediate Server-only commits independently.
+Atomic migration means updating the in-repository producers and first-party
+consumers together in one change: Server, Console/Admin, CLI readers, scripts,
+fixtures, E2Es, and documentation. The consumer list is not exhaustive; search
+for additional observation readers without renaming real Durable Agent concepts.
+Do not publish the intermediate Server-only commits independently. No permanent
+dual projection is retained. Temporary fallback reads require a demonstrated
+in-repository migration need; none is needed by this candidate.
+
+Desktop continues to deserialize `RunnerStatusOutput.config` and
+`runtime.checked`, `runtime.reachable`, and `runtime.client_online`. The CLI
+reads the canonical Runner observation internally and preserves these fields.
+`ServerStatusOutput` retains reachability, probe URL, PID, revision, management
+contract, protocol compatibility, and build fields. Its Desktop DTO does not
+deserialize the renamed auxiliary `agents` / `runners` statistics. The Desktop
+`OpsProject.agent_status` field is also preserved.
+
+The owner identified this cleanup as non-blocking for 0.4.2 and recommended
+picking it up after that release to avoid late stabilization conflicts. Keep
+the candidate separate from release hardening; recheck the integration baseline
+and affected consumers when resuming after the release. This note does not
+assert that 0.4.2 has already been released.
 
 See [testing guidance](../TESTING.md#runner-observability-contract) for behavior
 tests and the CI guard. Native Windows readiness tests and Linux socket-activation
