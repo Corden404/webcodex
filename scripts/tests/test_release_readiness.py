@@ -249,11 +249,38 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("packages: write", workflow)
         self.assertNotIn("push: true", workflow)
 
-    def test_local_macos_desktop_builder_matches_ci_dmg_mode(self) -> None:
-        local = Path("scripts/build_desktop_macos_local.sh").read_text(encoding="utf-8")
-        self.assertIn('export CI="true"', local)
-        self.assertIn('export APPLE_SIGNING_IDENTITY="-"', local)
-        self.assertIn("--bundles dmg", local)
+    def test_local_desktop_builders_match_native_ci_contracts(self) -> None:
+        macos = Path("scripts/build_desktop_macos_local.sh").read_text(encoding="utf-8")
+        windows = Path("scripts/build_desktop_windows_local.ps1").read_text(encoding="utf-8")
+        windows_stage = Path("scripts/prepare_desktop_bundle.ps1").read_text(encoding="utf-8")
+        windows_smoke = Path("scripts/desktop_install_windows_smoke.ps1").read_text(encoding="utf-8")
+        windows_npm_smoke = Path("scripts/npm_install_windows_smoke.ps1").read_text(encoding="utf-8")
+        windows_package = Path("scripts/package_release_artifact.ps1").read_text(encoding="utf-8")
+
+        for local in (macos, windows):
+            self.assertIn("npm ci --prefix frontend", local)
+            self.assertIn("npm ci --prefix apps/desktop", local)
+
+        self.assertIn('export CI="true"', macos)
+        self.assertIn('export APPLE_SIGNING_IDENTITY="-"', macos)
+        self.assertIn("--bundles dmg", macos)
+
+        self.assertIn("target\\desktop-local-tauri", windows)
+        self.assertIn("prepare_desktop_bundle.ps1", windows)
+        self.assertIn("--bundles nsis", windows)
+        self.assertIn("node node_modules/@tauri-apps/cli/tauri.js build", windows)
+        self.assertIn("--no-sign -- --locked", windows)
+        self.assertIn("if ($Smoke)", windows)
+        self.assertIn("desktop_install_windows_smoke.ps1", windows)
+        self.assertIn("target\\desktop-local-dist", windows)
+        self.assertIn("[switch]$AllowDirty", windows)
+        self.assertIn("-GitDirty $GitDirty", windows)
+        self.assertIn('"dirty-$ShortSource"', windows)
+        for helper in (windows_stage, windows_smoke):
+            self.assertIn("[bool]$GitDirty = $false", helper)
+            self.assertIn("dirty=$dirtyText", helper)
+        for helper in (windows_stage, windows_smoke, windows_npm_smoke, windows_package):
+            self.assertIn("GetUnresolvedProviderPathFromPSPath", helper)
 
     def test_daily_ci_avoids_rare_native_runners_and_keeps_path_aware_gates(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
