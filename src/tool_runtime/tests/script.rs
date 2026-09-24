@@ -822,6 +822,20 @@ async fn python_script_handoff_keeps_one_job_and_redacts_payload() {
     });
     let request = wait_for_patch_agent_request(&runtime, "python-handoff").await;
     assert_eq!(request.kind, "start_script_job");
+    let recovery = request.job_context.as_ref().unwrap();
+    assert_eq!(recovery.shell.as_deref(), Some("python"));
+    assert_eq!(
+        recovery.structured_execution.as_ref().unwrap().language,
+        Some(ShellScriptLanguage::Python)
+    );
+    assert_eq!(
+        recovery
+            .structured_execution
+            .as_ref()
+            .unwrap()
+            .execution_source,
+        "run_script"
+    );
     assert_eq!(
         request.script.as_ref().unwrap().language,
         ShellScriptLanguage::Python

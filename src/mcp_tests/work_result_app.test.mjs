@@ -6,10 +6,10 @@ const project = "agent:special:demo";
 const session_id = `wc_sess_${"1".repeat(32)}`;
 const input = { project, session_id };
 const baseState = {
-  version: 1,
+  version: 2,
   project,
   session_id,
-  state_version: `wr1_${"a".repeat(64)}`,
+  state_version: `wr2_${"a".repeat(64)}`,
   workspace: {
     git_available: true,
     clean: false,
@@ -42,11 +42,17 @@ const baseState = {
       status: "completed", duration_ms: 42,
     },
   },
+  activity: {
+    available: true, scope: "window", active: false, current: null,
+    last: { label: "Reviewed changes", kind: "review", at_ms: 1_999_999_990_000 },
+    last_meaningful_activity_at_ms: 1_999_999_990_000, coverage_partial: false,
+  },
+  collaboration: { available: true, can_send: true, messages: [] },
 };
 
 const nextState = {
   ...baseState,
-  state_version: `wr1_${"b".repeat(64)}`,
+  state_version: `wr2_${"b".repeat(64)}`,
   workspace: {
     ...baseState.workspace,
     clean: true,
@@ -79,7 +85,230 @@ const nextState = {
       status: "completed", duration_ms: 730,
     },
   },
+  activity: {
+    ...baseState.activity,
+    active: true,
+    current: { label: "Running checks", kind: "test", started_at_ms: 1789812010000 },
+    last: { label: "Edited code", kind: "edit", at_ms: 1789812009000 },
+    last_meaningful_activity_at_ms: 1789812009000,
+  },
 };
+
+function contentOnly(result) {
+  return { content: [{ type: "text", text: JSON.stringify(result.structuredContent) }] };
+}
+
+function privateOnly(result) {
+  return { _meta: { "webcodex/workResult": result.structuredContent } };
+}
+
+test("initial private Work Result fallback renders when Host omits structuredContent", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput(input);
+  await view.initialize();
+  view.notification("ui/notifications/tool-result", privateOnly(toolResult({ work_result: baseState })));
+  await flush();
+  assert.equal(view.nodes.taskTitle.textContent, "Work Result test");
+  assert.equal(view.nodes.badge.textContent, "Waiting");
+  assert.equal(view.nodes.refresh.disabled, false);
+  assert.equal(view.calls("work_result_state").length, 0);
+});
+
+test("missing initial machine result recovers once through app-only content fallback", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput(input);
+  await view.initialize();
+  view.notification("ui/notifications/tool-result", {
+    content: [{ type: "text", text: "WebCodex tool completed successfully." }],
+  });
+  await flush();
+  assert.notEqual(view.nodes.status.textContent, "This task card is unavailable");
+  assert.equal(view.calls("work_result_state").length, 1);
+  await view.reply(view.calls("work_result_state")[0], contentOnly(toolResult({ work_result: baseState })));
+  assert.equal(view.nodes.taskTitle.textContent, "Work Result test");
+  assert.equal(view.nodes.refresh.disabled, false);
+  assert.match(view.nodes.status.textContent, /Updated|Up to date|Live/);
+});
+
+test("primary task card hides raw tool and live file details while keeping semantic activity", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolResult({ work_result: baseState });
+  await view.initialize();
+  assert.equal(view.nodes.taskTitle.textContent, "Work Result test");
+  assert.equal(view.nodes.activityStatus.textContent, "Reviewed changes");
+  assert.doesNotMatch(view.nodes.activityStatus.textContent, /show_changes|session event/i);
+  assert.equal(view.nodes.workspaceStatus.textContent, "Changes in progress");
+  assert.equal(view.nodes.files, undefined);
+  assert.equal(view.nodes.collaborationMeta.textContent, "Shared with WebUI");
+});
+
+test("recent inactive work keeps the lightweight last-active state before the idle threshold", async () => {
+  const quietState = {
+    ...baseState,
+    state_version: `wr2_${"c".repeat(64)}`,
+    activity: {
+      ...baseState.activity,
+      last: { label: "Edited code", kind: "edit", at_ms: 1_999_999_990_000 },
+      last_meaningful_activity_at_ms: 1_999_999_990_000,
+    },
+  };
+  const view = app("mcp_work_result_app.html");
+  view.toolResult({ work_result: quietState });
+  await view.initialize();
+  assert.equal(view.nodes.activityStatus.textContent, "Edited code");
+  assert.equal(view.nodes.activityAge.textContent, "This chat · Last active 10s ago");
+  assert.equal(view.nodes.badge.textContent, "Waiting");
+});
+
+test("inactive work becomes explicitly idle from local wall-clock time while preserving the last semantic activity", async () => {
+  const idleState = {
+    ...baseState,
+    state_version: `wr2_${"f".repeat(64)}`,
+    activity: {
+      ...baseState.activity,
+      last: { label: "Ran checks", kind: "test", at_ms: 1_999_999_820_000 },
+      last_meaningful_activity_at_ms: 1_999_999_820_000,
+    },
+  };
+  const view = app("mcp_work_result_app.html");
+  view.toolResult({ work_result: idleState });
+  await view.initialize();
+  assert.equal(view.nodes.badge.textContent, "Idle");
+  assert.equal(view.nodes.activityStatus.textContent, "No WebCodex activity");
+  assert.equal(view.nodes.activityDetail.textContent, "Last work: Ran checks");
+  assert.equal(view.nodes.activityAge.textContent, "Idle for 3m");
+});
+
+test("missing meaningful activity time waits without inventing an idle age", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolResult({ work_result: {
+    ...baseState,
+    activity: { ...baseState.activity, last: null, last_meaningful_activity_at_ms: null },
+  } });
+  await view.initialize();
+  assert.equal(view.nodes.badge.textContent, "Waiting");
+  assert.equal(view.nodes.activityStatus.textContent, "Waiting for WebCodex activity");
+  assert.equal(view.nodes.activityAge.textContent, "");
+});
+
+test("validation failure and completed state both outrank local idle presentation", async () => {
+  const idleActivity = {
+    ...baseState.activity,
+    last: { label: "Ran checks", kind: "test", at_ms: 1_999_999_820_000 },
+    last_meaningful_activity_at_ms: 1_999_999_820_000,
+  };
+  const attention = app("mcp_work_result_app.html");
+  attention.toolResult({ work_result: {
+    ...baseState,
+    activity: idleActivity,
+    validation: { ...baseState.validation, current_status: "failed", unresolved_failures: 1, failures: 1 },
+  } });
+  await attention.initialize();
+  assert.equal(attention.nodes.badge.textContent, "Needs attention");
+
+  const completed = app("mcp_work_result_app.html");
+  completed.toolResult({ work_result: {
+    ...baseState,
+    activity: idleActivity,
+    session: { ...baseState.session, lifecycle: "closed" },
+  } });
+  await completed.initialize();
+  assert.equal(completed.nodes.badge.textContent, "Completed");
+  assert.equal(completed.nodes.activityStatus.textContent, "Work completed");
+});
+
+test("unchanged state_version refresh still advances wall-clock idle copy without server mutation", async () => {
+  const recent = {
+    ...baseState,
+    activity: {
+      ...baseState.activity,
+      last: { label: "Reviewed changes", kind: "review", at_ms: 1_999_999_950_000 },
+      last_meaningful_activity_at_ms: 1_999_999_950_000,
+    },
+  };
+  const view = app("mcp_work_result_app.html");
+  view.toolInput(input);
+  view.toolResult({ work_result: recent });
+  await view.initialize();
+  assert.equal(view.nodes.badge.textContent, "Waiting");
+  view.advanceTime(20_000);
+  view.nodes.refresh.onclick();
+  await flush();
+  await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: recent }));
+  assert.equal(view.nodes.badge.textContent, "Idle");
+  assert.equal(view.nodes.activityStatus.textContent, "No WebCodex activity");
+  assert.equal(view.nodes.activityAge.textContent, "Idle for 1m");
+});
+
+test("shared Session messages render user-facing Sent, Acknowledged, and Handled states", async () => {
+  const messageState = {
+    ...baseState,
+    state_version: `wr2_${"d".repeat(64)}`,
+    collaboration: {
+      available: true,
+      can_send: true,
+      messages: [
+        { message_id: "wc_msg_handled", created_at: 1_999_999_999, kind: "guidance", message: "handled", author: "user", state: "handled", requires_ack: true, first_seen_at: 1_999_999_999, handled_at: 2_000_000_000, resolution: "Applied." },
+        { message_id: "wc_msg_seen", created_at: 1_999_999_998, kind: "guidance", message: "seen", author: "user", state: "acknowledged", requires_ack: true, first_seen_at: 1_999_999_999, handled_at: null, resolution: null },
+        { message_id: "wc_msg_sent", created_at: 1_999_999_997, kind: "guidance", message: "sent", author: "user", state: "sent", requires_ack: true, first_seen_at: null, handled_at: null, resolution: null },
+      ],
+    },
+  };
+  const view = app("mcp_work_result_app.html");
+  view.toolResult({ work_result: messageState });
+  await view.initialize();
+  const labels = view.nodes.messages.children.map(article => article.children[1].children.at(-1).textContent);
+  assert.deepEqual(labels, ["Sent", "Acknowledged", "Handled"]);
+  assert.equal(view.nodes.messages.children[2].children[2].textContent, "Applied.");
+});
+
+test("card composer retries uncertain delivery with the same key and refreshes shared state", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput(input);
+  view.toolResult({ work_result: baseState });
+  await view.initialize();
+  view.nodes.messageInput.value = "Use the existing retry mechanism.";
+  view.nodes.messageInput.oninput();
+  view.nodes.composer.onsubmit({ preventDefault() {} });
+  await flush();
+  assert.equal(view.calls("work_result_send_message").length, 1);
+  const first = view.calls("work_result_send_message")[0];
+  assert.equal(first.params.arguments.project, project);
+  assert.equal(first.params.arguments.session_id, session_id);
+  assert.equal(first.params.arguments.message, "Use the existing retry mechanism.");
+  assert.match(first.params.arguments.delivery_key, /^wrc_[0-9a-f]{32}$/);
+
+  await view.fireTimers(10000);
+  assert.match(view.nodes.composerState.textContent, /status unknown/);
+  view.nodes.composer.onsubmit({ preventDefault() {} });
+  await flush();
+  assert.equal(view.calls("work_result_send_message").length, 2);
+  const second = view.calls("work_result_send_message")[1];
+  assert.equal(second.params.arguments.delivery_key, first.params.arguments.delivery_key);
+
+  await view.reply(second, contentOnly(toolResult({
+    success: true,
+    session_id,
+    message_id: "wc_msg_card",
+    replayed: true,
+    state_changed: false,
+  })));
+  assert.equal(view.calls("work_result_state").length, 1);
+  const refreshed = {
+    ...baseState,
+    state_version: `wr2_${"e".repeat(64)}`,
+    collaboration: {
+      available: true,
+      can_send: true,
+      messages: [
+        { message_id: "wc_msg_card", created_at: 2_000_000_000, kind: "guidance", message: "Use the existing retry mechanism.", author: "user", state: "sent", requires_ack: true, first_seen_at: null, handled_at: null, resolution: null },
+      ],
+    },
+  };
+  await view.reply(view.calls("work_result_state")[0], contentOnly(toolResult({ work_result: refreshed })));
+  assert.equal(view.nodes.messageInput.value, "");
+  assert.equal(view.nodes.messages.children[0].children[1].children.at(-1).textContent, "Sent");
+});
 
 for (const first of ["input", "result"]) {
   test(`Work Result ${first}-first bootstrap renders the initial snapshot without automatic refresh`, async () => {
@@ -92,9 +321,9 @@ for (const first of ["input", "result"]) {
     else view.toolInput(input);
     await flush();
     assert.equal(view.calls("work_result_state").length, 0);
-    assert.equal(view.nodes.changesTitle.textContent, "Changed 1 file");
-    assert.equal(view.nodes.validationStatus.textContent, "Passed");
-    assert.equal(view.nodes.reviewStatus.textContent, "Workspace reviewed · Diff inspected");
+    assert.equal(view.nodes.workspaceStatus.textContent, "Changes in progress");
+    assert.equal(view.nodes.validationStatus.textContent, "Checks passed");
+    assert.equal(view.nodes.reviewStatus.textContent, "Review recorded");
     assert.equal(view.nodes.refresh.disabled, false);
   });
 }
@@ -105,13 +334,13 @@ test("input-only bootstrap waits for a user Refresh before reading state", async
   await view.initialize();
   assert.equal(view.calls("work_result_state").length, 0);
   assert.equal(view.nodes.refresh.disabled, false);
-  assert.match(view.nodes.status.textContent, /Waiting for Work snapshot/);
+  assert.match(view.nodes.status.textContent, /Waiting for task status/);
   view.nodes.refresh.onclick();
   await flush();
   assert.equal(view.calls("work_result_state").length, 1);
   assert.deepEqual({ ...view.calls("work_result_state")[0].params.arguments }, input);
   await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: baseState }));
-  assert.equal(view.nodes.changesTitle.textContent, "Changed 1 file");
+  assert.equal(view.nodes.workspaceStatus.textContent, "Changes in progress");
   assert.equal(view.nodes.status.textContent, "Updated");
 });
 
@@ -120,11 +349,11 @@ test("matching Work input/result identity is idempotent and unchanged initial st
   view.toolResult({ work_result: baseState });
   await view.initialize();
   view.toolInput(input);
-  view.nodes.files.textContent = "sentinel";
+  view.nodes.activityDetail.textContent = "sentinel";
   view.toolResult({ work_result: baseState });
   await flush();
   assert.equal(view.calls("work_result_state").length, 0);
-  assert.equal(view.nodes.files.textContent, "sentinel");
+  assert.equal(view.nodes.activityDetail.textContent, "sentinel");
 });
 
 test("live progress performs bounded app-only polling and adapts to visibility", async () => {
@@ -137,8 +366,9 @@ test("live progress performs bounded app-only polling and adapts to visibility",
   assert.equal(view.calls("work_result_state").length, 1);
   assert.deepEqual({ ...view.calls("work_result_state")[0].params.arguments }, input);
   await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: nextState }));
-  assert.equal(view.nodes.progressStatus.textContent, "cargo_test · completed");
-  assert.match(view.nodes.progressMeta.textContent, /9 session events · live/);
+  assert.equal(view.nodes.activityStatus.textContent, "Running checks");
+  assert.equal(view.nodes.activityAge.textContent, "This chat · Active now");
+  assert.equal(view.nodes.badge.textContent, "Working");
   await view.fireTimers(2500);
   assert.equal(view.calls("work_result_state").length, 2);
   await view.reply(view.calls("work_result_state")[1], toolResult({ work_result: nextState }));
@@ -152,7 +382,7 @@ test("live progress performs bounded app-only polling and adapts to visibility",
 test("closed Session stops automatic polling but remains manually refreshable", async () => {
   const closedState = {
     ...baseState,
-    state_version: `wr1_${"c".repeat(64)}`,
+    state_version: `wr2_${"c".repeat(64)}`,
     session: { ...baseState.session, lifecycle: "closed" },
   };
   const view = app("mcp_work_result_app.html");
@@ -160,7 +390,7 @@ test("closed Session stops automatic polling but remains manually refreshable", 
   view.toolResult({ work_result: closedState });
   await view.initialize();
   assert.equal(view.timers.size, 0);
-  assert.match(view.nodes.status.textContent, /Closed/);
+  assert.match(view.nodes.status.textContent, /Completed/);
   await view.fireTimers(12000);
   assert.equal(view.calls("work_result_state").length, 0);
   await view.visibility(false);
@@ -172,7 +402,7 @@ test("closed Session stops automatic polling but remains manually refreshable", 
   await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: closedState }));
   assert.equal(view.timers.size, 0);
   assert.equal(view.nodes.refresh.disabled, false);
-  assert.match(view.nodes.status.textContent, /closed/i);
+  assert.match(view.nodes.status.textContent, /Completed/);
 });
 
 test("unchanged active Session pauses automatic polling after bounded idle time and manual Refresh resumes it", async () => {
@@ -185,7 +415,7 @@ test("unchanged active Session pauses automatic polling after bounded idle time 
   view.advanceTime(30 * 60 * 1000);
   await view.visibility(false);
   assert.equal(view.timers.size, 0);
-  assert.match(view.nodes.status.textContent, /auto refresh paused/);
+  assert.match(view.nodes.status.textContent, /Updates paused/);
   assert.equal(view.calls("work_result_state").length, 0);
 
   view.nodes.refresh.onclick();
@@ -208,9 +438,9 @@ test("user Refresh performs one exact state read and updates the snapshot", asyn
   assert.equal(view.nodes.refresh.disabled, true);
   assert.equal(view.nodes.refresh.textContent, "Refreshing…");
   await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: nextState }));
-  assert.equal(view.nodes.changesTitle.textContent, "Workspace clean");
-  assert.equal(view.nodes.validationStatus.textContent, "Failed");
-  assert.match(view.nodes.reviewStatus.textContent, /Committed range mapped/);
+  assert.equal(view.nodes.workspaceStatus.textContent, "No pending changes");
+  assert.equal(view.nodes.validationStatus.textContent, "Checks need attention");
+  assert.equal(view.nodes.reviewStatus.textContent, "Review recorded");
   assert.equal(view.nodes.status.textContent, "Updated");
   assert.equal(view.nodes.refresh.disabled, false);
 });
@@ -242,7 +472,7 @@ test("failed Refresh preserves the last valid snapshot and remains retryable", a
   view.nodes.refresh.onclick();
   await flush();
   await view.reply(view.calls("work_result_state")[0], { structuredContent: { success: false, output: { error_kind: "workspace_unavailable" } } });
-  assert.equal(view.nodes.changesTitle.textContent, "Changed 1 file");
+  assert.equal(view.nodes.workspaceStatus.textContent, "Changes in progress");
   assert.match(view.nodes.status.textContent, /Refresh unavailable/);
   assert.equal(view.nodes.refresh.disabled, false);
 
@@ -250,7 +480,7 @@ test("failed Refresh preserves the last valid snapshot and remains retryable", a
   await flush();
   assert.equal(view.calls("work_result_state").length, 2);
   await view.reject(view.calls("work_result_state")[1]);
-  assert.equal(view.nodes.changesTitle.textContent, "Changed 1 file");
+  assert.equal(view.nodes.workspaceStatus.textContent, "Changes in progress");
   assert.match(view.nodes.status.textContent, /Refresh unavailable/);
   assert.equal(view.nodes.refresh.disabled, false);
 
@@ -272,7 +502,7 @@ for (const first of ["input", "result"]) {
     else view.toolInput(foreign);
     await flush();
     assert.equal(view.calls("work_result_state").length, 0);
-    assert.equal(view.nodes.status.textContent, "Invalid or conflicting Work identity");
+    assert.equal(view.nodes.status.textContent, "This task card is unavailable");
     assert.equal(view.nodes.refresh.disabled, true);
     assert.equal(view.timers.size, 0);
   });
@@ -286,7 +516,7 @@ test("malformed authoritative Refresh state fails closed", async () => {
   view.nodes.refresh.onclick();
   await flush();
   await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: { ...baseState, state_version: "bad" } }));
-  assert.equal(view.nodes.status.textContent, "Invalid authoritative Work state");
+  assert.equal(view.nodes.status.textContent, "This task card is unavailable");
   assert.equal(view.nodes.refresh.disabled, true);
 });
 
@@ -300,7 +530,7 @@ test("partial evidence stays honest and exact files_total is not decorated as a 
   }));
   const partialState = {
     ...baseState,
-    state_version: `wr1_${"c".repeat(64)}`,
+    state_version: `wr2_${"c".repeat(64)}`,
     workspace: { ...baseState.workspace, files_total: 14, files, truncated: true, additions: undefined, deletions: undefined, line_stats_partial: true },
     validation: { ...baseState.validation, status: "unknown", latest_status: "unknown", current_status: "unknown", history_partial: true, successes: 0 },
     review: { ...baseState.review, available: false, total: 0, history_partial: true, tools: [] },
@@ -308,12 +538,11 @@ test("partial evidence stays honest and exact files_total is not decorated as a 
   const view = app("mcp_work_result_app.html");
   view.toolResult({ work_result: partialState });
   await view.initialize();
-  assert.equal(view.nodes.changesTitle.textContent, "Changed 14 files");
-  assert.match(view.nodes.files.textContent, /^\? src\/future\.rs/m);
-  assert.equal(view.nodes.validationStatus.textContent, "Unknown");
-  assert.match(view.nodes.validationMeta.textContent, /history partial/);
-  assert.equal(view.nodes.reviewStatus.textContent, "Review history partial");
-  assert.match(view.nodes.reviewMeta.textContent, /Earlier review evidence/);
+  assert.equal(view.nodes.workspaceStatus.textContent, "Changes in progress");
+  assert.equal(view.nodes.validationStatus.textContent, "Check status unavailable");
+  assert.match(view.nodes.validationMeta.textContent, /limited history/);
+  assert.equal(view.nodes.reviewStatus.textContent, "Review status incomplete");
+  assert.match(view.nodes.reviewMeta.textContent, /Earlier activity/);
   assert.equal(view.calls("work_result_state").length, 0);
 });
 
@@ -331,7 +560,7 @@ for (const method of ["ui/resource-teardown", "pagehide", "beforeunload"]) {
     await view.visibility(false);
     assert.equal(view.calls("work_result_state").length, 1);
     assert.equal(view.timers.size, 0);
-    assert.equal(view.nodes.changesTitle.textContent, "Changed 1 file");
+    assert.equal(view.nodes.workspaceStatus.textContent, "Changes in progress");
   });
 }
 
@@ -345,7 +574,7 @@ test("invalid Work input never refreshes", async () => {
     view.toolInput(bad);
     await flush();
     assert.equal(view.calls("work_result_state").length, 0);
-    assert.equal(view.nodes.status.textContent, "Invalid or conflicting Work identity");
+    assert.equal(view.nodes.status.textContent, "This task card is unavailable");
     assert.equal(view.nodes.refresh.disabled, true);
     assert.equal(view.timers.size, 0);
   }
@@ -417,8 +646,8 @@ test("frozen expansion reads the exact four-part identity once and re-expansion 
   await flush();
   assert.equal(view.calls("changes_file_diff").length, 1);
   assert.deepEqual({ ...view.calls("changes_file_diff")[0].params.arguments }, { project, session_id, snapshot_id, path: "src/file_0.rs" });
-  await view.reply(view.calls("changes_file_diff")[0], frozenDiff());
-  assert.equal(nodes.state.textContent, "Frozen diff");
+  await view.reply(view.calls("changes_file_diff")[0], contentOnly(frozenDiff()));
+  assert.equal(nodes.state.textContent, "File changes");
   assert.equal(nodes.pre.children.some(line => line.textContent === "+new" && line.className.includes("added")), true);
   assert.equal(nodes.pre.children.some(line => line.textContent === "-old" && line.className.includes("deleted")), true);
   nodes.button.onclick(); nodes.button.onclick();
@@ -438,11 +667,11 @@ test("Show more and live Refresh preserve pending frozen nodes, initial identity
   view.nodes.refresh.onclick();
   await flush();
   await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: nextState }));
-  assert.equal(view.nodes.changesTitle.textContent, "Workspace clean");
+  assert.equal(view.nodes.workspaceStatus.textContent, "Final result available");
   assert.equal(view.nodes.frozenSummary.textContent, "Changed 7 files");
   assert.equal(frozenNodes(view).root, nodes.root);
   await view.reply(view.calls("changes_file_diff")[0], frozenDiff());
-  assert.equal(nodes.state.textContent, "Frozen diff");
+  assert.equal(nodes.state.textContent, "File changes");
   nodes.button.onclick(); nodes.button.onclick();
   assert.equal(view.calls("changes_file_diff").length, 1);
   assert.equal(view.calls("changes_file_diff")[0].params.arguments.snapshot_id, snapshot_id);
@@ -457,7 +686,7 @@ test("initial snapshot is idempotent and its late arrival cannot roll back an ex
   const root = frozenNodes(view).root;
   view.toolResult({ work_result: frozenWork() });
   assert.equal(frozenNodes(view).root, root);
-  assert.equal(view.nodes.changesTitle.textContent, "Workspace clean");
+  assert.equal(view.nodes.workspaceStatus.textContent, "Final result available");
   assert.equal(view.nodes.frozenSummary.textContent, "Changed 7 files");
 });
 
@@ -471,7 +700,7 @@ test("live progress card adopts the first sealed final snapshot from a later sta
   await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: frozenWork() }));
   assert.equal(view.nodes.finalChanges.hidden, false);
   assert.equal(view.nodes.frozenSummary.textContent, "Changed 7 files");
-  assert.match(view.nodes.status.textContent, /Final changes sealed/);
+  assert.match(view.nodes.status.textContent, /Completed · final result ready/);
   const root = frozenNodes(view).root;
   view.nodes.refresh.onclick(); await flush();
   await view.reply(view.calls("work_result_state")[1], toolResult({ work_result: frozenWork() }));
@@ -481,10 +710,10 @@ test("live progress card adopts the first sealed final snapshot from a later sta
 
 test("metadata and lazy diff truncation remain truthful within bounded initial rows", async () => {
   const view = await frozenView("result", frozenWork({ files_changed: 30, files_total: 30, files_truncated: true }));
-  assert.match(view.nodes.frozenFooter.textContent, /metadata truncated \(7\/30 files advertised\)/);
+  assert.match(view.nodes.frozenFooter.textContent, /showing 7 of 30 files/);
   frozenNodes(view).button.onclick(); await flush();
   await view.reply(view.calls("changes_file_diff")[0], frozenDiff({ truncated: true, bytes_total: 50000, lines_total: 2000 }));
-  assert.match(frozenNodes(view).state.textContent, /truncated \(\d+\/50000 bytes, \d+\/2000 lines\)/);
+  assert.match(frozenNodes(view).state.textContent, /partial \(\d+\/2000 lines\)/);
 });
 
 test("renamed and binary files retain their metadata in lazy frozen responses", async () => {
@@ -492,7 +721,7 @@ test("renamed and binary files retain their metadata in lazy frozen responses", 
   frozenNodes(view, 3).button.onclick(); await flush();
   assert.equal(view.calls("changes_file_diff")[0].params.arguments.path, "src/new_name.rs");
   await view.reply(view.calls("changes_file_diff")[0], frozenDiff({ path: "src/new_name.rs", previous_path: "src/old_name.rs", kind: "renamed" }));
-  assert.equal(frozenNodes(view, 3).state.textContent, "Frozen diff");
+  assert.equal(frozenNodes(view, 3).state.textContent, "File changes");
   frozenNodes(view, 4).button.onclick(); await flush();
   await view.reply(view.calls("changes_file_diff")[1], frozenDiff({ path: "assets/blob.bin", binary: true, diff: "Binary files differ\n" }));
   assert.match(frozenNodes(view, 4).state.textContent, /Binary file/);
@@ -509,7 +738,7 @@ for (const change of [
     const view = await frozenView();
     frozenNodes(view).button.onclick(); await flush();
     await view.reply(view.calls("changes_file_diff")[0], frozenDiff(change));
-    assert.match(view.nodes.status.textContent, /Invalid frozen diff/);
+    assert.match(view.nodes.status.textContent, /task card is unavailable/);
     assert.equal(view.nodes.finalChanges.hidden, true);
     assert.equal(view.nodes.frozenFiles.children.length, 0);
     assert.equal(view.nodes.refresh.disabled, true);
@@ -530,7 +759,7 @@ for (const change of [
     const view = await frozenView("input", frozenWork(change));
     assert.equal(view.calls("changes_file_diff").length, 0);
     assert.equal(view.nodes.refresh.disabled, true);
-    assert.match(view.nodes.status.textContent, /Invalid Work Result/);
+    assert.match(view.nodes.status.textContent, /task card is unavailable/);
   });
 }
 
@@ -538,7 +767,7 @@ test("expired/unavailable snapshots never fall back to live diff or automaticall
   const view = await frozenView();
   frozenNodes(view).button.onclick(); await flush();
   await view.reply(view.calls("changes_file_diff")[0], { structuredContent: { success: false, output: { error_kind: "changes_snapshot_unavailable" } } });
-  assert.match(frozenNodes(view).state.textContent, /snapshot may have expired/);
+  assert.match(frozenNodes(view).state.textContent, /Changes unavailable/);
   await view.fireTimers(10000); await view.visibility(false);
   assert.equal(view.calls("changes_file_diff").length, 1);
   assert.equal(view.calls("work_result_state").length, 0);
@@ -563,7 +792,7 @@ for (const via of ["initial", "refresh"]) {
 test("same snapshot id cannot smuggle a changed advertised path list", async () => {
   const view = await frozenView();
   view.toolResult({ work_result: frozenWork({ files: finalChanges.files.map((file, index) => index ? file : { ...file, path: "src/other.rs" }) }) });
-  assert.match(view.nodes.status.textContent, /Conflicting sealed Work identity/);
+  assert.match(view.nodes.status.textContent, /task card is unavailable/);
   assert.equal(view.nodes.finalChanges.hidden, true);
 });
 
@@ -571,7 +800,7 @@ test("cached legacy Changes resource payload is not promoted into authoritative 
   const view = app("mcp_work_result_app.html");
   view.toolInput(input); await view.initialize();
   view.toolResult({ changes: { version: 3, project, session_id, ...finalChanges } });
-  assert.match(view.nodes.status.textContent, /Invalid Work Result state/);
+  assert.match(view.nodes.status.textContent, /task card is unavailable/);
   assert.equal(view.calls("work_result_state").length, 0);
   assert.equal(view.calls("changes_file_diff").length, 0);
 });
@@ -590,3 +819,50 @@ for (const method of ["ui/resource-teardown", "pagehide", "beforeunload"]) {
     assert.equal(view.timers.size, 0);
   });
 }
+
+
+test("workflow stages filter exact Session evidence without fetching or sending, and tabs preserve drafts", async () => {
+  const view = app("mcp_work_result_app.html");
+  const workflow = { history_partial: true, activity: [
+    { label: "Read project files", stage: "explore", state: "succeeded", started_at: 1789811990, finished_at: 1789811991, duration_ms: 1000, count: 2 },
+    { label: "Ran checks", stage: "check", state: "failed", started_at: 1789812000, finished_at: 1789812001, duration_ms: 1000, count: 1 },
+  ] };
+  view.toolResult({ work_result: { ...baseState, workflow } });
+  await view.initialize();
+  assert.equal(view.nodes.projectIdentity.textContent, project);
+  assert.equal(view.nodes.sessionIdentity.textContent, session_id);
+  assert.equal(view.nodes.workflowActivity.children.length, 2);
+  assert.equal(view.nodes.workflowActivity.children[0].children[0].children[0].textContent, "Ran checks");
+  assert.equal(view.nodes.workflowCoverage.textContent, "Recent retained activity");
+  const explore = view.nodes.workflowStages.children[1];
+  explore.onclick();
+  assert.equal(view.nodes.workflowActivity.children.length, 1);
+  assert.equal(explore.getAttribute("aria-pressed"), "true");
+  view.nodes.messageInput.value = "Keep my draft";
+  view.nodes.tabChecks.onclick();
+  assert.equal(view.nodes.panelChecks.hidden, false);
+  assert.equal(view.nodes.panelWorkflow.hidden, true);
+  view.nodes.askChecks.onclick();
+  assert.equal(view.nodes.panelMessages.hidden, false);
+  assert.equal(view.nodes.messageInput.value, "Keep my draft");
+  assert.equal(view.calls("work_result_send_message").length, 0);
+  assert.equal(view.calls("work_result_state").length, 0);
+  view.nodes.tabMessages.onkeydown({ key: "ArrowLeft", preventDefault() {} });
+  assert.equal(view.nodes.tabChecks.getAttribute("aria-selected"), "true");
+  view.nodes.refresh.onclick(); await flush();
+  await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: { ...baseState, workflow } }));
+  assert.equal(view.nodes.panelChecks.hidden, false);
+  assert.equal(view.nodes.workflowStages.children[1], explore);
+  assert.equal(view.nodes.messageInput.value, "Keep my draft");
+});
+
+for (const workflow of [
+  { history_partial: false, activity: Array.from({ length: 25 }, () => ({})) },
+  { history_partial: false, activity: [{ label: "Untrusted", stage: "invented", state: "success", started_at: 1, finished_at: 2, duration_ms: 1, count: 1 }] },
+]) test("invalid or oversized workflow cannot enter the task card", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolResult({ work_result: { ...baseState, workflow } });
+  await view.initialize();
+  assert.equal(view.nodes.badge.textContent, "Unavailable");
+  assert.equal(view.calls("work_result_state").length, 0);
+});

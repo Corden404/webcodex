@@ -28,6 +28,8 @@ use crate::tool_runtime::{ToolCall, ToolResult, ToolRuntime, ToolSpec};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+pub(super) const WORK_RESULT_APP_RESULT_META_KEY: &str = "webcodex/workResult";
+
 fn filter_specs_for_oauth(mut specs: Vec<ToolSpec>, auth: Option<&AuthContext>) -> Vec<ToolSpec> {
     let oauth_scope_projection = auth.is_some_and(AuthContext::is_oauth_token);
     specs.retain(|spec| {
@@ -774,6 +776,21 @@ fn attach_app_tool_content_fallback(result: &mut Value) {
         return;
     };
     result["content"] = json!([{ "type": "text", "text": text }]);
+}
+
+fn attach_work_result_app_private_result(result: &mut Value) {
+    let Some(structured) = result.get("structuredContent").cloned() else {
+        return;
+    };
+    let meta = result.as_object_mut().and_then(|result| {
+        result
+            .entry("_meta")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+    });
+    if let Some(meta) = meta {
+        meta.insert(WORK_RESULT_APP_RESULT_META_KEY.to_string(), structured);
+    }
 }
 
 fn safe_continuation_dispatch_observation(value: Option<&Value>) -> &'static str {
@@ -2050,6 +2067,8 @@ pub(super) async fn handle_call(
     let job_terminal_continuation_app_admitted = server_mcp_apps_enabled && stateless_2026;
     let app_only_goal_plan_sync = goal_plan_app_admitted && params.name == "goal_plan_sync";
     let app_only_work_result_state = work_result_app_admitted && params.name == "work_result_state";
+    let app_only_work_result_send_message =
+        work_result_app_admitted && params.name == "work_result_send_message";
     let app_only_changes_file_diff = work_result_app_admitted && params.name == "changes_file_diff";
     let app_only_agent_continuation =
         agent_continuation_app_admitted && is_agent_continuation_app_tool_name(&params.name);
@@ -2061,6 +2080,7 @@ pub(super) async fn handle_call(
             .any(|spec| spec.name == params.name);
     let direct_denied = !app_only_goal_plan_sync
         && !app_only_work_result_state
+        && !app_only_work_result_send_message
         && !app_only_changes_file_diff
         && !app_only_agent_continuation
         && !app_only_job_terminal_continuation
@@ -2139,7 +2159,7 @@ pub(super) async fn handle_call(
     // recording_session_id before the kernel sees any of these calls.
     if matches!(
         params.name.as_str(),
-        "goal_plan_sync" | "work_result_state" | "changes_file_diff"
+        "goal_plan_sync" | "work_result_state" | "work_result_send_message" | "changes_file_diff"
     ) {
         session_id = None;
     }
@@ -2325,7 +2345,12 @@ pub(super) async fn handle_call(
             mcp_runtime_tool_result_fallback(result, result_presentation)
         }
     };
-    if app_only_agent_continuation || app_only_job_terminal_continuation {
+    if app_only_work_result_state
+        || app_only_work_result_send_message
+        || app_only_changes_file_diff
+        || app_only_agent_continuation
+        || app_only_job_terminal_continuation
+    {
         // ChatGPT production has been observed to complete View-originated
         // tools/call server-side while not forwarding structuredContent back to
         // the View. Keep structuredContent canonical, but duplicate this bounded
@@ -2333,6 +2358,12 @@ pub(super) async fn handle_call(
         // These tools are ModelHidden/app-visible only, so ordinary model tool
         // results retain the compact text fallback.
         attach_app_tool_content_fallback(&mut result);
+    }
+    if app_enabled && params.name == "present_work_result" {
+        // Initial model-originated presentation keeps normal model content compact.
+        // The private MCP App result channel lets the mounted View recover the exact
+        // bounded Work Result when a Host omits structuredContent from tool-result.
+        attach_work_result_app_private_result(&mut result);
     }
     if app_only_agent_continuation {
         log_agent_continuation_app_result(

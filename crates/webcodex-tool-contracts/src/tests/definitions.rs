@@ -333,6 +333,7 @@ fn tool_definitions_are_activity_semantics_ssot() {
         "bootstrap_agent_conversation",
         "consume_agent_wake",
         "work_result_state",
+        "work_result_send_message",
         "session_handoff_state",
         "agent_wait_state",
         "agent_continuation_bind",
@@ -448,6 +449,101 @@ fn execution_selection_contract_is_canonical_closed_and_sparse() {
     ] {
         assert_eq!(runtime_tool_execution_contract(name), None, "{name}");
     }
+}
+
+#[test]
+fn host_orchestration_hints_are_static_guidance_independent_from_nested_composition() {
+    use ToolCompositionPolicy::{Denied, Parallel, Sequential};
+    use ToolHostConcurrencyHint::{IndependentParallelRead, Sequential as HostSequential};
+
+    let cases = [
+        (
+            "read_files",
+            Parallel,
+            IndependentParallelRead,
+            Some("items"),
+            false,
+        ),
+        (
+            "search_project_texts",
+            Parallel,
+            IndependentParallelRead,
+            Some("queries"),
+            false,
+        ),
+        (
+            "search_and_read",
+            Denied,
+            IndependentParallelRead,
+            Some("queries"),
+            true,
+        ),
+        ("git_status", Parallel, IndependentParallelRead, None, false),
+        (
+            "git_diff_hunks",
+            Parallel,
+            IndependentParallelRead,
+            None,
+            false,
+        ),
+        (
+            "git_review_summary",
+            Parallel,
+            IndependentParallelRead,
+            None,
+            false,
+        ),
+        (
+            "runtime_status",
+            Denied,
+            IndependentParallelRead,
+            None,
+            false,
+        ),
+        (
+            "cargo_check",
+            Sequential,
+            HostSequential,
+            Some("packages"),
+            false,
+        ),
+        ("cargo_test", Sequential, HostSequential, None, false),
+        (
+            "apply_text_edits",
+            Sequential,
+            HostSequential,
+            Some("changes"),
+            false,
+        ),
+        ("observe_jobs", Denied, HostSequential, Some("items"), false),
+    ];
+
+    for (name, composition, concurrency, native_batch_field, compound_preferred) in cases {
+        let definition = lookup_tool_definition(name).unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(definition.composition, composition, "{name}");
+        assert_eq!(
+            definition.host_orchestration.concurrency, concurrency,
+            "{name}"
+        );
+        assert_eq!(
+            definition.host_orchestration.native_batch_field, native_batch_field,
+            "{name}"
+        );
+        assert_eq!(
+            definition.host_orchestration.compound_preferred, compound_preferred,
+            "{name}"
+        );
+        assert_eq!(
+            runtime_tool_host_orchestration_hint(name),
+            definition.host_orchestration,
+            "{name}"
+        );
+    }
+
+    assert_eq!(
+        runtime_tool_host_orchestration_hint("unknown_tool"),
+        ToolHostOrchestrationHint::UNSPECIFIED
+    );
 }
 
 #[test]
@@ -839,7 +935,10 @@ fn adaptive_runtime_direct_declarations_are_visible_ranked_and_unique() {
         .contains("Recovery and inventory primitive"));
     assert!(list_jobs
         .description
-        .contains("continue that Job with observe_jobs"));
+        .contains("retain that identity and continue independent work"));
+    assert!(list_jobs
+        .description
+        .contains("using observe_jobs only when logs/details/recovery are needed"));
 
     let git_review = registered_tool_specs()
         .into_iter()
@@ -847,6 +946,140 @@ fn adaptive_runtime_direct_declarations_are_visible_ranked_and_unique() {
         .expect("git_review_summary ToolSpec");
     assert!(git_review.description.contains("git_diff_hunks/read_files"));
     assert!(!git_review.description.contains("git_diff_hunks/read_file "));
+}
+
+#[test]
+fn turn_economy_descriptors_stay_converged_and_bounded() {
+    let specs = registered_tool_specs();
+
+    for name in ["run_process", "run_script", "run_shell"] {
+        let spec = spec_named(&specs, name);
+        for phrase in [
+            "continue independent work",
+            "observe_jobs only for",
+            "wait_for_job_terminal only when",
+        ] {
+            assert!(spec.description.contains(phrase), "{name}: {phrase}");
+        }
+        assert!(
+            !spec.description.contains("Use observe_jobs later"),
+            "{name}"
+        );
+        let action = lookup_tool_definition(name)
+            .unwrap()
+            .gpt_action_description()
+            .expect("execution action description");
+        assert!(!action.contains("Use observe_jobs later"), "{name}");
+        assert!(
+            spec.description
+                .contains("passive Job attention may surface transitions"),
+            "{name}"
+        );
+    }
+
+    for name in ["cargo_check", "cargo_test"] {
+        let spec = spec_named(&specs, name);
+        for phrase in [
+            "continue independent work",
+            "do not poll",
+            "covered source",
+            "final evidence freeze covered source",
+        ] {
+            assert!(spec.description.contains(phrase), "{name}: {phrase}");
+        }
+    }
+    let cargo_fmt = spec_named(&specs, "cargo_fmt");
+    for phrase in [
+        "continue independent work",
+        "do not poll",
+        "evidence is stale",
+        "freeze covered source",
+    ] {
+        assert!(
+            cargo_fmt.description.contains(phrase),
+            "cargo_fmt: {phrase}"
+        );
+    }
+
+    let observe = spec_named(&specs, "observe_jobs");
+    for phrase in [
+        "logs/details/recovery",
+        "not the default Job-handoff step",
+        "Never launches, retries",
+    ] {
+        assert!(
+            observe.description.contains(phrase),
+            "observe_jobs: {phrase}"
+        );
+    }
+    let wait = spec_named(&specs, "wait_for_job_terminal");
+    assert!(wait
+        .description
+        .contains("only when no independent work remains"));
+    assert!(wait
+        .description
+        .contains("explicit logs/details or recovery"));
+    let list = spec_named(&specs, "list_jobs");
+    assert!(list
+        .description
+        .contains("Recovery and inventory primitive"));
+    assert!(list
+        .description
+        .contains("not the normal continuation step"));
+    assert!(list
+        .description
+        .contains("retain that identity and continue independent work"));
+    assert!(list
+        .description
+        .contains("observe_jobs only when logs/details/recovery are needed"));
+
+    let edits = spec_named(&specs, "apply_text_edits");
+    for phrase in [
+        "expected_match_count=N",
+        "exact cardinality is known",
+        "optional dry_run",
+        "dry_run is not ritual",
+        "change_summary",
+        "mechanical scope",
+        "not semantic review",
+        "show_changes",
+        "git_diff_hunks",
+        "git_review_summary",
+    ] {
+        assert!(
+            edits.description.contains(phrase),
+            "apply_text_edits: {phrase}"
+        );
+    }
+    assert!(spec_named(&specs, "cargo_check")
+        .description
+        .contains("packages for a known set"));
+
+    for name in [
+        "run_process",
+        "run_script",
+        "run_shell",
+        "observe_jobs",
+        "wait_for_job_terminal",
+        "list_jobs",
+        "cargo_check",
+        "cargo_test",
+        "apply_text_edits",
+    ] {
+        let spec = spec_named(&specs, name);
+        assert!(
+            spec.description.chars().count() <= MODEL_TOOL_DESCRIPTION_MAX_CHARS,
+            "{name} canonical description budget"
+        );
+        let action = lookup_tool_definition(name)
+            .unwrap()
+            .gpt_action_description()
+            .expect("model-facing action description");
+        assert!(
+            action.chars().count() <= GPT_ACTION_DESCRIPTION_MAX_CHARS,
+            "{name} GPT Action description budget"
+        );
+    }
 }
 
 #[test]
