@@ -6,6 +6,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 RUST_PROJECTIONS = (
     "src/tool_runtime/runtime_info.rs",
+    "src/tool_runtime/projects.rs",
     "src/tool_runtime/coding_task.rs",
     "src/admin_http.rs",
     "src/runtime_console_http.rs",

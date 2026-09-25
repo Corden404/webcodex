@@ -1029,12 +1029,12 @@ else
     fail "POST /api/runtime/status without token returned HTTP ${no_auth_status} (expected 401)"
 fi
 
-# runtime_status now carries per-agent last_seen + stale_count for the console.
+# runtime_status now carries per-Runner last_seen + stale_count for the console.
 status_body="$(api_post /api/runtime/status '{}')"
 if [ "$(json_get "$status_body" output.runners.stale_count)" != "None" ]; then
-    pass "runtime_status exposes agents.stale_count"
+    pass "runtime_status exposes runners.stale_count"
 else
-    fail "runtime_status missing agents.stale_count"
+    fail "runtime_status missing runners.stale_count"
 fi
 
 # ----------------------------------------------------------------------------

@@ -309,7 +309,7 @@ export function AdminApp() {
     ["Jobs", display(overview.active_jobs || 0), display(overview.version_compatibility || "compatibility unknown")],
   ];
   const navigation = [
-    ["overview-section", "Overview", LayoutDashboard], ["devices-section", "Agents", Users],
+    ["overview-section", "Overview", LayoutDashboard], ["devices-section", "Runners", Users],
     ["projects-section", "Projects", Folder], ["diagnostics-section", "Diagnostics", AlertTriangle],
   ] as const;
 
@@ -353,8 +353,8 @@ export function AdminApp() {
             <span>{label}</span><strong className={index ? "metric" : ""}>{value}</strong><small>{subtitle}</small>
           </div>)}</div>
         </Section>
-        <Section id="devices-section" eyebrow="Connected fleet" title="Agents" error={sectionError("devices")}>
-          <DataTable label="Devices and Agents" empty="No devices observed." headings={["Name", "Client", "Status", "Transport", "Host", "Last seen", "Capabilities", "Projects", "Jobs", "Protocol", "Build alignment"]}
+        <Section id="devices-section" eyebrow="Connected fleet" title="Runners" error={sectionError("devices")}>
+          <DataTable label="Connected Runners" empty="No Runners observed." headings={["Name", "Client", "Status", "Transport", "Host", "Last seen", "Capabilities", "Projects", "Jobs", "Protocol", "Build alignment"]}
             rows={dashboard.devices.map((device) => [display(device.display_name), <code>{display(device.client_id)}</code>, <Status value={device.status} />,
               display(device.transport), display(device.hostname), <code>{display(device.last_seen)}</code>, display(capabilityLabels(device.capabilities).join(", ")),
               display(device.project_count), display(device.active_jobs), <Status value={device.protocol_compatibility || device.compatibility} />, <span title="Build identity is diagnostic, not functional compatibility">{display(device.build_alignment)}</span>])} />
