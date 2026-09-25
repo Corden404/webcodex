@@ -35,7 +35,7 @@ ToolDefinition
 
 一个工具被标记为 Adaptive Direct 后，默认会自动成为 direct GPT Action；只有 canonical definition 明确声明 GPT Actions 无法表达其协议语义时才排除。因此以后增删或重新排序 Adaptive Direct 工具时，GPT Actions 会自动跟随，不存在第二套 GPT Action rank 或 operation list。
 
-Direct operation 直接使用 canonical snake_case 名称和 canonical input contract。例如当前 Adaptive Direct 中的 `work_on_project`、`runtime_status`、`tool_manifest`、`search_project_texts`、`read_files`、`apply_text_edits`、`run_process`、`run_detached_process`、`run_shell`、`observe_jobs`、`list_jobs`、`cargo_check`、`cargo_test`、`git_review_summary`、`git_diff_hunks`、`show_changes`、`workspace_hygiene_check`、`finish_coding_task` 等会按当前定义自动投影。
+Direct operation 直接使用 canonical snake_case 名称和 canonical input contract。例如 `work_on_project`、`runtime_status`、`tool_manifest`、`search_project_texts`、`read_files`、`apply_text_edits`、`run_process`、`run_script`、`run_detached_process`、`run_shell`、`observe_jobs`、`list_jobs`、`cargo_check`、`cargo_test`、`git_review_summary`、`git_diff_hunks`、`show_changes` 等会按当前定义自动投影；收尾辅助工具 `workspace_hygiene_check` 与 `finish_coding_task` 是 model-visible long-tail 工具，统一通过 `call_runtime_tool` 调用。
 
 Long-tail model-visible 工具统一通过：
 
@@ -67,7 +67,7 @@ Custom GPT importer 还会拒绝达到 1 MB 的 OpenAPI schema。WebCodex 因此
 
 `import_conversation_files_to_project` 在它属于 Adaptive Direct 时仍是 direct generic Action。ChatGPT 提供 `openaiFileIdRefs`；HTTP adapter 把 Action host file-reference shape 转为 canonical 内部 shape，并附加私有 GPT Action host provenance。模型 JSON 自己不能设置这个 provenance。
 
-MCP host-file import 保留独立的 trusted provenance 路径。普通 network-accessible Server 继续要求配置过的 trusted OAuth MCP client；显式 opt in 的 loopback-only OpenAI Secure Tunnel 部署可以改为信任本机注入的 user API token。Action 与 MCP 两种 provenance 模式共享 canonical authorization，但不能互相伪造。
+MCP host-file import 保留独立的 trusted provenance 路径。普通 network-accessible Server 继续要求配置过的 trusted OAuth MCP client；显式 opt in 的 loopback-only OpenAI Secure Tunnel 部署可以改为信任允许的本地 tunnel credential（普通 user API token，或 Desktop regular Tunnel 使用的已配置 Server bootstrap credential）。Action 与 MCP 两种 provenance 模式共享 canonical authorization，但不能互相伪造。
 
 ## Project-scoped local `share` / `run`
 
