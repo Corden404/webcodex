@@ -27225,8 +27225,8 @@ function UL() {
       `${Pe(me.build_commit)} · ${Pe(me.authority_mode)}`
     ],
     [
-      "Agents",
-      `${Pe(me.agents_online || 0)} / ${Pe(me.agents_total || 0)}`,
+      "Runners",
+      `${Pe(me.runners_online || 0)} / ${Pe(me.runners_total || 0)}`,
       "online now"
     ],
     [
