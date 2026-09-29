@@ -9,7 +9,7 @@ import { WorkspaceStatus, ChatgptObservation, observationTime } from "../workspa
 import { ProjectRows } from "../projects/ProjectRows";
 
 interface DashboardProps {
-  state: DesktopState; refreshing: boolean; onRefresh: () => void;
+  state: DesktopState; refreshing: boolean; onRefresh: () => Promise<void>;
   onResumeRuntime: () => void;
   onChangeSetup: () => void;
   onNavigate: (page: "projects" | "connection" | "activity" | "extensions") => void;
@@ -26,7 +26,7 @@ export function Dashboard(props: DashboardProps) {
     <header className="page-heading-row">
       <div><span className="eyebrow">{p("workspace")}</span><h1 id="home-title">{currentProject ? projectName(currentProject) : "WebCodex"}</h1>{currentProject?.path && <code className="dashboard-project-path">{displayProjectPath(currentProject.path)}</code>}</div>
       <div className="dashboard-heading-actions">
-        <Button className="secondary-button" variant="default" disabled={busy || props.refreshing} onClick={() => { workspace.refresh(); props.onRefresh(); }}>{p("refresh")}</Button>
+        <Button className="secondary-button" variant="default" disabled={busy || props.refreshing} onClick={() => void props.onRefresh()}>{p("refresh")}</Button>
       </div>
     </header>
     <WorkspaceStatus state={state} />

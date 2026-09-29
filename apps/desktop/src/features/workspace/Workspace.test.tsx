@@ -6,7 +6,7 @@ import { PRODUCT_LOCALES, PRODUCT_MESSAGES, productText } from "../../i18n/produ
 import { ProjectsPanel } from "../projects/ProjectsPanel";
 import { ActivityPanel } from "../activity/ActivityPanel";
 import { ExtensionsPanel } from "../extensions/ExtensionsPanel";
-import { WorkspaceProvider, sameProjectPath, sameProject, mergeProjects, sessionTitle, projectName, displayProjectPath } from "./WorkspaceContext";
+import { WorkspaceProvider, sameProjectPath, sameProject, mergeProjects, sessionTitle, projectName, displayProjectPath, useWorkspace } from "./WorkspaceContext";
 import { ChatgptObservation, observationTime, WorkspaceStatus } from "./WorkspaceStatus";
 import { DesktopMantineProvider } from "../../components/DesktopMantineProvider";
 import { Sidebar } from "../../components/Sidebar";
@@ -61,6 +61,37 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("product workspace task flows", () => {
+  it("ignores failures from pre-refresh observations and resumes overview and Git reads", async () => {
+    const pending = new Map<string, (error: Error) => void>();
+    const normal = native.invoke.getMockImplementation()!;
+    function Status() {
+      const workspace = useWorkspace();
+      return <><span>{workspace.error || workspace.windowsError ? "Observation failed" : "Observation healthy"}</span>
+        <button onClick={workspace.refresh}>Refresh observations</button></>;
+    }
+    const content = (suspended: boolean) => <DesktopMantineProvider><LocaleProvider><WorkspaceProvider state={state} suspended={suspended}>
+      <Status /><ProjectsPanel />
+    </WorkspaceProvider></LocaleProvider></DesktopMantineProvider>;
+    const view = render(content(false));
+    expect(await screen.findAllByText("feat/export")).toHaveLength(2);
+    native.invoke.mockImplementation((_command, { request }) => new Promise((_resolve, reject) => {
+      pending.set(request.kind === "project_git" ? request.project : request.kind, reject);
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh observations" }));
+    expect(pending.size).toBe(5);
+    view.rerender(content(true));
+    await act(async () => { for (const reject of pending.values()) reject(new Error("workspace_unavailable")); });
+    expect(screen.getByText("Observation healthy")).toBeInTheDocument();
+    expect(screen.getAllByText("feat/export")).toHaveLength(2);
+    native.invoke.mockClear();
+    native.invoke.mockImplementation(normal);
+    view.rerender(content(false));
+    expect(await screen.findAllByText("feat/export")).toHaveLength(2);
+    await waitFor(() => expect(native.invoke).toHaveBeenCalledTimes(5));
+    expect(screen.getByText("Observation healthy")).toBeInTheDocument();
+  });
+
+
   it("shows no local Runner on a viewer while retaining raw stopped readiness", () => {
     const viewer = { ...state, readiness: { ...state.readiness, runner: "stopped" as const },
       topology: { ...state.topology!, server: { kind: "remote" as const, url: "https://central.example" }, runner: { kind: "none" as const } } } as DesktopState;

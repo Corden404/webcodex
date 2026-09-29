@@ -14,6 +14,7 @@ export function useDesktopWorkspace() {
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [navigation, setNavigation] = useState<Navigation>("home");
   const [refreshing, setRefreshing] = useState(false);
+  const [runtimeObservations, setRuntimeObservations] = useState(0);
   const [error, setError] = useState<DesktopError | null>(null);
   const [cancelSubmittingId, setCancelSubmittingId] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
@@ -173,8 +174,12 @@ export function useDesktopWorkspace() {
       timeoutId = window.setTimeout(() => {
         void (async () => {
           const observedVersion = stateVersionRef.current;
+          const refreshRuntime = Boolean(state?.persistent_environment && !hasCurrentOperation && !refreshing);
+          // Keep this separate from refreshing: changing that effect dependency
+          // would cancel this observation before it can commit its result.
+          if (refreshRuntime) setRuntimeObservations(count => count + 1);
           try {
-            const next = state?.persistent_environment && !hasCurrentOperation && !refreshing
+            const next = refreshRuntime
               ? await desktopApi.refresh()
               : await desktopApi.getState();
             if (!cancelled && stateVersionRef.current === observedVersion) {
@@ -184,6 +189,7 @@ export function useDesktopWorkspace() {
             // Observation is best-effort. A transient invoke failure must not
             // create an error storm or a second concurrent observer.
           } finally {
+            if (refreshRuntime) setRuntimeObservations(count => count - 1);
             if (!cancelled) scheduleObservation();
           }
         })();
@@ -276,5 +282,5 @@ export function useDesktopWorkspace() {
     }
   };
 
-  return { state, activity, navigation, setNavigation, refreshing, error, setError, cancelSubmittingId, showSetup, setShowSetup, setStartupAttempt, mainRef, commitState, openSetup, refresh, resumeRuntime, cancelCurrentOperation, runStateOperation };
+  return { state, activity, navigation, setNavigation, refreshing: refreshing || runtimeObservations > 0, error, setError, cancelSubmittingId, showSetup, setShowSetup, setStartupAttempt, mainRef, commitState, openSetup, refresh, resumeRuntime, cancelCurrentOperation, runStateOperation };
 }

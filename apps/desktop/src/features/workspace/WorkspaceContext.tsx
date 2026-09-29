@@ -61,12 +61,12 @@ function authorizationFailed(reason: WorkspaceErrorReason | null | undefined): b
 interface WorkspaceValue {
   runners: ServerRunnerSummary[]; fleetStale: boolean;
   state: DesktopState; runner: RunnerOverview | null; projects: WorkspaceProject[]; windows: WindowSummary[];
-  sessions: WorkflowSession[]; loading: boolean; error: boolean; errorReason: WorkspaceErrorReason; windowsError: boolean; windowsErrorReason: WorkspaceErrorReason; refresh: () => void; removeProject: (id: string) => void; revision: number;
+  sessions: WorkflowSession[]; loading: boolean; busy: boolean; error: boolean; errorReason: WorkspaceErrorReason; windowsError: boolean; windowsErrorReason: WorkspaceErrorReason; refresh: () => void; removeProject: (id: string) => void; revision: number;
   selection: { kind: "session"; project: string; id: string } | { kind: "window"; id: string } | null;
   setSelection: (value: WorkspaceValue["selection"]) => void;
 }
 const WorkspaceContext = createContext<WorkspaceValue | null>(null);
-export function WorkspaceProvider({ state, children }: { state: DesktopState; children: ReactNode }) {
+export function WorkspaceProvider({ state, suspended = false, children }: { state: DesktopState; suspended?: boolean; children: ReactNode }) {
   const key = JSON.stringify([state.topology?.server, state.workspace_runner, state.persistent_environment]);
   const [snapshot, setSnapshot] = useState<{ key: string; runners: ServerRunnerSummary[]; runner: RunnerOverview | null; windows: WindowSummary[]; error: boolean; errorReason: WorkspaceErrorReason | null; windowsError: boolean; windowsErrorReason: WorkspaceErrorReason | null } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -78,7 +78,8 @@ export function WorkspaceProvider({ state, children }: { state: DesktopState; ch
     setSelection(current => current?.kind === "session" && current.project === id ? null : current);
   }, []);
   const refresh = useCallback(() => setRevision(value => value + 1), []);
-  const busy = Boolean(state.current_operation);
+  // Local refresh starts before the next native operation snapshot arrives.
+  const busy = suspended || Boolean(state.current_operation);
   const ready = state.readiness.server === "ready";
   useEffect(() => {
     if (!ready || busy) return;
@@ -145,7 +146,7 @@ export function WorkspaceProvider({ state, children }: { state: DesktopState; ch
   return <WorkspaceContext.Provider value={{ state, runners: current?.runners || [], fleetStale: !ready || Boolean(current?.error), runner: current?.runner || null, projects,
     windows: (current?.windows || []).filter(row => !row.last_project || ids.has(row.last_project)),
     sessions: (current?.runner?.recent_sessions?.sessions || []).filter(session => !session.project_id || ids.has(session.project_id)), loading: ready && !busy && (loading || !current),
-    error: Boolean(current?.error), errorReason: current?.errorReason || "loadError", windowsError: Boolean(current?.windowsError), windowsErrorReason: current?.windowsErrorReason || "loadError", refresh, removeProject, revision, selection, setSelection,
+    busy, error: Boolean(current?.error), errorReason: current?.errorReason || "loadError", windowsError: Boolean(current?.windowsError), windowsErrorReason: current?.windowsErrorReason || "loadError", refresh, removeProject, revision, selection, setSelection,
   }}>{children}</WorkspaceContext.Provider>;
 }
 export function useWorkspace(): WorkspaceValue {

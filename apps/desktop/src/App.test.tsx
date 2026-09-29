@@ -335,6 +335,58 @@ beforeEach(() => {
     expect(window.localStorage.getItem("webcodex.desktop.appearance.v1")).toBe("dark");
   });
 
+  it.each([
+    ["manual", "resolve"], ["manual", "reject"],
+    ["automatic", "resolve"], ["automatic", "reject"],
+  ] as const)("suspends workspace polling during %s runtime refresh (%s)", async (trigger, outcome) => {
+    const selected = { ...readyState, persistent_environment: trigger === "automatic" ? "fixture-environment" : null };
+    api.getState.mockResolvedValue(selected);
+    if (trigger === "automatic") api.refresh.mockResolvedValueOnce(selected);
+    const runtime = deferred<DesktopState>();
+    let refreshing = false;
+    let branch = "main";
+    api.refresh.mockImplementation(() => { refreshing = true; return runtime.promise; });
+    const normal = workspace.invoke.getMockImplementation()!;
+    workspace.invoke.mockImplementation((command, args) => {
+      if (refreshing) return Promise.reject(new Error("workspace_unavailable"));
+      if (args.request.kind === "project_git") return Promise.resolve({ branch });
+      return normal(command, args);
+    });
+    vi.useFakeTimers();
+    const view = renderApp();
+    try {
+      await act(async () => {});
+      expect(screen.getByText("main")).toBeInTheDocument();
+      // Isolate runtime observation from the independent 30-second activity observer.
+      fireEvent.blur(window);
+      const before = workspace.invoke.mock.calls.length;
+      if (trigger === "manual") fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+      else await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(workspace.invoke.mock.calls.length).toBe(before);
+      expect(screen.getByText("main")).toBeInTheDocument();
+      expect(screen.queryByText("暂时无法刷新，请检查连接后重试。")).not.toBeInTheDocument();
+      await act(async () => {
+        refreshing = false;
+        branch = "updated-branch";
+        if (outcome === "resolve") runtime.resolve({ ...selected, project: null });
+        else runtime.reject({ code: "refresh_failed", message: "Fixture refresh failure" });
+      });
+      const count = () => workspace.invoke.mock.calls.filter(([, args]) => args.request.kind === "overview").length;
+      expect(count()).toBe(2);
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(outcome === "resolve" ? "WebCodex" : "repo");
+      expect(screen.getByText("updated-branch")).toBeInTheDocument();
+      expect(screen.queryByText("暂时无法刷新，请检查连接后重试。")).not.toBeInTheDocument();
+      if (trigger === "manual") {
+        await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+        expect(count()).toBe(3);
+      }
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a user stop consistent after refresh and offers Start", async () => {
     const stopped = { ...setupState(), readiness: { ...setupState().readiness, summary_kind: "runtime_stopped" as const } };
     api.getState.mockResolvedValue(stopped); api.refresh.mockResolvedValue(stopped);

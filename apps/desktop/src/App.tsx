@@ -64,7 +64,7 @@ function DesktopApp() {
   const needsSetup = !state.topology || showSetup;
 
   return (
-    <WorkspaceProvider state={state}><div className="app-shell">
+    <WorkspaceProvider state={state} suspended={refreshing}><div className="app-shell">
       <Sidebar state={state} navigation={navigation} setNavigation={setNavigation} />
 
       <main className="main-content" ref={mainRef} tabIndex={-1}>
@@ -123,7 +123,7 @@ function DesktopApp() {
           <Dashboard
             state={state}
             refreshing={refreshing}
-            onRefresh={() => void refresh()}
+            onRefresh={refresh}
             onResumeRuntime={() => void resumeRuntime()}
             onChangeSetup={openSetup}
             onNavigate={setNavigation}

@@ -22,13 +22,15 @@ export function ProjectRows({ projects }: { projects: WorkspaceProject[] }) {
 }
 function ProjectRow({ project, compact = false }: { project: WorkspaceProject; compact?: boolean }) {  const p = useProduct(); const { locale } = useLocale();
   const [git, setGit] = useState<GitSummary | null>(null);
-  const { revision } = useWorkspace();
+  const { revision, busy: workspaceBusy } = useWorkspace();
+  useEffect(() => { setGit(null); }, [project.id, project.connected]);
   useEffect(() => {
+    if (workspaceBusy) return;
     let cancelled = false;
-    setGit(null);
+
     if (project.id && project.connected) void workspaceQuery<GitSummary>({ kind: "project_git", project: project.id }).then(value => { if (!cancelled) setGit(value); }).catch(() => undefined);
     return () => { cancelled = true; };
-  }, [project.id, project.connected, revision]);
+  }, [project.id, project.connected, revision, workspaceBusy]);
   const name = projectName(project);
   const branch = git?.branch || (git?.non_git_project ? p("notGit") : "—");
   const activity = project.sessions ? `${project.sessions.active_sessions}${project.sessions.sessions_truncated ? "+" : ""} ${p("activeSessions")}` : p(project.id ? "unknown" : "setup");
