@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { DesktopState } from "../../models/topology";
 import type { RunnerOverview, ServerRunnerSummary, ServerOverview, ServerProjects, WindowSummary, WorkspaceProject, WorkspaceRequest, WorkflowSession } from "../../models/workspace";
@@ -66,25 +66,50 @@ interface WorkspaceValue {
   setSelection: (value: WorkspaceValue["selection"]) => void;
 }
 const WorkspaceContext = createContext<WorkspaceValue | null>(null);
-export function WorkspaceProvider({ state, suspended = false, children }: { state: DesktopState; suspended?: boolean; children: ReactNode }) {
+export function WorkspaceProvider({ state, suspended = false, preservePollDeadline = false, children }: { state: DesktopState; suspended?: boolean; preservePollDeadline?: boolean; children: ReactNode }) {
   const key = JSON.stringify([state.topology?.server, state.workspace_runner, state.persistent_environment]);
   const [snapshot, setSnapshot] = useState<{ key: string; runners: ServerRunnerSummary[]; runner: RunnerOverview | null; windows: WindowSummary[]; error: boolean; errorReason: WorkspaceErrorReason | null; windowsError: boolean; windowsErrorReason: WorkspaceErrorReason | null } | null>(null);
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
   const [selection, setSelection] = useState<WorkspaceValue["selection"]>(null);
   const [removed, setRemoved] = useState<string[]>([]);
+  const nextPollAt = useRef<number | null>(null);
+  const preservePollDeadlineOnResume = useRef(false);
   const removeProject = useCallback((id: string) => {
     setRemoved(ids => [...ids, id]);
     setSelection(current => current?.kind === "session" && current.project === id ? null : current);
   }, []);
-  const refresh = useCallback(() => setRevision(value => value + 1), []);
+  const refresh = useCallback(() => {
+    nextPollAt.current = null;
+    setRevision(value => value + 1);
+  }, []);
   // Local refresh starts before the next native operation snapshot arrives.
-  const busy = suspended || Boolean(state.current_operation);
+  const operationBusy = Boolean(state.current_operation);
+  const busy = suspended || operationBusy;
   const ready = state.readiness.server === "ready";
   useEffect(() => {
-    if (!ready || busy) return;
+    nextPollAt.current = null;
+    preservePollDeadlineOnResume.current = false;
+  }, [key]);
+  useEffect(() => {
+    if (!ready) {
+      preservePollDeadlineOnResume.current = false;
+      return;
+    }
+    if (busy) {
+      // Passive Runtime observations are frequent. Preserve the existing
+      // Workspace polling deadline across those pauses instead of turning the
+      // 15-second Workspace cadence into the Runtime observation cadence.
+      preservePollDeadlineOnResume.current = preservePollDeadline && suspended && !operationBusy;
+      return;
+    }
     let disposed = false;
     let timer: number | undefined;
+    const schedulePoll = (delay: number) => {
+      timer = window.setTimeout(() => {
+        if (document.visibilityState === "visible") void poll();
+      }, delay);
+    };
     const poll = async () => {
       if (disposed) return;
       setLoading(true);
@@ -126,13 +151,20 @@ export function WorkspaceProvider({ state, suspended = false, children }: { stat
         setRemoved(ids => ids.filter(id => runner.projects.some(project => project.id === id)));
       }
       setLoading(false);
-      timer = window.setTimeout(() => { if (document.visibilityState === "visible") void poll(); }, 15_000);
+      nextPollAt.current = Date.now() + 15_000;
+      schedulePoll(15_000);
     };
     const visible = () => { if (document.visibilityState === "visible") refresh(); };
     document.addEventListener("visibilitychange", visible);
-    void poll();
+    const preserveDeadline = preservePollDeadlineOnResume.current;
+    preservePollDeadlineOnResume.current = false;
+    const remaining = preserveDeadline && nextPollAt.current !== null
+      ? nextPollAt.current - Date.now()
+      : 0;
+    if (remaining > 0) schedulePoll(remaining);
+    else void poll();
     return () => { disposed = true; if (timer) window.clearTimeout(timer); document.removeEventListener("visibilitychange", visible); };
-  }, [key, ready, busy, revision, refresh]);
+  }, [key, ready, busy, suspended, preservePollDeadline, operationBusy, revision, refresh]);
   useEffect(() => { setSelection(null); setRemoved([]); }, [key]);
   const current = snapshot?.key === key ? snapshot : null;
   const projects = useMemo(() => authorizationFailed(current?.errorReason) ? [] : mergeProjects(current?.runner?.projects || [],

@@ -387,6 +387,31 @@ beforeEach(() => {
     }
   });
 
+  it("does not accelerate Workspace polling across repeated automatic runtime observations", async () => {
+    const selected = { ...readyState, persistent_environment: "fixture-environment" };
+    api.getState.mockResolvedValue(selected);
+    api.refresh.mockResolvedValueOnce(selected);
+    api.refresh.mockImplementation(() => new Promise(resolve => {
+      window.setTimeout(() => resolve(selected), 100);
+    }));
+    vi.useFakeTimers();
+    const view = renderApp();
+    try {
+      await act(async () => {});
+      fireEvent.blur(window);
+      const count = () => workspace.invoke.mock.calls.filter(([, args]) => args.request.kind === "overview").length;
+      expect(count()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+      expect(api.refresh.mock.calls.length).toBeGreaterThan(2);
+      expect(count()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(count()).toBeGreaterThanOrEqual(2);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a user stop consistent after refresh and offers Start", async () => {
     const stopped = { ...setupState(), readiness: { ...setupState().readiness, summary_kind: "runtime_stopped" as const } };
     api.getState.mockResolvedValue(stopped); api.refresh.mockResolvedValue(stopped);
