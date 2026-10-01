@@ -68,6 +68,56 @@ function privateOnly(result) {
   return { _meta: { "webcodex/workResult": result.structuredContent } };
 }
 
+function threadResult(state, selectedSession = null) {
+  const result = toolResult({ work_result: state });
+  result._meta = { "webcodex/workResultThread": { session_id: selectedSession } };
+  return result;
+}
+
+for (const resultFirst of [false, true]) test(`thread initialization preserves the explicit Session on refresh (result-first=${resultFirst})`, async () => {
+  const view = app("mcp_work_result_app.html");
+  if (!resultFirst) view.toolInput({});
+  view.notification("ui/notifications/tool-result", threadResult(baseState, session_id));
+  if (resultFirst) view.toolInput({});
+  await view.initialize();
+  view.nodes.refresh.onclick();
+  const call = view.calls("work_result_state")[0];
+  assert.deepEqual(JSON.parse(JSON.stringify(call.params.arguments)), input);
+  await view.reply(call, toolResult({ work_result: nextState }));
+  assert.equal(view.nodes.sessionIdentity.textContent, "Session · " + session_id);
+});
+
+test("thread initialization never promotes a Window-linked Session into refresh authority", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({});
+  view.notification("ui/notifications/tool-result", threadResult(baseState));
+  await view.initialize();
+  view.nodes.refresh.onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(view.calls("work_result_state")[0].params.arguments)), { project });
+});
+
+for (const context of [undefined, {}, { session_id: "invalid" }, { session_id: `wc_sess_${"2".repeat(32)}` }]) {
+  test(`thread rejects missing or conflicting initialization context: ${JSON.stringify(context)}`, async () => {
+    const view = app("mcp_work_result_app.html");
+    view.toolInput({});
+    const result = toolResult({ work_result: baseState });
+    if (context !== undefined) result._meta = { "webcodex/workResultThread": context };
+    view.notification("ui/notifications/tool-result", result);
+    await view.initialize();
+    assert.equal(view.nodes.badge.textContent, "Unavailable");
+    assert.equal(view.calls("work_result_state").length, 0);
+  });
+}
+
+test("a mounted thread cannot be retargeted by a later presentation", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({});
+  view.notification("ui/notifications/tool-result", threadResult(baseState, session_id));
+  await view.initialize();
+  view.notification("ui/notifications/tool-result", threadResult({ ...baseState, session_id: `wc_sess_${"2".repeat(32)}` }, `wc_sess_${"2".repeat(32)}`));
+  assert.equal(view.nodes.badge.textContent, "Unavailable");
+});
+
 const outputState = {
   ...baseState,
   workspace: { ...baseState.workspace, git_available: false },

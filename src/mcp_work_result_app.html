@@ -318,6 +318,7 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
   "use strict";
   const APP_PROTOCOL = "2026-01-26";
   const WORK_RESULT_META_KEY = "webcodex/workResult";
+  const THREAD_CONTEXT_META_KEY = "webcodex/workResultThread";
   const SESSION_ID = /^wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})$/;
   const STATE_VERSION = /^wr2_[0-9a-f]{64}$/;
   const MESSAGE_ID = /^wc_msg_[A-Za-z0-9_-]+$/;
@@ -351,6 +352,8 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
   let lastStateVersion = null;
   let hostInitialized = false;
   let explicitSession = null;
+  let threadInput = false;
+  let threadSession;
   let refreshInFlight = false;
   let unchangedRefreshes = 0;
   let refreshFailures = 0;
@@ -594,6 +597,7 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
     if (!value || typeof value !== "object" || Array.isArray(value) || value.version !== 2) return null;
     if (!validProject(value.project) || typeof value.state_version !== "string" || !STATE_VERSION.test(value.state_version)) return null;
     if (value.session_id !== undefined && !validSession(value.session_id)) return null;
+    if (threadSession != null && value.session_id !== threadSession) return null;
     if (!validWindowIdentity(value.window) || !validWorkspace(value.workspace) || !validActivity(value.activity) || !validWindowActivity(value.window_activity) || !validCollaboration(value.collaboration)) return null;
     if (!validJobs(value.jobs, value.session_id)) return null;
     if (value.task_outputs !== undefined && (!validSession(value.session_id) || !validTaskOutputs(value.task_outputs))) return null;
@@ -1638,8 +1642,17 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
 
   function acceptToolInput(params) {
     const args = params && params.arguments;
+    // ChatGPT thread entrypoints are invoked with an empty object. In that case
+    // identity arrives from the entrypoint ToolResult after WebCodex resolves the
+    // Work Result previously presented in this exact Host Window.
+    if (args && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length === 0) {
+      threadInput = true;
+      if (lastRenderedState && threadSession === undefined) failClosed("Thread binding unavailable");
+      return;
+    }
     if (args?.session_id !== undefined) {
       if (!validSession(args.session_id) || (explicitSession && explicitSession !== args.session_id)
+        || (threadSession !== undefined && threadSession !== args.session_id)
         || (lastRenderedState?.jobs?.available && lastRenderedState.session_id !== args.session_id)) {
         failClosed("Conflicting Workflow Session"); return;
       }
@@ -1664,6 +1677,21 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
     if (structured.success === false || !state || !acceptIdentity(target(state.project))) {
       if (!tornDown) failClosed("Task state unavailable");
       return;
+    }
+    const context = callToolResultOf(result)?._meta?.[THREAD_CONTEXT_META_KEY];
+    if (context !== undefined) {
+      const session = context?.session_id;
+      if (!context || Array.isArray(context) || Object.keys(context).length !== 1
+        || !(session === null || validSession(session))
+        || (session !== null && state.session_id !== session)
+        || (explicitSession && explicitSession !== session)
+        || (threadSession !== undefined && threadSession !== session)) {
+        failClosed("Conflicting thread binding"); return;
+      }
+      threadSession = session;
+      explicitSession = session;
+    } else if (threadInput || threadSession !== undefined) {
+      failClosed("Thread binding unavailable"); return;
     }
     initialResultTransportMissing = false;
     const hadFrozen = snapshot !== null;
