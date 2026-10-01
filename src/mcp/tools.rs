@@ -761,6 +761,20 @@ pub(super) fn attach_app_metadata(value: &mut Value, resource_uri: &str) {
     );
 }
 
+fn attach_openai_thread_entrypoint(value: &mut Value) {
+    let Some(meta) = tool_meta_object(value) else {
+        return;
+    };
+    meta.insert(
+        "openai/ui".to_string(),
+        json!({
+            "entrypoints": [
+                {"type": "thread"}
+            ]
+        }),
+    );
+}
+
 fn attach_app_visibility(value: &mut Value) {
     let Some(meta) = tool_meta_object(value) else {
         return;
@@ -1158,6 +1172,7 @@ fn mcp_tool_spec_json(mut spec: ToolSpec, compact: bool, app_enabled: bool) -> V
     }
     if app_enabled && presentation::tool_supports_work_result_app(&tool_name) {
         attach_app_metadata(&mut value, resources::MCP_WORK_RESULT_UI_RESOURCE_URI);
+        attach_openai_thread_entrypoint(&mut value);
     }
     if app_enabled && presentation::tool_supports_goal_plan_app(&tool_name) {
         attach_app_metadata(&mut value, resources::MCP_GOAL_PLAN_UI_RESOURCE_URI);

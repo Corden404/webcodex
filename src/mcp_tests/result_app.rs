@@ -136,6 +136,10 @@ fn result_tool_app_metadata_is_capability_scoped_compact_safe_and_merge_safe() {
             tool(&enabled, "present_work_result")["_meta"]["ui"]["resourceUri"],
             MCP_WORK_RESULT_UI_RESOURCE_URI
         );
+        assert_eq!(
+            tool(&enabled, "present_work_result")["_meta"]["openai/ui"]["entrypoints"],
+            json!([{"type": "thread"}])
+        );
 
         let disabled = mcp_tools_list_payload_with_compact_and_app(compact, false);
         for name in RESULT_APP_TOOLS {
@@ -199,6 +203,10 @@ async fn result_app_descriptor_and_resource_exposure_require_ui_operator_capabil
     assert_eq!(
         tool(&ui_tools["result"], "present_work_result")["_meta"]["ui"]["resourceUri"],
         MCP_WORK_RESULT_UI_RESOURCE_URI
+    );
+    assert_eq!(
+        tool(&ui_tools["result"], "present_work_result")["_meta"]["openai/ui"]["entrypoints"],
+        json!([{"type": "thread"}])
     );
     assert!(tool(&ui_tools["result"], "present_work_result")["_meta"]
         .get("ui/resourceUri")

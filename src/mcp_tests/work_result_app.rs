@@ -83,6 +83,10 @@ async fn work_result_descriptor_is_explicit_sparse_app_only_and_resource_backed(
         present.pointer("/_meta/ui/resourceUri"),
         Some(&json!(MCP_WORK_RESULT_UI_RESOURCE_URI))
     );
+    assert_eq!(
+        present["_meta"]["openai/ui"]["entrypoints"],
+        json!([{"type": "thread"}])
+    );
     assert!(present.pointer("/_meta/ui/visibility").is_none());
     assert_eq!(present["inputSchema"]["required"], json!(["project"]));
     let state = tool(&ui["result"], "work_result_state").expect("app-only work_result_state");
@@ -147,6 +151,10 @@ async fn work_result_descriptor_is_explicit_sparse_app_only_and_resource_backed(
             Some(MCP_WORK_RESULT_UI_RESOURCE_URI),
             "only present_work_result may create a Work Result card"
         );
+        assert!(
+            descriptor["_meta"].get("openai/ui").is_none(),
+            "only present_work_result may advertise the ChatGPT thread entrypoint"
+        );
     }
     assert_eq!(
         tool(&full_ui["result"], "present_goal_plan")
@@ -171,6 +179,11 @@ async fn work_result_descriptor_is_explicit_sparse_app_only_and_resource_backed(
         .unwrap()
         .pointer("/_meta/ui/resourceUri")
         .is_none());
+    assert!(
+        tool(&plain["result"], "present_work_result").unwrap()["_meta"]
+            .get("openai/ui")
+            .is_none()
+    );
     assert!(tool(&plain["result"], "work_result_state").is_none());
     assert!(tool(&plain["result"], "work_result_send_message").is_none());
     assert!(tool(&plain["result"], "changes_file_diff").is_none());
@@ -198,6 +211,11 @@ async fn work_result_descriptor_is_explicit_sparse_app_only_and_resource_backed(
         .unwrap()
         .pointer("/_meta/ui/resourceUri")
         .is_none());
+    assert!(
+        tool(&disabled["result"], "present_work_result").unwrap()["_meta"]
+            .get("openai/ui")
+            .is_none()
+    );
 
     assert!(!registered_tool_specs()
         .iter()
