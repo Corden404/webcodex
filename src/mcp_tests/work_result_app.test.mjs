@@ -118,6 +118,48 @@ test("a mounted thread cannot be retargeted by a later presentation", async () =
   assert.equal(view.nodes.badge.textContent, "Unavailable");
 });
 
+test("thread review prioritizes files and checks while keeping diagnostics folded", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.notification("ui/notifications/tool-result", threadResult(baseState, session_id));
+  await view.initialize();
+  assert.equal(view.nodes.panelResults.hidden, false);
+  assert.equal(view.nodes.panelActivity.hidden, true);
+  assert.equal(view.nodes.tabResults.textContent, "Review");
+  assert.equal(view.nodes.workspaceHeading.textContent, "Changed files");
+  assert.deepEqual(view.nodes.viewTabs.children, [view.nodes.tabResults, view.nodes.tabActivity, view.nodes.tabCollaboration]);
+  assert.deepEqual(view.nodes.panelResults.children.slice(0, 3), [view.nodes.workspaceChangesSection, view.nodes.resultChecks, view.nodes.finalChanges]);
+  assert.equal(view.nodes.diagnostics.open, false);
+  assert.deepEqual(view.nodes.diagnosticContent.children, [view.nodes.taskContext]);
+  view.nodes.tabResults.onkeydown({ key: "ArrowRight", preventDefault() {} });
+  assert.equal(view.nodes.panelActivity.hidden, false);
+});
+
+test("thread refresh and repeated initialization preserve the user's pane and draft", async () => {
+  const view = app("mcp_work_result_app.html");
+  const initial = threadResult(baseState, session_id);
+  view.notification("ui/notifications/tool-result", initial);
+  await view.initialize();
+  view.nodes.tabCollaboration.onclick();
+  view.nodes.messageInput.value = "Review this change";
+  view.nodes.refresh.onclick();
+  await view.reply(view.calls("work_result_state")[0], toolResult({ work_result: nextState }));
+  view.notification("ui/notifications/tool-result", initial);
+  assert.equal(view.nodes.panelCollaboration.hidden, false);
+  assert.equal(view.nodes.messageInput.value, "Review this change");
+});
+
+test("thread binding also initializes from the private Work Result fallback", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({});
+  const result = privateOnly(toolResult({ work_result: baseState }));
+  result._meta["webcodex/workResultThread"] = { session_id };
+  view.notification("ui/notifications/tool-result", result);
+  await view.initialize();
+  view.nodes.refresh.onclick();
+  assert.equal(view.nodes.panelResults.hidden, false);
+  assert.equal(view.calls("work_result_state")[0].params.arguments.session_id, session_id);
+});
+
 const outputState = {
   ...baseState,
   workspace: { ...baseState.workspace, git_available: false },
