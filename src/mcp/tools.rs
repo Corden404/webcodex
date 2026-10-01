@@ -355,22 +355,10 @@ pub(super) fn mcp_tools_list_payload_with_features_for_auth(
                 is_job_terminal_continuation_app_tool_name(&spec.name);
             let mut value = mcp_tool_spec_json(spec, compact, false);
             attach_app_visibility(&mut value);
-            if agent_continuation_tool {
-                // Keep the app-only tools associated with the same continuation
-                // resource for compatibility with Hosts that use that hint. The
-                // association is not authority; visibility remains app-only and
-                // every call is re-authorized by the normal communication kernel.
-                attach_app_metadata(
-                    &mut value,
-                    resources::MCP_AGENT_CONTINUATION_UI_RESOURCE_URI,
-                );
-                attach_agent_continuation_app_diagnostic_schema(&mut value);
-            }
-            if job_terminal_continuation_tool {
-                attach_app_metadata(
-                    &mut value,
-                    resources::MCP_JOB_TERMINAL_CONTINUATION_UI_RESOURCE_URI,
-                );
+            if agent_continuation_tool || job_terminal_continuation_tool {
+                // Bridge helpers return data to an existing View; they never
+                // render another widget. Private rendering tools are rejected
+                // by ChatGPT during discovery/refresh.
                 attach_agent_continuation_app_diagnostic_schema(&mut value);
             }
             value

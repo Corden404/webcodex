@@ -154,6 +154,12 @@ async fn work_result_descriptor_keeps_renderers_public_and_bridge_tools_app_only
     };
     for descriptor in full_ui["result"]["tools"].as_array().unwrap() {
         let name = descriptor["name"].as_str().unwrap_or_default();
+        if descriptor.pointer("/_meta/ui/visibility") == Some(&json!(["app"])) {
+            assert!(
+                descriptor.pointer("/_meta/ui/resourceUri").is_none(),
+                "ChatGPT rejects private rendering tools during refresh: {name}"
+            );
+        }
         if !matches!(name, "present_work_result" | "work_result_thread_panel") {
             assert_ne!(
                 descriptor

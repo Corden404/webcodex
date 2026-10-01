@@ -140,7 +140,9 @@ to select a newer successful presentation; missing Window identity or binding
 fails closed. Current authorization and snapshot fences still apply on every read.
 Full-file/Markdown previews and line/selection-to-chat interactions are deferred.
 
-Rendering entrypoints retain the default model/App visibility. After updating
+Rendering entrypoints retain the default model/App visibility. App-only bridge
+helpers return data without `ui.resourceUri`: ChatGPT rejects private tools that
+declare a rendering resource when refreshing the connected App. After updating
 the Server's tool descriptors, refresh tools for the existing App in ChatGPT's
 plugin settings before testing the new entrypoint.
 

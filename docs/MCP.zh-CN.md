@@ -141,8 +141,9 @@ Session 标识收进默认折叠的 Diagnostics。inline card 继续采用 Activ
 刷新调用也不会启动 live Window activity。当前界面资源是
 `ui://webcodex/work-result/v15`，此前挂载的 v14 等资源仍可读取。
 
-界面展示入口保留默认的 model/App 可见性。更新 Server 的工具描述后，应先在
-ChatGPT 插件设置中刷新已有 App 的工具，再验证新入口。
+界面展示入口保留默认的 model/App 可见性；App-only 桥接工具只返回数据，不声明
+`ui.resourceUri`。ChatGPT 刷新工具时会拒绝声明界面资源的私有工具。更新 Server
+的工具描述后，应先在 ChatGPT 插件设置中刷新已有 App 的工具，再验证新入口。
 
 ## 已有 Server
 
