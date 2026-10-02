@@ -144,7 +144,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
     adaptive_runtime_direct(
         model_spec(
             def(
-                "runtime_status",
+                "get_runtime_status",
                 super::ToolAuditPolicy::TYPED_CANONICAL.session_input(
                     super::ToolAuditSessionInputPolicy::OmitTopLevel(&["client_id"]),
                 ),
@@ -173,13 +173,13 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 super::ToolHostOrchestrationHint::independent_parallel_read(),
             ),
             "Read runtime health and protocol/build/source alignment; exact client_id focuses one Runner and its Job concurrency. compact=true or summary_only=true selects sparse counts without inventories. Canonical/API default is full diagnostics with capabilities, build, authority, configuration and connection details; MCP defaults to sparse and accepts compact=false for diagnostics.",
-        ).with_gpt_action_description("Read fleet or exact client_id Runner health and protocol/build/source alignment. compact=true returns sparse counts; omit for full diagnostic inventories and configuration."),
+        ),
         20,
         super::ToolDirectReason::CoreWorkflow,
     ),
     model_spec(
             def(
-                "current_window_activity",
+                "read_current_window_activity",
                 super::ToolAuditPolicy::TYPED_CANONICAL,
                 ModelVisible,
                 TOOL_CATEGORY_RUNTIME,
@@ -207,7 +207,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
     adaptive_runtime_direct(
         model_spec(
             def(
-                "tool_manifest",
+                "read_tool_manifest",
                 super::ToolAuditPolicy::TYPED_CANONICAL,
                 ModelVisible,
                 TOOL_CATEGORY_RUNTIME,
@@ -231,7 +231,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 super::ToolActivityInteraction::NonMeaningful,
             ),
             "Global runtime discovery; do not pass project. Categories are non-overlapping: execution launches/reuses processes, job observes/controls Jobs, validation checks code, and skill/plugin/memory cover extensions. Filter by category/intent for sparse selection entries, or pass exact tool_name for one compact contract with description, preferred route, input schema, and safety/authority hints but no output schema. availability=direct means the direct callable is the preferred model route; if that callable is unavailable or not loaded, call_runtime_tool may be used as a fallback for an otherwise admitted target. availability never changes behavior, authority, permissions, execution, or verdicts. Unfiltered discovery retains the global category inventory.",
-        ).with_gpt_action_description("Discover model-visible runtime tools. Filter by category/intent or pass exact tool_name for one compact contract. availability=direct is preferred; long-tail tools use call_runtime_tool. Discovery never changes authority."),
+        ),
         30,
         super::ToolDirectReason::CoreWorkflow,
     ),

@@ -13,7 +13,7 @@ use crate::metadata::{
 pub(super) const SUMMARY_DEFINITIONS: &[ToolDefinition] = &[
     change_summary_like(git_like(model_spec(
         def(
-            "git_review_summary",
+            "read_git_review_summary",
             super::ToolAuditPolicy::typed_fields(&[
                 super::ToolAuditResultField::value("project"),
                 super::ToolAuditResultField::value("scope"),
@@ -85,7 +85,7 @@ pub(super) const SUMMARY_DEFINITIONS: &[ToolDefinition] = &[
                     .diff_review(super::ToolDiffReviewEvidence::Always),
             )
             .with_composition_policy(super::ToolCompositionPolicy::Parallel),
-            "Primary bounded Git review workflow. First call returns an exact snapshot, summary/signals, and first git_diff_hunks page. Continue with the returned opaque token and identical closed scope/paging inputs. Workspace mutation fails closed; committed review stays pinned to exact commits and merge-base.",
+            "Primary bounded Git review workflow. First call returns an exact snapshot, summary/signals, and first read_git_diff_hunks page. Continue with the returned opaque token and identical closed scope/paging inputs. Workspace mutation fails closed; committed review stays pinned to exact commits and merge-base.",
         ))),
         120,
         super::ToolDirectReason::CoreWorkflow,
@@ -93,7 +93,7 @@ pub(super) const SUMMARY_DEFINITIONS: &[ToolDefinition] = &[
     change_summary_like(git_like(
             model_spec(
                 def(
-                    "show_changes",
+                    "read_workspace_changes",
                     super::ToolAuditPolicy::TYPED_CANONICAL.context(
                         super::ToolAuditContextPolicy::Fields(&[
                             super::ToolAuditResultField::value("clean"),
@@ -127,16 +127,13 @@ pub(super) const SUMMARY_DEFINITIONS: &[ToolDefinition] = &[
                 )
                 .with_composition_policy(super::ToolCompositionPolicy::Parallel),
                 "Specialist workspace projection retained for explicit discovery, presentation, Session signals, and closeout internals. Ordinary code review uses review_changes. Read-only; recent Session event history is opt-in.",
-            )
-            .with_gpt_action_description(
-                "Review current worktree changes and optional bounded diff hunks for presentation, Session signals, and closeout internals. Ordinary code review uses review_changes. Read-only.",
             ),
         )),
 ];
 pub(super) const DETAIL_DEFINITIONS: &[ToolDefinition] = &[
     require_all_scopes(git_like(model_spec(
         def(
-            "git_commit_paths",
+            "commit_git_paths",
             super::ToolAuditPolicy::TYPED_CANONICAL.drop_null_request_values(),
             ModelVisible,
             TOOL_CATEGORY_GIT,
@@ -159,7 +156,7 @@ pub(super) const DETAIL_DEFINITIONS: &[ToolDefinition] = &[
     )), &[PROJECT_WRITE, JOB_RUN]),
     git_like(model_spec(
         def(
-            "git_status",
+            "get_git_status",
             super::ToolAuditPolicy::TYPED_CANONICAL
                 .context(super::ToolAuditContextPolicy::WorkingTreeStatus),
             ModelVisible,
@@ -188,7 +185,7 @@ pub(super) const DETAIL_DEFINITIONS: &[ToolDefinition] = &[
     change_summary_like(git_like(
         model_spec(
             def(
-                "git_diff_hunks",
+                "read_git_diff_hunks",
                 super::ToolAuditPolicy::typed_fields(&[
                     super::ToolAuditResultField::value("project"),
                     super::ToolAuditResultField::value("scope"),
@@ -229,14 +226,11 @@ pub(super) const DETAIL_DEFINITIONS: &[ToolDefinition] = &[
                 super::ToolHostOrchestrationHint::independent_parallel_read(),
             ),
             "Specialist exact diff paging core retained for explicit discovery and review_changes internals. Preserves source fences, bounded page/hunk continuation, path/range projection, and safe recovery. Read-only.",
-        )
-        .with_gpt_action_description(
-            "Specialist exact bounded diff paging for explicit discovery and review_changes internals. Preserve returned opaque continuation and exact source/paging inputs; never guess offsets.",
         ),
     )),
     git_like(model_spec(
         def(
-            "git_log",
+            "read_git_log",
             super::ToolAuditPolicy::TYPED_CANONICAL.context(
                 super::ToolAuditContextPolicy::Fields(&[
                     super::ToolAuditResultField::value("commits"),

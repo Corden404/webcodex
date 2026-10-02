@@ -30,7 +30,7 @@ Depending on the token, scopes, client surface, session state, and agent policy,
 - Apply structured line edits or checked patches.
 - Run structured validation helpers such as Cargo format, check, and test.
 - Request bounded shell commands or async jobs when the deployment exposes them.
-- Produce `show_changes`, `workspace_hygiene_check`, `finish_coding_task`, and `session_handoff_summary` evidence for review.
+- Produce `read_workspace_changes`, `check_workspace_hygiene`, `finish_coding_task`, and `read_session_handoff` evidence for review.
 
 ## What The Online Model Cannot Do
 
@@ -77,7 +77,7 @@ Use them only when:
 - The resulting output will not expose secrets.
 - A human can review the command, output summary, and workspace state.
 
-Prefer structured tools first: `read_file`, `search_project_text`, structured edits, `apply_unified_diff`, `cargo_fmt`, `cargo_check`, `cargo_test`, `show_changes`, and `workspace_hygiene_check`.
+Prefer structured tools first: `read_file`, `search_project_text`, structured edits, `apply_unified_diff`, `cargo_fmt`, `cargo_check`, `cargo_test`, `read_workspace_changes`, and `check_workspace_hygiene`.
 
 ## Token Handling
 
@@ -97,7 +97,7 @@ Never share or commit:
 
 Use the right credential for the right surface:
 
-- GPT Actions, MCP, and runtime API calls use a shared key for quick evaluation or a scoped user token for managed mode.
+- MCP and runtime API calls use a shared key for quick evaluation or a scoped user token for managed mode.
 - Agents use agent tokens.
 - Server bootstrap/admin credentials stay server-side.
 - Account credentials are for local token creation, not for model-facing clients.
@@ -124,14 +124,14 @@ These records are intentionally bounded and redacted. They are not a substitute 
 Use the narrowest revocation that matches the risk:
 
 - For shared-key quick-start, replace the Bearer value used by both agent and client, or disable shared-key quick-start.
-- Revoke or rotate a user token used by MCP, GPT Actions, or REST clients.
+- Revoke or rotate a user token used by MCP, or REST clients.
 - Revoke OAuth tokens when using OAuth.
 - Remove a project from the agent registry or narrow its allowed root.
 - Stop the agent when the client should no longer reach that machine.
 - Rotate an agent token if the agent credential may have leaked.
 - Rotate server bootstrap/admin credentials if they were exposed.
 
-After revocation, verify with `runtime_status`, `list_projects`, and a read-only client call.
+After revocation, verify with `get_runtime_status`, `list_projects`, and a read-only client call.
 
 ## Reporting Vulnerabilities
 

@@ -71,7 +71,7 @@ impl SuggestedToolCall {
 #[derive(Debug, Serialize)]
 pub struct ToolResult {
     pub success: bool,
-    /// Main payload - always a JSON object so both MCP and GPT Actions
+    /// Main payload - always a JSON object so both MCP
     /// can forward it verbatim.
     pub output: Value,
     /// Optional human-readable error when success == false.
@@ -195,7 +195,7 @@ mod tests {
         assert!(call.get("continuation_token").is_none());
 
         let paging =
-            SuggestedToolCall::mechanically_followable("git_log", json!({"project": "demo"}))
+            SuggestedToolCall::mechanically_followable("read_git_log", json!({"project": "demo"}))
                 .to_value();
         assert_eq!(paging["follow_up_kind"], "mechanically_followable");
     }

@@ -1,7 +1,7 @@
 use super::agent_attention::{require_agent_attention_event_for_wake, AgentAttentionSource};
 use super::agent_task::{
-    replace_agent_task_attempt_controller_in_transaction, AGENT_TASK_ENDPOINT_DISPATCH_GRACE_MS,
-    AGENT_TASK_ENDPOINT_TAKEOVER_LEASE_MS,
+    replace_agent_task_attempt_controller_in_transaction, AttemptAuthority,
+    AGENT_TASK_ENDPOINT_DISPATCH_GRACE_MS, AGENT_TASK_ENDPOINT_TAKEOVER_LEASE_MS,
 };
 use super::agent_wait::{
     require_agent_wait_for_wake, resume_agent_wait_for_wake_in_transaction,
@@ -2602,16 +2602,15 @@ fn bind_agent_task_wake_carrier(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(store_error)?;
-    replace_agent_task_attempt_controller_in_transaction(
-        transaction,
+    let authority = AttemptAuthority::validated(
         principal,
         task_id,
         task_attempt_id,
         &wake.target_agent_id,
         &attempt_fence,
         attempt_controller_generation,
-        now,
     )?;
+    replace_agent_task_attempt_controller_in_transaction(transaction, principal, authority, now)?;
     let changed = transaction
         .execute(
             "UPDATE wc_agent_task_endpoint_executions
@@ -2918,14 +2917,18 @@ fn fence_agent_task_controllers_for_endpoint_loss(
             kind: principal_kind,
             digest: principal_digest,
         };
-        replace_agent_task_attempt_controller_in_transaction(
-            transaction,
+        let authority = AttemptAuthority::validated(
             &principal,
             &task_id,
             &attempt_id,
             &assignee_agent_id,
             &attempt_fence,
             attempt_controller_generation,
+        )?;
+        replace_agent_task_attempt_controller_in_transaction(
+            transaction,
+            &principal,
+            authority,
             now,
         )?;
     }
@@ -3257,7 +3260,7 @@ fn wake_envelope(
             terminal_task_state.as_str(),
         ),
             AgentAttentionSource::GoalWorkflowStalled { workflow_session_id, .. } => format!(
-                "WebCodex Goal workflow stall continuation.\nagent_id={}\nendpoint_id={}\ncontroller_generation={}\nwake_id={}\nconsume_token={}\ngoal_id={}\nsession_id={}\n\nBootstrap this exact Wake with bootstrap_agent_conversation; immediately consume_agent_wake. Then get_goal(goal_id) and session_handoff_summary(session_id) for the exact correlated Workflow Session. Continue the latest checkpoint/current step using current authorized Job/Project state as needed. A vanished turn does not prove failure: never repeat an uncertain effect. Checkpoint with checkpoint_goal as work progresses; fresh verification/review precedes explicit update_goal completion. Stop if terminal or its controller changed.\n",
+                "WebCodex Goal workflow stall continuation.\nagent_id={}\nendpoint_id={}\ncontroller_generation={}\nwake_id={}\nconsume_token={}\ngoal_id={}\nsession_id={}\n\nBootstrap this exact Wake with bootstrap_agent_conversation; immediately consume_agent_wake. Then get_goal(goal_id) and read_session_handoff(session_id) for the exact correlated Workflow Session. Continue the latest checkpoint/current step using current authorized Job/Project state as needed. A vanished turn does not prove failure: never repeat an uncertain effect. Checkpoint with checkpoint_goal as work progresses; fresh verification/review precedes explicit update_goal completion. Stop if terminal or its controller changed.\n",
                 wake.target_agent_id, endpoint_id, controller_generation, wake.wake_id,
                 consume_token, event.goal_id, workflow_session_id,
             ),

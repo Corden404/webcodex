@@ -46,34 +46,9 @@ fn create_goal(runtime: &ToolRuntime, auth: &crate::auth::AuthContext, key: &str
         .to_string()
 }
 
-async fn handle_with_server_apps_enabled(
-    runtime: &ToolRuntime,
-    request: JsonRpcRequest,
-    auth: Option<&crate::auth::AuthContext>,
-    enabled: bool,
-) -> McpOutcome {
-    let protocol_era = super::super::inferred_protocol_era(&request);
-    super::super::handle_mcp_request_with_lifecycle(
-        runtime,
-        request,
-        auth,
-        protocol_era,
-        super::super::HostFileImportTrust::Untrusted,
-        None,
-        None,
-        None,
-        crate::model_surface::effective_mcp_compact_schemas(
-            crate::config::mcp_compact_schemas_override(),
-        ),
-        enabled,
-        None,
-    )
-    .await
-}
-
 #[tokio::test]
 async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptive_direct() {
-    assert_eq!(MCP_GOAL_PLAN_UI_RESOURCE_URI, "ui://webcodex/goal-plan/v6");
+    assert_eq!(MCP_GOAL_PLAN_UI_RESOURCE_URI, "ui://webcodex/goal-plan/v7");
     assert!(
         MCP_GOAL_PLAN_APP_HTML.contains("version: \"6.0.0\""),
         "Goal Plan App self-version must advance with its cache-breaking resource identity"
@@ -81,7 +56,7 @@ async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptiv
     let (_temp, _db, adaptive) = goal_runtime();
     let auth = goal_auth("goal-plan-descriptor");
 
-    let ui = handle_with_server_apps_enabled(
+    let ui = handle_with_app_policy(
         &adaptive,
         rpc(
             "tools/list",
@@ -102,7 +77,7 @@ async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptiv
         Some(&json!(MCP_GOAL_PLAN_UI_RESOURCE_URI))
     );
     assert!(present.pointer("/_meta/ui/visibility").is_none());
-    let state = tool(&ui["result"], "goal_plan_sync").expect("app-only goal_plan_sync");
+    let state = tool(&ui["result"], "sync_goal_plan").expect("app-only sync_goal_plan");
     assert_eq!(state.pointer("/_meta/ui/visibility"), Some(&json!(["app"])));
     assert!(state.pointer("/_meta/ui/resourceUri").is_none());
     assert!(tool(&ui["result"], "goal_plan_recheck_attention").is_none());
@@ -117,7 +92,7 @@ async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptiv
         vec!["goal_id".to_string()]
     );
 
-    let plain = handle_with_server_apps_enabled(
+    let plain = handle_with_app_policy(
         &adaptive,
         rpc("tools/list", Some(json!(4102)), mcp_2026_params(json!({}))),
         Some(&auth),
@@ -132,10 +107,10 @@ async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptiv
         .unwrap()
         .pointer("/_meta/ui/resourceUri")
         .is_none());
-    assert!(tool(&plain["result"], "goal_plan_sync").is_none());
+    assert!(tool(&plain["result"], "sync_goal_plan").is_none());
     assert!(tool(&plain["result"], "goal_plan_recheck_attention").is_none());
 
-    let disabled_ui = handle_with_server_apps_enabled(
+    let disabled_ui = handle_with_app_policy(
         &adaptive,
         rpc(
             "tools/list",
@@ -152,7 +127,7 @@ async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptiv
     let disabled_present = tool(&disabled_ui["result"], "present_goal_plan")
         .expect("present_goal_plan remains a normal read tool");
     assert!(disabled_present.pointer("/_meta/ui/resourceUri").is_none());
-    assert!(tool(&disabled_ui["result"], "goal_plan_sync").is_none());
+    assert!(tool(&disabled_ui["result"], "sync_goal_plan").is_none());
 
     for descriptor in ui["result"]["tools"].as_array().unwrap() {
         if descriptor["name"] == "present_goal_plan" {
@@ -167,7 +142,7 @@ async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptiv
         );
     }
 
-    let resources = handle_with_server_apps_enabled(
+    let resources = handle_with_app_policy(
         &adaptive,
         rpc(
             "resources/list",
@@ -207,7 +182,7 @@ async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptiv
         assert!(super::super::resources::mcp_goal_plan_app_resource_read(old_uri, None).is_none());
     }
     for uri in [MCP_GOAL_PLAN_UI_RESOURCE_URI] {
-        let read = handle_with_server_apps_enabled(
+        let read = handle_with_app_policy(
             &adaptive,
             rpc(
                 "resources/read",
@@ -228,7 +203,7 @@ async fn goal_plan_app_descriptor_is_sparse_app_only_resource_backed_and_adaptiv
         );
     }
     for required in [
-        "goal_plan_sync",
+        "sync_goal_plan",
         "completed_step_count",
         "current_step_id",
         "progress_summary",
@@ -282,7 +257,7 @@ async fn goal_plan_poll_reads_authoritative_revision_without_ui_request_identity
     let alice = goal_auth("goal-plan-alice");
     let goal_id = create_goal(&runtime, &bob, "goal-plan-bob-create");
 
-    let present = handle_with_server_apps_enabled(
+    let present = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/call",
@@ -328,13 +303,13 @@ async fn goal_plan_poll_reads_authoritative_revision_without_ui_request_identity
 
     // App polling must not rely on the initiating tools/list/call carrying UI capability
     // metadata. Exact Goal identity plus the caller's normal Goal authority is sufficient.
-    let poll = handle_with_server_apps_enabled(
+    let poll = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/call",
             Some(json!(4202)),
             mcp_2026_params(json!({
-                "name": "goal_plan_sync",
+                "name": "sync_goal_plan",
                 "arguments": {"goal_id": goal_id}
             })),
         ),
@@ -370,13 +345,13 @@ async fn goal_plan_poll_reads_authoritative_revision_without_ui_request_identity
         "goal-plan-revision-two".to_string(),
     );
     assert!(update.success, "{:?}", update.output);
-    let poll2 = handle_with_server_apps_enabled(
+    let poll2 = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/call",
             Some(json!(4203)),
             mcp_2026_params(json!({
-                "name": "goal_plan_sync",
+                "name": "sync_goal_plan",
                 "arguments": {"goal_id": goal_id}
             })),
         ),
@@ -403,13 +378,13 @@ async fn goal_plan_poll_reads_authoritative_revision_without_ui_request_identity
         2
     );
 
-    let foreign = handle_with_server_apps_enabled(
+    let foreign = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/call",
             Some(json!(4204)),
             mcp_2026_params(json!({
-                "name": "goal_plan_sync",
+                "name": "sync_goal_plan",
                 "arguments": {"goal_id": goal_id}
             })),
         ),
@@ -426,13 +401,13 @@ async fn goal_plan_poll_reads_authoritative_revision_without_ui_request_identity
         "goal_not_found"
     );
 
-    let disabled = handle_with_server_apps_enabled(
+    let disabled = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/call",
             Some(json!(4205)),
             mcp_2026_params(json!({
-                "name": "goal_plan_sync",
+                "name": "sync_goal_plan",
                 "arguments": {"goal_id": goal_id}
             })),
         ),
@@ -466,13 +441,13 @@ async fn goal_plan_sync_rejects_unadvertised_invocation_envelope_and_legacy_wrap
             "unsupported _wc field",
         ),
     ] {
-        let outcome = handle_with_server_apps_enabled(
+        let outcome = handle_with_app_policy(
             &runtime,
             rpc(
                 "tools/call",
                 Some(json!(id)),
                 mcp_2026_ui_params(json!({
-                    "name": "goal_plan_sync",
+                    "name": "sync_goal_plan",
                     "arguments": arguments
                 })),
             ),
@@ -498,7 +473,7 @@ async fn goal_plan_sync_rejects_unadvertised_invocation_envelope_and_legacy_wrap
 fn goal_plan_sync_accepts_only_exact_selector_and_never_client_timing_or_authority() {
     let goal_id = "wc_goal_G4G4G4G4G4G4G4G4";
     let base = json!({"goal_id": goal_id});
-    assert!(crate::tool_runtime::ToolCall::from_tool_name("goal_plan_sync", base.clone()).is_ok());
+    assert!(crate::tool_runtime::ToolCall::from_tool_name("sync_goal_plan", base.clone()).is_ok());
     assert!(crate::tool_runtime::ToolCall::from_tool_name(
         "goal_plan_recheck_attention",
         base.clone()
@@ -517,12 +492,12 @@ fn goal_plan_sync_accepts_only_exact_selector_and_never_client_timing_or_authori
         let mut forged = base.clone();
         forged[field] = value;
         assert!(
-            crate::tool_runtime::ToolCall::from_tool_name("goal_plan_sync", forged).is_err(),
+            crate::tool_runtime::ToolCall::from_tool_name("sync_goal_plan", forged).is_err(),
             "{field}"
         );
     }
     assert_eq!(
-        super::super::goal_plan_observation_id(Some("goal_plan_sync"), &json!({"arguments": base})),
+        super::super::goal_plan_observation_id(Some("sync_goal_plan"), &json!({"arguments": base})),
         Some(goal_id.into())
     );
     assert!(super::super::goal_plan_observation_id(
@@ -531,7 +506,7 @@ fn goal_plan_sync_accepts_only_exact_selector_and_never_client_timing_or_authori
     )
     .is_none());
     assert!(super::super::goal_plan_observation_id(
-        Some("goal_plan_sync"),
+        Some("sync_goal_plan"),
         &json!({"arguments": {"goal_id": "not-a-goal"}})
     )
     .is_none());
@@ -547,11 +522,11 @@ async fn goal_plan_sync_is_app_only_reauthorized_and_does_not_create_attention_w
             "tools/call",
             Some(json!(4390)),
             mcp_2026_params(json!({
-                "name": "goal_plan_sync", "arguments": {"goal_id": goal_id}
+                "name": "sync_goal_plan", "arguments": {"goal_id": goal_id}
             })),
         )
     };
-    let allowed = handle_with_server_apps_enabled(&runtime, request(), Some(&owner), true).await;
+    let allowed = handle_with_app_policy(&runtime, request(), Some(&owner), true).await;
     let McpOutcome::Ok(result) = allowed else {
         panic!("authorized App sync must return a tool result");
     };
@@ -560,10 +535,10 @@ async fn goal_plan_sync_is_app_only_reauthorized_and_does_not_create_attention_w
         result["result"]["structuredContent"]["output"]["goal_plan"]["goal_id"],
         goal_id
     );
-    let disabled = handle_with_server_apps_enabled(&runtime, request(), Some(&owner), false).await;
+    let disabled = handle_with_app_policy(&runtime, request(), Some(&owner), false).await;
     assert!(matches!(disabled, McpOutcome::BadRequest(_)));
     let foreign = goal_auth("detector-foreign");
-    let denied = handle_with_server_apps_enabled(&runtime, request(), Some(&foreign), true).await;
+    let denied = handle_with_app_policy(&runtime, request(), Some(&foreign), true).await;
     let McpOutcome::Ok(result) = denied else {
         panic!("foreign Goal must return existence-hidden failure");
     };

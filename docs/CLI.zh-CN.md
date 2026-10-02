@@ -73,7 +73,7 @@ Cloudflare Quick Tunnel 的公网 origin 仍然是临时的。如需稳定 HTTPS
 
 面向受监督的 machine integration，可使用 `webcodex share --json --stop-on-stdin-eof`。它仍保持原有前台生命周期，但会把 supervising parent 关闭 stdin 视为停止请求，使 Desktop 或其他 structured process owner 可以让 `share` 自己清理临时 Server、Runner 与 Tunnel，而不需要拼 shell signal 命令。该 flag 在非 `--json` 模式下会被拒绝。
 
-`webcodex connect <server> --auth oauth --oauth-redirect-uri <精确回调地址>` 是普通 hosted OAuth 路径。Runner 保持原有 hosted credential，MCP client 使用 OAuth。只有真正需要额外能力时才增加 `--oauth-computer-permissions`、`--oauth-local-mcp` 或 `--oauth-local-ssh`；它们属于显式权限变更，可能要求重新授权。`--oauth-local-ssh` 会授予 MCP client 使用模型侧 `ssh_resource` 接入工具所需的可选 `ssh:local` authority；它不会暴露 SSH credential，也不会绕过工具返回的 Runner restart requirement 让新资源立即生效。Client 设置见 [MCP](MCP.zh-CN.md#oauth2)，安全模型见[认证](AUTH_MODEL.zh-CN.md#oauth2)。
+`webcodex connect <server> --auth oauth --oauth-redirect-uri <精确回调地址>` 是普通 hosted OAuth 路径。Runner 保持原有 hosted credential，MCP client 使用 OAuth。只有真正需要额外能力时才增加 `--oauth-computer-permissions`、`--oauth-local-mcp` 或 `--oauth-local-ssh`；它们属于显式权限变更，可能要求重新授权。`--oauth-local-ssh` 会授予 MCP client 使用模型侧 `manage_ssh_resource` 接入工具所需的可选 `ssh:local` authority；它不会暴露 SSH credential，也不会绕过工具返回的 Runner restart requirement 让新资源立即生效。Client 设置见 [MCP](MCP.zh-CN.md#oauth2)，安全模型见[认证](AUTH_MODEL.zh-CN.md#oauth2)。
 
 高级 managed identity 流程仍保留为 `--auth managed-oauth --oauth-redirect-uri <精确回调地址>`，它才要求先 `webcodex login`；`--user` 也只用于该模式。
 
@@ -203,7 +203,7 @@ Runner 配置术语中，`project_registry_dir` 是 Project registry TOML 文件
 
 ### 审查与 runtime activity
 
-旧 `webcodex task` namespace 已随独立 Connector Task/Result/Approval lifecycle 删除。`webcodex run` 会输出 Runtime Console 地址（`/runtime`）。现在的 review 使用 canonical Workflow Session、Job、Git/diff、`show_changes` 与 `finish_coding_task`，不再有 host-side result accept/reject queue。
+旧 `webcodex task` namespace 已随独立 Connector Task/Result/Approval lifecycle 删除。`webcodex run` 会输出 Runtime Console 地址（`/runtime`）。现在的 review 使用 canonical Workflow Session、Job、Git/diff、`read_workspace_changes` 与 `finish_coding_task`，不再有 host-side result accept/reject queue。
 
 ### 凭据与账号
 
@@ -255,13 +255,13 @@ WebCodex 把 bootstrap 管理、账号接入、runtime API 访问与 Runner 连�
 
 | 凭据 | 前缀 | 由谁创建 | 用途 | 不要用于 |
 | --- | --- | --- | --- | --- |
-| Server bootstrap token | （env `WEBCODEX_TOKEN`） | `webcodex server init` | server/admin 设置、建用户、pairing | GPT Actions、MCP、Runner、日常使用 |
+| Server bootstrap token | （env `WEBCODEX_TOKEN`） | `webcodex server init` | server/admin 设置、建用户、pairing | MCP、Runner、日常使用 |
 | 共享 key | `wck_...` | `webcodex connect`（一次性生成） | hosted shared-key 的 MCP + Runner | 生产 IAM |
 | Project Credential | （私有文件） | `webcodex setup` | 一个 ProjectGrant 的普通 runtime API/MCP 访问 | 其它 ProjectGrant、admin、Runner transport |
-| Account credential | `wc_acct_...` | `webcodex users create --issue-credential` | 本地创建令牌 | GPT Actions、MCP、Runner |
-| 个人 API 令牌（PAT） | `wc_pat_...` | `webcodex tokens create-local` | GPT Actions、MCP、REST API | Runner 连接 |
-| Runner 令牌 | `wc_agent_...` | `webcodex runner-tokens create-local` | 仅 `webcodex-runner` 传输 | MCP、REST、GPT Actions |
-| OAuth 访问令牌 | `wc_oat_...` | OAuth2 授权流程 | 启用 OAuth 时的 GPT Actions / MCP | — |
+| Account credential | `wc_acct_...` | `webcodex users create --issue-credential` | 本地创建令牌 | MCP、Runner |
+| 个人 API 令牌（PAT） | `wc_pat_...` | `webcodex tokens create-local` | MCP、REST API | Runner 连接 |
+| Runner 令牌 | `wc_agent_...` | `webcodex runner-tokens create-local` | 仅 `webcodex-runner` 传输 | MCP、REST |
+| OAuth 访问令牌 | `wc_oat_...` | OAuth2 授权流程 | 启用 OAuth 时的 MCP | — |
 
 ### 实际使用规则
 

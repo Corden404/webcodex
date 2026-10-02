@@ -31,10 +31,9 @@ Runner 是最接近你仓库的信任边界。请用窄的 allowed roots 与显�
 
 部分 compatibility-facing value 仍使用历史 `agent` 名称，例如 Runner token 的 `wc_agent_*` 前缀与 `agent:<client_id>:<project_id>` runtime Project address。它们不属于 WebCodex 独立的 Durable Agent domain；普通用户也不需要理解 Runner recovery 背后的进程级 lease identifier。
 
-### Runner 配置文件名迁移
+### Runner 配置命名
 
-`runner.toml` 是 canonical config filename。在 WebCodex 0.4.x 迁移窗口内，自动/default/profile discovery 仍接受仅存在旧 `agent.toml` 的安装；当 `WEBCODEX_RUNNER_CONFIG` 未设置时，`WEBCODEX_AGENT_CONFIG` 也继续作为 deprecated fallback。仅存在旧 `projects_dir` 字段时，Runner 会在加载时归一化为 `project_registry_dir`。这些兼容输入会输出迁移 warning，并计划在 WebCodex 0.5.0 删除。歧义状态仍然 fail closed：`runner.toml` 与 `agent.toml` 同时存在、两个 config-path 环境变量同时设置、或新旧 registry 字段同时存在时，operator 必须先消除歧义。新生成的配置始终只使用 `runner.toml`、`project_registry_dir` 与 `WEBCODEX_RUNNER_CONFIG`。
-
+WebCodex 0.5 只使用 canonical Runner 启动命名：自动/default/profile discovery 只定位 `runner.toml`，默认配置路径环境变量只认 `WEBCODEX_RUNNER_CONFIG`，registry 字段只认 `project_registry_dir`，默认 registry directory 只使用 `project-registry/`。0.4.x 的兼容输入 `agent.toml`、`WEBCODEX_AGENT_CONFIG`、`projects_dir` 以及自动发现 `projects.d/` 不再参与启动。旧 `projects_dir` 字段会被明确拒绝，而不是静默忽略，避免旧配置看似启动成功却切换到另一套 registry。显式 `--config PATH` 仍严格使用调用方指定路径，不根据文件名进行重新解释。
 ## 连接 Server
 
 Runner 主动向外连接 Server，使用四种传输之一，由 `runner.toml` 中的 `transport`
@@ -47,7 +46,7 @@ Runner 主动向外连接 Server，使用四种传输之一，由 `runner.toml` 
 | WebSocket | `websocket` | 无 UDP 场景的稳定 fallback。 |
 | Polling | `polling` | 受限网络的最后手段。 |
 
-Runner 使用 Runner token（兼容前缀 `wc_agent_*`）认证；hosted shared-key 模式则使用对应 shared key。这个 credential 只用于 Runner transport，不用于 MCP、REST 或 GPT Actions。
+Runner 使用 Runner token（兼容前缀 `wc_agent_*`）认证；hosted shared-key 模式则使用对应 shared key。这个 credential 只用于 Runner transport，不用于 MCP 或 REST。
 
 WebSocket 与 polling 都使用 `Authorization: Bearer <token>` 认证 first-party
 Runner；Runner query-string credential 不再接受。QUIC 把凭据限制在
@@ -60,7 +59,7 @@ transport-specific v1 首个注册帧中，共享 Runner envelope 不再携带�
 精确的 protocol-generation field、baseline capability list、registration grammar 与 compatibility test matrix 属于 maintainer/wire contract，有意不放在这份运维指南中。
 
 ChatGPT Host 提示“当前会话不支持 developer MCP”并不是 Runner heartbeat 或 reconnect
-结果。如果 ChatGPT 连 `runtime_status` 都无法 dispatch，应先在本机执行
+结果。如果 ChatGPT 连 `get_runtime_status` 都无法 dispatch，应先在本机执行
 `webcodex runner status` 并查看有界 Runner 日志，再决定是否重启或修改 Runner 配置。
 Host / Server / Runner 的分层判断见[故障排查](TROUBLESHOOTING.zh-CN.md)。
 
@@ -85,13 +84,7 @@ allow_patch = true
 真正重要的是 `id` 与 `path`；`kind` 只属于可选描述 metadata。Registry directory
 用于保存 Project record，本身不是 workspace root。
 
-新配置使用 `project-registry/` 与 `project_registry_dir`。历史安装如果唯一存在的
-物理 registry directory 是 `projects.d/`，仍会原地继续使用该目录。0.4.x 期间，
-仅存在旧 `projects_dir` 配置字段时也会继续兼容，并输出 deprecation warning、在加载时
-归一化为 `project_registry_dir`；旧 `--projects-dir` CLI flag 仍保持 retired。
-如果两个物理 registry directory 或新旧两个配置字段同时存在，WebCodex 仍会
-fail closed，而不是 merge 或猜 precedence。显式 CLI 选择使用 `--project-registry-dir`。
-
+新配置与默认 discovery 只使用 `project-registry/` 和 `project_registry_dir`。WebCodex 0.5 不再自动选择历史 `projects.d/` 目录，旧 `projects_dir` 配置字段会直接报错并给出迁移提示。升级前应把仍需要的 Project registration record 移到或重新生成到 canonical registry。旧 `--projects-dir` CLI flag 继续保持 retired；显式 CLI 选择使用 `--project-registry-dir`。
 Runtime Project 的 canonical id 仍形如 `agent:<client_id>:<project_id>`，例如 `agent:workstation:my-repo`。该 canonical identity 继续用于 authorization、persistence、audit、Runner routing、diagnostic、API 与 CLI 显式 addressing。Model-facing bootstrap/discovery 还可以返回很短的 Server-issued `project_ref`（例如 `~p1`）；后续 Project-scoped tool call 应优先复用它，而不是反复复制 canonical id。映射由 Server 持久维护并按 authenticated caller 隔离，同时钉住 canonical id 与 Runner 报告的 Project root identity；它不是 credential/capability，每次使用都会重新执行当前 Project visibility/authorization。该 ref 不依赖 Workflow Session、ClientWindow、MCP session、transport connection、recent activity 或 Host hidden state；失效 ref 绝不会静默重绑到另一个 Project。
 
 ### 允许根目录
@@ -115,9 +108,9 @@ runtime 工具 `register_project` 与 `create_project` 让客户端在在线 Run
 
 ## Skill 来源
 
-`skill_list` 继续只暴露一个 catalog，但其中保留三种彼此独立的 ownership / lifecycle：
+`list_skills` 继续只暴露一个 catalog，但其中保留三种彼此独立的 ownership / lifecycle：
 
-**自 v0.4.2 起可用：** configured live Runner Skill roots 与 Managed Runner Skill Store 会共同参与这个统一 catalog。v0.4.1 的 `skill_list` 不会隐式扫描 `~/.codex/skills`；如果希望该目录参与 v0.4.2+ discovery，必须在 `[skills].roots` 中显式配置。
+**自 v0.4.2 起可用：** configured live Runner Skill roots 与 Managed Runner Skill Store 会共同参与这个统一 catalog。v0.4.1 的 `list_skills` 不会隐式扫描 `~/.codex/skills`；如果希望该目录参与 v0.4.2+ discovery，必须在 `[skills].roots` 中显式配置。
 
 | 来源 | 位置 / owner | Trust | 版本语义 |
 | --- | --- | --- | --- |
@@ -150,8 +143,8 @@ roots = [
 
 每个 root 直接包含 `<root>/<package>/SKILL.md`，package 内可以有 `references/`
 与 `scripts/` 等 resource。WebCodex 不会修改 configured root 内的文件，也不会把
-它们复制到 managed Store；`skill_install`、`skill_activate` 与
-`skill_remove_revision` 仍然只修改 managed Store。这里的“不修改”不等于“不可执行”：
+它们复制到 managed Store；`install_skill`、`activate_skill` 与
+`remove_skill_revision` 仍然只修改 managed Store。这里的“不修改”不等于“不可执行”：
 operator 配置的 trusted Skill 中，受支持的 `scripts/*.py` / `scripts/*.sh` 可以通过
 `run_skill_resource` 执行。
 
@@ -168,12 +161,12 @@ Skill 文件本身是 live 的：修改 `SKILL.md` 或 resource 后，下一次 
 `SKILL.md` definition，并不会把 resource bytes 固定为 immutable 内容；
 `run_skill_resource` 会在执行时重新读取脚本，并通过 `skill_sha256` 返回实际执行 bytes 的
 SHA-256。Managed installed Skill 还会用 `expected_package_revision` fence immutable package。
-只有修改 `roots` 配置列表时才需要按正式流程先执行 `runner_config_check`，再携带当前
-generation 执行 `runner_config_reload`；该字段支持 hot reload，不需要重启 Runner 进程。
+只有修改 `roots` 配置列表时才需要按正式流程先执行 `check_runner_config`，再携带当前
+generation 执行 `reload_runner_config`；该字段支持 hot reload，不需要重启 Runner 进程。
 
 ## Runner build identity
 
-Runner 连接后，`runtime_status(client_id=...)` 与 `list_runners` 会暴露有界、非敏感的 binary identity：package version、Git commit/dirty 状态、build timestamp、Cargo target triple 与 architecture。旧 Runner 可以缺省这些 optional 字段。该信息用于部署与 source-alignment 诊断，不包含 executable path、environment、token 或 credential；连接前仍可用 `webcodex-runner --version` 做本机 identity 检查。
+Runner 连接后，`get_runtime_status(client_id=...)` 与 `list_runners` 会暴露有界、非敏感的 binary identity：package version、Git commit/dirty 状态、build timestamp、Cargo target triple 与 architecture。旧 Runner 可以缺省这些 optional 字段。该信息用于部署与 source-alignment 诊断，不包含 executable path、environment、token 或 credential；连接前仍可用 `webcodex-runner --version` 做本机 identity 检查。
 
 ## Runner 级 configured instructions
 
@@ -222,7 +215,7 @@ observation 前重新核对父目录 identity，因此并发父目录替换不�
 或令整个 Project bootstrap 失败。
 
 修改 `[instructions].files` 路径列表时，按正式流程编辑 `runner.toml`，先
-`runner_config_check`，再携带当前 generation 执行 `runner_config_reload`；无需重启
+`check_runner_config`，再携带当前 generation 执行 `reload_runner_config`；无需重启
 Runner。文件内容本身始终是 live 的：直接修改 configured `AGENTS.md` 后，下一次
 `work_on_project` / 新 Project bootstrap 会重新读取，不需要 config reload。每个 Project
 bootstrap 都会独立观察当前 Runner-global instructions；v1 不做跨 Project context 去重。
@@ -485,7 +478,7 @@ default_cwd = "/opt/webcodex-edge"
 generation；已经启动的 SSH 命令继续自己的有界生命周期，不会被重定向、replay
 或盲目重试。
 
-有权限的模型 client 也可以通过 MCP `ssh_resource` 工具登记 Runner-local SSH
+有权限的模型 client 也可以通过 MCP `manage_ssh_resource` 工具登记 Runner-local SSH
 resource。`list` 只返回安全的逻辑名称、`static|managed`、active/pending-restart 状态，
 以及绑定 exact Runner 与 registry revision 的 opaque binding。`register` 接受一个用户
 明确提供的 OpenSSH destination argv 与可选 default cwd；`remove` 只删除 managed
@@ -513,9 +506,9 @@ Runner 可以通过在仓库机器上运行的语言服务器提供只读语义�
 | Python | `pyright` | `pyproject.toml`、`setup.py`、`requirements.txt`、… |
 | TypeScript / JavaScript | `typescript-language-server` | `tsconfig.json`、`package.json`、… |
 
-工具包括 `lsp_status`、`document_symbols`、`goto_definition`、
-`find_references`、`document_diagnostics`、`hover` 与 `workspace_symbols`。
-独立的 `call_hierarchy` 操作在 Runner 内完成 prepare 以及有界的
+工具包括 `get_lsp_status`、`list_document_symbols`、`find_definition`、
+`find_references`、`read_document_diagnostics`、`hover` 与 `list_workspace_symbols`。
+独立的 `read_call_hierarchy` 操作在 Runner 内完成 prepare 以及有界的
 incoming/outgoing 广度优先遍历；canonical Connector 将其投影为 `code_impact`，
 不会暴露原始协议方法或不透明 LSP item data。
 它们只读、project-bound，并且被约束为启动语言服务器绝不执行仓库代码或拉取依赖。
@@ -559,14 +552,14 @@ User scope 使用 `systemctl --user`；system scope 使用 `/etc/systemd/system`
 对已经运行的 Runner，修改配置时使用正式的 first-class 流程，不再查 PID 或手工发信号：
 
 1. 编辑该 Runner 启动时绑定的现有 `runner.toml`。
-2. 调用 `runner_config_check(client_id=...)`。它只读取这个绑定路径，不激活 candidate，
+2. 调用 `check_runner_config(client_id=...)`。它只读取这个绑定路径，不激活 candidate，
    返回当前 generation 以及有界的 validation/restart 元数据。
 3. candidate 有效后调用
-   `runner_config_reload(client_id=..., expected_generation=<current_generation>)`。
+   `reload_runner_config(client_id=..., expected_generation=<current_generation>)`。
    optimistic generation fence 会在激活前拒绝 stale caller。
-4. reload 后调用 `runtime_status(client_id=...)`（或 `list_runners`）检查当前运行状态。
+4. reload 后调用 `get_runtime_status(client_id=...)`（或 `list_runners`）检查当前运行状态。
 
-`runner_config_reload` 不写 `runner.toml`，只激活磁盘上已经存在的 candidate。policy、
+`reload_runner_config` 不写 `runner.toml`，只激活磁盘上已经存在的 candidate。policy、
 shell、configured Skill roots、configured instruction files、Native Plugin 与静态 SSH resource
 中可热加载的字段可以立即生效；`restart_required_fields`
 报告的字段仍保持 startup-only，重启前不会假装已在线生效。无效 candidate 保留旧 active

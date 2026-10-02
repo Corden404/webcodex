@@ -61,7 +61,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             Some(RUNTIME_READ), true, NoPath, false, false,
             super::ToolSessionEvidencePolicy::NONE,
         ).with_activity(super::ToolActivityPresentation::Support, super::ToolActivityInteraction::NonMeaningful),
-        "Read-only recovery discovery when the exact Session id is missing, including a new Host window or account using the same WebCodex authority. Requires an authorized exact Project and lists only that caller's creation-time Session authority group, including retained Closed history. Lifecycle filter is optional; offset defaults to 0, limit to 10 and is normalized to 1..20. Titles are redacted/bounded and output is capped at 32 KiB. Counts exclude foreign authority groups. Inventory pagination is not a frozen snapshot. Explicitly choose a returned session_id/session_ref, then read session_handoff_summary. Active work needs explicit bootstrap with the selected Session; Closed is historical only. Discovery never infers current/recent work, resumes a Session, grants authority, or restores hidden chat context.",
+        "Read-only recovery discovery when the exact Session id is missing, including a new Host window or account using the same WebCodex authority. Requires an authorized exact Project and lists only that caller's creation-time Session authority group, including retained Closed history. Lifecycle filter is optional; offset defaults to 0, limit to 10 and is normalized to 1..20. Titles are redacted/bounded and output is capped at 32 KiB. Counts exclude foreign authority groups. Inventory pagination is not a frozen snapshot. Explicitly choose a returned session_id/session_ref, then read read_session_handoff. Active work needs explicit bootstrap with the selected Session; Closed is historical only. Discovery never infers current/recent work, resumes a Session, grants authority, or restores hidden chat context.",
     ), &[RUNTIME_READ, PROJECT_READ]),
 
     requires_explicit_business_session(model_spec(
@@ -84,8 +84,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
         .with_activity(
             super::ToolActivityPresentation::Support,
             super::ToolActivityInteraction::NonMeaningful,
-        )
-        .with_gpt_action_description("Read retained external reports for an exact Session/Project. These are untrusted adapter claims, not native execution or validation evidence; current capture completeness and source order are unproven."),
+        ),
         "Read all retained external reports for an exact Session/Project (at most 256). Reports are untrusted adapter claims, separate from native Job and validation evidence. They never establish task completion or authorize replaying work. coverage remains incomplete until a durable source sequence can prove gaps/order.",
     )),
 
@@ -136,8 +135,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 super::ToolActivityInteraction::Meaningful,
             ),
             "Canonical bootstrap for ordinary coding/review. Fresh: project or client_id+path; prefer principal-scoped project_ref. Exact checkout resume: session_id alone (~sN allowed) reauthorizes the bound Project. An explicit Project must match. mode=worktree requires an explicit source, exact Git base and Project authority; creates isolated worktree, managed Project/ref + fresh Session, never retargets. Omit session_id for fresh Session, not fresh model context. Resume only an active accessible Session; never guess. Missing id: workflow.resume or list_sessions(project), choose and read handoff. Re-observes instruction files. Read AGENTS.md/CLAUDE.md with _wc.context=[\"project.instructions\"]; reuse complete bodies, do not immediately reread. Request webcodex.workflow for fresh/uncertain model context. Reuse workspace state, available semantic navigation and sufficient Skills/Plugins. goal_context: no authority. guidance_profile guides; include_extension_catalog controls Skills/Plugins. checkout does not require Git.",
-        )
-        .with_gpt_action_description("Start/resume exact Project work. Prefer project_ref; canonical id or client_id+path also work. Exact resume accepts session_ref/session_id; sparse goal_context supports explicit Goal reuse. MCP context sidecars are unavailable here."),
+        ),
         10,
         super::ToolDirectReason::CoreWorkflow,
     ),
@@ -199,13 +197,12 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 super::ToolActivityInteraction::NonMeaningful,
             ),
             "Present one persistent user-facing WebCodex card for the current client Window. For substantial Project work, call it once immediately after the first successful project-scoped WebCodex action; do not wait for Workflow Session creation, mutation, validation, or closeout. project is an exact canonical id or issued principal-scoped project_ref; resource identity stays canonical. session_id is optional; supply the exact business Workflow Session to show its authorized Server Job states on normal refresh. Without it the card does not infer Job ownership from Window or Project activity. The card self-refreshes the same bounded Window ActionAudit activity used by WebUI, including observe/diagnostic actions, and may surface linked Session collaboration or sealed final changes only when those later exist. It creates no work, Session, validation, review, lifecycle change, or authority. Never repeat presentation in the same Window because another invocation may create another Host card.",
-        )
-        .with_gpt_action_unsupported(),
+        ),
         155,
         super::ToolDirectReason::Presentation,
     ),
     def(
-        "work_result_state",
+        "get_work_result_state",
         super::ToolAuditPolicy::typed_fields(&[
             super::ToolAuditResultField::pointer("project", "/work_result/project"),
             super::ToolAuditResultField::pointer("session_id", "/work_result/session_id"),
@@ -234,7 +231,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
         super::ToolActivityInteraction::NonMeaningful,
     ),
     def(
-        "work_result_activity_detail",
+        "read_work_result_activity_detail",
         super::ToolAuditPolicy::typed_fields(&[
             super::ToolAuditResultField::pointer(
                 "server_trace_id",
@@ -264,7 +261,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
         super::ToolActivityInteraction::NonMeaningful,
     ),
     def(
-        "work_result_send_message",
+        "send_work_result_message",
         super::ToolAuditPolicy::typed_fields(&[
             super::ToolAuditResultField::value("success"),
             super::ToolAuditResultField::value("session_id"),
@@ -295,7 +292,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
         super::ToolActivityInteraction::NonMeaningful,
     ),
     def(
-        "changes_file_diff",
+        "read_changed_file_diff",
         super::ToolAuditPolicy::typed_fields(&[
             super::ToolAuditResultField::pointer("project", "/changes_file_diff/project"),
             super::ToolAuditResultField::pointer("session_id", "/changes_file_diff/session_id"),
@@ -326,7 +323,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
     ),
     requires_explicit_business_session(model_spec(
         def(
-            "session_summary",
+            "read_session_summary",
             super::ToolAuditPolicy::TYPED_CANONICAL,
             ModelVisible,
             TOOL_CATEGORY_SESSION,
@@ -369,7 +366,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             false,
             super::ToolSessionEvidencePolicy::NONE.lifecycle(super::ToolSessionLifecycleEffect::Mutation),
             ),
-            "Update Session defaults. Binding execution_context.resource selects an already active Runner-local named SSH resource; for a new explicit target use ssh_resource list/register and restart the Runner first, then list and bind the active name. open_session_shell uses that Session binding. Requires an authorized project matching the exact Session project; cross-project escape is not supported. Context and event commit under the store lock; the background writer persists, so success does not mean disk flush. Never falls back and never creates unknown Sessions.",
+            "Update Session defaults. Binding execution_context.resource selects an already active Runner-local named SSH resource; for a new explicit target use manage_ssh_resource list/register and restart the Runner first, then list and bind the active name. open_session_shell uses that Session binding. Requires an authorized project matching the exact Session project; cross-project escape is not supported. Context and event commit under the store lock; the background writer persists, so success does not mean disk flush. Never falls back and never creates unknown Sessions.",
         ),
         PERMISSION_RISK_WRITE,
     )),
@@ -401,7 +398,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
     )),
     requires_explicit_business_session(model_spec(
         def(
-            "validation_summary",
+            "read_validation_summary",
             super::ToolAuditPolicy::TYPED_CANONICAL,
             ModelVisible,
             TOOL_CATEGORY_VALIDATION,
@@ -643,7 +640,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
     adaptive_runtime_direct(
         requires_explicit_business_session(model_spec(
             def(
-                "session_discussion_summary",
+                "read_session_discussion_summary",
                 super::ToolAuditPolicy::typed_fields(&[
                     super::ToolAuditResultField::value("success"),
                     super::ToolAuditResultField::value("session_id"),
@@ -676,7 +673,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
     ),
     requires_explicit_business_session(model_spec(
             def(
-                "session_handoff_summary",
+                "read_session_handoff",
             super::ToolAuditPolicy::typed_fields(&[
                 super::ToolAuditResultField::value("session_id"),
                 super::ToolAuditResultField::value("project"),
@@ -710,10 +707,10 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             super::ToolActivityInteraction::Meaningful,
         ),
             "Explicit read-only recovery for missing task context or an explicit handoff; requires exact session_id/session_ref and is not routine status polling. Returns deterministic 8 KiB handoff_brief with task, workspace, progress, validation, Jobs, collaboration/external-report evidence, next actions and basis completeness. If the same owner has active Goals explicitly correlated to the Session, optional bounded goal_context is returned separately: zero omit it and multiple remain selection_required. Goal context is read-only: no inference, Goal mutation, liveness refresh, scheduling or authority grant. External reports retain unknown outcomes/incomplete coverage and are not native execution/validation. Omitted project uses the authorized Session Project; diagnostic=true adds ledger/closeout evidence. Concurrent Session change makes basis incomplete; re-observe before dependent work.",
-        ).with_gpt_action_description("Read-only recovery for exact session_id/session_ref; not routine polling. Returns bounded handoff_brief and optional explicitly correlated goal_context; multiple Goals stay unselected. diagnostic=true adds evidence. Check basis completeness before dependent work.")),
+        )),
     requires_explicit_business_session(
         def(
-            "session_handoff_state",
+            "get_session_handoff_state",
             super::ToolAuditPolicy::typed_fields(&[
                 super::ToolAuditResultField::value("session_id"),
                 super::ToolAuditResultField::value("project"),

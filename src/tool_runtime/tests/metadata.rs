@@ -45,7 +45,7 @@ async fn runner_observability_has_one_collection_and_preserves_health_across_mod
         json!({"client_id": "projection-runner"}),
     ] {
         let result = runtime
-            .dispatch(ToolCall::from_tool_name("runtime_status", arguments.clone()).unwrap())
+            .dispatch(ToolCall::from_tool_name("get_runtime_status", arguments.clone()).unwrap())
             .await;
         assert!(result.success, "{:?}", result.error);
         assert!(result.output.get("agents").is_none());
@@ -79,7 +79,7 @@ async fn runner_observability_has_one_collection_and_preserves_health_across_mod
         json!({"client_id":"projection-runner", "summary_only":true}),
     ] {
         let result = runtime
-            .dispatch(ToolCall::from_tool_name("runtime_status", arguments).unwrap())
+            .dispatch(ToolCall::from_tool_name("get_runtime_status", arguments).unwrap())
             .await;
         assert!(result.success);
         assert!(result.output.get("runners").is_none());
@@ -740,7 +740,7 @@ async fn runner_config_tools_use_normal_kernel_scope_gate_before_runner_dispatch
     let check = runtime
         .call_tool_with_protocol_capabilities(
             ToolCallRequest {
-                tool_name: "runner_config_check".to_string(),
+                tool_name: "check_runner_config".to_string(),
                 arguments: json!({"client_id": "missing-runner"}),
             },
             context(Some(&read_only)),
@@ -758,7 +758,7 @@ async fn runner_config_tools_use_normal_kernel_scope_gate_before_runner_dispatch
     let denied_reload = runtime
         .call_tool_with_protocol_capabilities(
             ToolCallRequest {
-                tool_name: "runner_config_reload".to_string(),
+                tool_name: "reload_runner_config".to_string(),
                 arguments: json!({
                     "client_id": "missing-runner",
                     "expected_generation": 1
@@ -784,7 +784,7 @@ async fn runner_config_tools_use_normal_kernel_scope_gate_before_runner_dispatch
     let allowed_reload = runtime
         .call_tool_with_protocol_capabilities(
             ToolCallRequest {
-                tool_name: "runner_config_reload".to_string(),
+                tool_name: "reload_runner_config".to_string(),
                 arguments: json!({
                     "client_id": "missing-runner",
                     "expected_generation": 1
@@ -1754,7 +1754,7 @@ async fn project_path_registration_capability_is_projected_safely() {
     );
     assert!(
         !status.output.to_string().contains(private_path),
-        "runtime_status leaked a registered project path"
+        "get_runtime_status leaked a registered project path"
     );
 }
 
@@ -2061,33 +2061,33 @@ fn runtime_status_input_schema_exposes_compact_flags() {
     let specs = registered_tool_specs();
     let spec = specs
         .iter()
-        .find(|spec| spec.name == "runtime_status")
-        .expect("runtime_status spec");
+        .find(|spec| spec.name == "get_runtime_status")
+        .expect("get_runtime_status spec");
     let properties = spec.input_schema["properties"]
         .as_object()
-        .expect("runtime_status input properties");
+        .expect("get_runtime_status input properties");
     assert_eq!(properties["client_id"]["type"], "string");
     assert_eq!(properties["client_id"]["maxLength"], 128);
     for field in ["compact", "summary_only"] {
         assert!(
             properties.contains_key(field),
-            "runtime_status input schema should expose {field}"
+            "get_runtime_status input schema should expose {field}"
         );
         assert_eq!(properties[field]["type"], "boolean");
     }
     let required = spec.input_schema["required"]
         .as_array()
-        .expect("runtime_status required fields");
+        .expect("get_runtime_status required fields");
     assert!(
         required.is_empty(),
-        "runtime_status compact flags must stay optional: {required:?}"
+        "get_runtime_status compact flags must stay optional: {required:?}"
     );
 
-    let output_schema = crate::tool_runtime::registry::output_schema_for_tool("runtime_status");
+    let output_schema = crate::tool_runtime::registry::output_schema_for_tool("get_runtime_status");
     let agents_description = output_schema["properties"]["output"]["properties"]["runners"]
         ["description"]
         .as_str()
-        .expect("runtime_status agents output description");
+        .expect("get_runtime_status agents output description");
     assert!(agents_description.contains("stale_count"));
     assert!(!agents_description.contains("offline_count"));
     assert!(output_schema["properties"]["output"]["properties"]
@@ -2110,29 +2110,12 @@ fn runtime_status_input_schema_exposes_compact_flags() {
         effective_config["properties"]["tool_request_trace_mode"]["enum"],
         json!(["off", "metadata", "full"])
     );
-
-    #[cfg(feature = "legacy-gpt-actions")]
-    {
-        let openapi = crate::openapi::build_openapi_spec();
-        let action = &openapi["paths"]["/api/actions/runtime_status"]["post"];
-        assert_eq!(action["operationId"], "runtime_status");
-        let action_properties = action["requestBody"]["content"]["application/json"]["schema"]
-            ["properties"]
-            .as_object()
-            .unwrap();
-        for field in ["compact", "summary_only"] {
-            assert!(
-                action_properties.contains_key(field),
-                "runtime_status Action missing {field}"
-            );
-        }
-    }
 }
 
 #[test]
 fn session_handoff_validation_exposure_keeps_read_only_metadata() {
-    let metadata = crate::tool_runtime::metadata::lookup_tool_metadata("session_handoff_summary")
-        .expect("session_handoff_summary metadata");
+    let metadata = crate::tool_runtime::metadata::lookup_tool_metadata("read_session_handoff")
+        .expect("read_session_handoff metadata");
     assert_eq!(
         metadata.effect,
         crate::tool_runtime::metadata::ToolEffect::Observe
@@ -2147,8 +2130,8 @@ fn session_handoff_validation_exposure_keeps_read_only_metadata() {
 
 #[test]
 fn project_overview_metadata_schema_is_read_only() {
-    let metadata = crate::tool_runtime::metadata::lookup_tool_metadata("project_overview")
-        .expect("project_overview metadata");
+    let metadata = crate::tool_runtime::metadata::lookup_tool_metadata("read_project_overview")
+        .expect("read_project_overview metadata");
     assert_eq!(metadata.provider_id, "agent");
     assert!(metadata.requires_project);
     assert_eq!(
@@ -2161,12 +2144,12 @@ fn project_overview_metadata_schema_is_read_only() {
         metadata.authority,
         crate::tool_runtime::metadata::ToolAuthorityPolicy::Require("project:read")
     );
-    assert_eq!(tool_manifest_category("project_overview"), "project");
+    assert_eq!(tool_manifest_category("read_project_overview"), "project");
 
     let spec = registered_tool_specs()
         .into_iter()
-        .find(|spec| spec.name == "project_overview")
-        .expect("project_overview ToolSpec");
+        .find(|spec| spec.name == "read_project_overview")
+        .expect("read_project_overview ToolSpec");
     let properties = spec.input_schema["properties"].as_object().unwrap();
     for field in ["project", "path", "max_depth", "limit", "session_id"] {
         assert!(
@@ -2205,7 +2188,7 @@ async fn tool_manifest_keeps_list_compact_and_exact_contract_bounded() {
     for tool in tools {
         assert!(
             tool.get("inputSchema").is_none() && tool.get("outputSchema").is_none(),
-            "tool_manifest must stay compact: {tool:?}"
+            "read_tool_manifest must stay compact: {tool:?}"
         );
         assert_eq!(tool["deprecated_or_unsupported_args"], json!([]));
         assert!(tool.get("accepted_flattened_args").is_none());
@@ -2309,10 +2292,10 @@ async fn bounded_list_tools_hides_schemas_and_finds_artifact_upload_tools() {
     let tools = bounded.output["tools"].as_array().unwrap();
     let names = bounded.output["names"].as_array().unwrap();
     for tool in [
-        "artifact_upload_begin",
-        "artifact_upload_chunk",
-        "artifact_upload_finish",
-        "artifact_upload_abort",
+        "begin_artifact_upload",
+        "upload_artifact_chunk",
+        "finish_artifact_upload",
+        "abort_artifact_upload",
     ] {
         assert!(names.iter().any(|name| name == tool), "missing {tool}");
     }
@@ -2368,7 +2351,7 @@ async fn tool_manifest_recommends_default_remote_coding_loop() {
 
     let flows = result.output["recommended_flows"]
         .as_array()
-        .expect("tool_manifest should include recommended_flows");
+        .expect("read_tool_manifest should include recommended_flows");
     for name in [
         "discovery",
         "inspect",
@@ -2393,16 +2376,16 @@ async fn tool_manifest_recommends_default_remote_coding_loop() {
         "search_project_text",
         "search_project_texts",
         "read_files",
-        "import_conversation_files_to_project",
-        "project_artifact",
-        "show_changes",
+        "import_host_files",
+        "inspect_project_artifact",
+        "read_workspace_changes",
         "edit_project_files",
         "cargo_check",
         "cargo_test",
-        "git_diff_hunks",
-        "workspace_hygiene_check",
-        "session_summary",
-        "session_handoff_summary",
+        "read_git_diff_hunks",
+        "check_workspace_hygiene",
+        "read_session_summary",
+        "read_session_handoff",
     ] {
         assert!(
             serialized.contains(tool),
@@ -2447,7 +2430,7 @@ async fn tool_manifest_recommends_default_remote_coding_loop() {
         serialized.contains("runner-owned sync-first")
             && serialized.contains("run_job is runner-owned immediate async")
             && serialized.contains("run_detached_process is supervisor-owned immediate async")
-            && serialized.contains("session_shell_exec continues an existing persistent session shell"),
+            && serialized.contains("execute_session_shell continues an existing persistent session shell"),
         "recommended_flows should expose the canonical execution selection vocabulary: {serialized}"
     );
 }
@@ -2651,7 +2634,7 @@ async fn runtime_status_preserves_allowlisted_effective_config_across_projection
     let focused = runtime
         .dispatch(
             ToolCall::from_tool_name(
-                "runtime_status",
+                "get_runtime_status",
                 json!({"client_id": "effective-config-agent"}),
             )
             .unwrap(),
@@ -2671,7 +2654,7 @@ async fn runtime_status_preserves_allowlisted_effective_config_across_projection
         json!({"client_id": "effective-config-agent", "compact": true}),
     ] {
         let compact = runtime
-            .dispatch(ToolCall::from_tool_name("runtime_status", arguments).unwrap())
+            .dispatch(ToolCall::from_tool_name("get_runtime_status", arguments).unwrap())
             .await;
         assert!(compact.success, "{:?}", compact.error);
         assert!(compact.output.get("effective_config").is_none());
@@ -2760,7 +2743,7 @@ async fn runtime_status_compact_and_summary_only_return_sanitized_summary() {
 
     for arguments in [json!({"compact": true}), json!({"summary_only": true})] {
         let result = runtime
-            .dispatch(ToolCall::from_tool_name("runtime_status", arguments.clone()).unwrap())
+            .dispatch(ToolCall::from_tool_name("get_runtime_status", arguments.clone()).unwrap())
             .await;
         assert!(result.success, "{:?}", result.error);
         let summary = &result.output;
@@ -2820,7 +2803,7 @@ async fn runtime_status_compact_and_summary_only_return_sanitized_summary() {
         ] {
             assert!(
                 !serialized.contains(forbidden),
-                "compact runtime_status leaked {forbidden}: {serialized}"
+                "compact get_runtime_status leaked {forbidden}: {serialized}"
             );
         }
         assert!(summary.pointer("/projects/server_static").is_none());
@@ -2858,7 +2841,7 @@ async fn runtime_status_does_not_expose_tokens_or_secrets() {
             !serialized
                 .to_lowercase()
                 .contains(&forbidden.to_lowercase()),
-            "runtime_status output must not contain '{}': {}",
+            "get_runtime_status output must not contain '{}': {}",
             forbidden,
             serialized
         );
@@ -3210,13 +3193,7 @@ async fn external_provider_discovery_cannot_change_public_tool_surface() {
         .iter()
         .map(|spec| spec.name.clone())
         .collect::<BTreeSet<_>>();
-    #[cfg(feature = "legacy-gpt-actions")]
-    let operation_ids_before = crate::openapi::build_openapi_spec()["paths"]
-        .as_object()
-        .unwrap()
-        .values()
-        .map(|path| path["post"]["operationId"].as_str().unwrap().to_string())
-        .collect::<BTreeSet<_>>();
+
     // Snapshot a model-visible tool's schema as the baseline that external
     // provider discovery must not perturb.
     let edit_schema_before = before
@@ -3278,21 +3255,6 @@ async fn external_provider_discovery_cannot_change_public_tool_surface() {
             .input_schema,
         edit_schema_before
     );
-    #[cfg(feature = "legacy-gpt-actions")]
-    {
-        let openapi_after = crate::openapi::build_openapi_spec();
-        let operation_ids_after = openapi_after["paths"]
-            .as_object()
-            .unwrap()
-            .values()
-            .map(|path| path["post"]["operationId"].as_str().unwrap().to_string())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(operation_ids_after, operation_ids_before);
-        let serialized = serde_json::to_string(&openapi_after).unwrap();
-        for internal in ["Edit", "Read", "Bash", "Write", "FutureTool"] {
-            assert!(!serialized.contains(&format!("\"{internal}\"")));
-        }
-    }
 }
 
 #[tokio::test]
@@ -3701,13 +3663,13 @@ async fn runtime_status_tools_summary_lists_names() {
     assert_eq!(names, expected_names.as_slice());
     assert!(!names.is_empty());
     assert!(
-        names.iter().any(|n| n == "runtime_status"),
-        "tools.names must include runtime_status: {:?}",
+        names.iter().any(|n| n == "get_runtime_status"),
+        "tools.names must include get_runtime_status: {:?}",
         names
     );
     assert!(
         !names.iter().any(|n| n == "run_codex"),
-        "runtime_status tools.names must not include removed run_codex: {:?}",
+        "get_runtime_status tools.names must not include removed run_codex: {:?}",
         names
     );
     assert_eq!(tools["count"], names.len() as i64);

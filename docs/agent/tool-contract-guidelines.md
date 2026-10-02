@@ -39,7 +39,7 @@ For nontrivial bulk changes, read the file and revision, optionally call
 guard. The actual request resolves all matches and fences again. A simple,
 obvious bulk edit may be applied directly. Dry-run creates no future mutation
 authority. The compact success `change_summary` reports counts; use
-`show_changes`, `git_diff_hunks`, or `git_review_summary` for semantic review.
+`read_workspace_changes`, `read_git_diff_hunks`, or `read_git_review_summary` for semantic review.
 
 Use this exact cardinality contract for known repeated fixtures or struct
 literals instead of an ad-hoc Python or sed global rewrite. It does not infer
@@ -318,7 +318,7 @@ secondary to the tool result.
 This is a presentation/projection rule, not permission to weaken the underlying
 protocol. In particular:
 
-- missing task context is recovered explicitly with `session_handoff_summary`;
+- missing task context is recovered explicitly with `read_session_handoff`;
 - collaboration ACKs require request-scoped retained-message proof;
 - a ClientWindow must not select a Workflow Session;
 - support metadata must not become execution authority.
@@ -422,7 +422,7 @@ still represent real work.
 Contract consistency tests iterate `tool_definitions()` rather than maintaining a second
 complete name/risk/capability table. Each ToolDefinition owns exactly one category;
 `group_tool_names_by_category` derives sorted, non-overlapping category projections
-from the caller's already-admitted tool selection. `list_tools` and `tool_manifest`
+from the caller's already-admitted tool selection. `list_tools` and `read_tool_manifest`
 use the same taxonomy. Intent ranking and recommended flows remain deliberately
 cross-category workflow views, not another category registry. Categories and Direct
 rank never grant authority or determine execution/Activity semantics. Structured-validation
@@ -474,6 +474,15 @@ verbs consistently:
 | `present_*` | Host-visible presentation/App integration whose descriptor carries presentation semantics. |
 | `create_*`, `update_*`, `assign_*`, `complete_*`, `stop_*` | Explicit lifecycle/effect verbs; keep target identity in the object name. |
 
+Prefer two or three meaningful words for high-frequency primitives. Project and
+Session parameters already carry exact scope; do not repeat the full source,
+destination, representation and result shape in one name. This is a readability
+preference, not a new rejection ceiling or an abbreviation mandate:
+`import_host_files`, `search_file_context` and `read_session_handoff` retain the
+selection distinction without an API-path-like name. Low-frequency names may
+stay longer when dropping Agent/Task/Endpoint/Wake would conflate real identities.
+Keep descriptions responsible for limits and recovery, never tool-name suffixes.
+
 Use plural objects when one ordinary call is natively batch-shaped
 (`read_files`, `observe_jobs`, `search_project_texts`); use singular names
 for exact-resource operations unless an established domain term says otherwise.
@@ -495,9 +504,9 @@ Ordinary ChatGPT tool names acquire no compatibility promise from a past schema.
 After a deliberate rename, the refreshed Host schema is the current contract.
 Update ToolDefinition, ToolCall, schemas, discovery, generated follow-ups, tests
 and documentation atomically. Do not retain duplicate model-visible tool names
-just because an earlier schema exposed them. A real frozen legacy adapter may
-need a narrowly scoped exception under section 10; ergonomic parameter spelling
-normalization is a different concern, described in section 2.
+just because an earlier schema exposed them. v0.5 has no legacy tool-name adapter;
+ergonomic parameter spelling normalization is a different concern, described in
+section 2.
 
 Keep these four concerns independent:
 
@@ -513,7 +522,7 @@ Current Adaptive Runtime owns one optional `ToolAdaptiveDirectPolicy { rank,
 reason }` in `ToolDefinition.adaptive_runtime_direct`. Each dedicated descriptor
 has exactly one `ToolDirectReason` and a unique rank; derived rank/reason methods
 keep callers independent of the representation. `None` grants no admission: an
-ordinary admitted model-visible tool uses exact `tool_manifest` discovery plus
+ordinary admitted model-visible tool uses exact `read_tool_manifest` discovery plus
 `call_runtime_tool`, while ModelHidden and operator extensions keep their existing
 visibility/admission boundaries. Rank or reason changes are presentation/routing
 changes, not renames, authority changes or new ToolCalls. Neither the policy nor
@@ -558,7 +567,7 @@ App protocol remain intact. A cached presentation descriptor follows existing
 admission rules; no old-schema compatibility bypass is added.
 
 `present_work_result` and `present_goal_plan` remain Direct with Presentation
-reason. `import_conversation_files_to_project` remains Direct with HostIntegration
+reason. `import_host_files` remains Direct with HostIntegration
 reason. No current Direct definition needs Continuation reason. Restore that
 policy explicitly (and presentation visibility), then refresh Host schema if
 fresh-turn support returns; do not couple registration to
@@ -609,22 +618,16 @@ Historical persisted evidence should remain truthful about the past, but current
 ToolDefinitions and model projections should not carry obsolete tool API baggage
 solely to preserve old model behavior.
 
-### Sole endpoint-name legacy exception
+### Tool names are not persisted operation keys
 
-`attach_agent_endpoint` is absent from the default canonical ToolDefinition,
-ToolCall parser, exact discovery and normal catalog. Use
-`rotate_agent_continuation_endpoint`. The frozen `legacy-gpt-actions` adapter
-still names the old operation, so enabling that existing feature retains its
-old definition/parser/schema/dispatch as one explicit exception. This is not
-complete adapter-local isolation: legacy-enabled builds also retain that
-long-tail model entry. Moving its exact discovery and request adaptation wholly
-into the retiring adapter would expand this change; remove the exception with
-GPT Actions rather than adding more historical model names.
+`attach_agent_endpoint` has no ToolDefinition, ToolCall parser, exact discovery,
+schema or dispatch entry. Use `rotate_agent_continuation_endpoint`. No feature
+restores the retired name. v0.5 removes the Action adapter and its last tool-name
+exception rather than introducing a compatibility registry.
 
 The Store operation key named `attach_agent_endpoint` is a separate persisted
-idempotency domain and deliberately remains unchanged. No durable endpoint
-state, replay key, authorization or controller fencing is migrated here.
-
+idempotency domain and remains unchanged. Tool naming does not migrate durable
+endpoint state, replay keys, authorization or controller fencing.
 ## 11. Measure friction before pruning tools
 
 Low usage alone does not prove a tool lacks value. A tool may be avoided because
@@ -689,14 +692,14 @@ and generic telemetry capture bounded facts, then the model receipt is compacted
 Existing process/script/Skill and validation success shapes are unchanged.
 `run_shell` removes lifecycle/Job/timing bookkeeping only for proven synchronous
 exit-zero completion without Job/recovery identity or observation ambiguity. It
-retains runtime-selected `command_summary`, `cwd`, `shell`, any `ssh_resource`,
+retains runtime-selected `command_summary`, `cwd`, `shell`, any `manage_ssh_resource`,
 nonempty output, truncation/loss, expectations, normalization and sidecars. Failure,
 timeout, uncertainty and exceptional handoff remain rich; normal pending receipts
 still contain `execution_state=pending` and the exact continuation.
 
 ### Runtime status projections
 
-Canonical `runtime_status` and HTTP/API omission retain full diagnostic output.
+Canonical `get_runtime_status` and HTTP/API omission retain full diagnostic output.
 MCP supplies `compact=true` only when the argument is omitted, for both direct
 and `call_runtime_tool` calls. Use `compact=false` (without `summary_only=true`)
 for full diagnostics. `summary_only=true` is still an alias for sparse status.

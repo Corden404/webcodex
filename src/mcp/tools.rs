@@ -52,7 +52,7 @@ fn filter_specs_for_oauth(mut specs: Vec<ToolSpec>, auth: Option<&AuthContext>) 
 fn work_result_thread_entrypoint_tool_spec() -> ToolSpec {
     let state = crate::tool_runtime::work_result_app_tool_specs()
         .into_iter()
-        .find(|spec| spec.name == "work_result_state")
+        .find(|spec| spec.name == "get_work_result_state")
         .expect("Work Result state App tool must exist");
     ToolSpec {
         name: WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME.to_string(),
@@ -352,7 +352,7 @@ pub(super) fn mcp_tools_list_payload_with_features_for_auth(
                 }
             }
         }
-        if check_runtime_tool_scope(auth, "work_result_state").is_ok() {
+        if check_runtime_tool_scope(auth, "get_work_result_state").is_ok() {
             let mut thread_entrypoint =
                 mcp_tool_spec_json(work_result_thread_entrypoint_tool_spec(), compact, false);
             // A user-opened launcher renders a View, so it must remain public.
@@ -418,7 +418,7 @@ fn adapt_native_image_output_schema_for_mcp(spec: &mut ToolSpec) {
         .output_schema
         .pointer_mut("/properties/output/properties")
         .and_then(Value::as_object_mut)
-        .expect("computer_observe output schema properties");
+        .expect("observe_computer output schema properties");
     properties.remove("content_base64");
     properties.insert(
         "content_delivery".to_string(),
@@ -755,7 +755,12 @@ pub(super) fn add_stateless_workflow_recorder_metadata(payload: &mut Value) {
         let tool_name = tool_name_owned.as_deref();
         if matches!(
             tool_name,
-            Some("goal_plan_sync" | "work_result_state" | "changes_file_diff" | "search_mentions")
+            Some(
+                "sync_goal_plan"
+                    | "get_work_result_state"
+                    | "read_changed_file_diff"
+                    | "search_mentions"
+            )
         ) || tool_name == Some(WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME)
             || tool_name.is_some_and(is_host_continuation_app_tool_name)
         {
@@ -920,25 +925,25 @@ fn attach_app_visibility(value: &mut Value) {
 fn is_agent_continuation_app_tool_name(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "agent_continuation_bind"
-            | "agent_continuation_recover_endpoint"
-            | "agent_continuation_state"
-            | "agent_continuation_wake_acquire"
-            | "agent_continuation_wake_prepare"
-            | "agent_continuation_wake_finish"
-            | "agent_continuation_unbind"
-            | "agent_wait_state"
+        "bind_agent_continuation"
+            | "recover_agent_continuation_endpoint"
+            | "get_agent_continuation_state"
+            | "acquire_agent_continuation_wake"
+            | "prepare_agent_continuation_wake"
+            | "finish_agent_continuation_wake"
+            | "unbind_agent_continuation"
+            | "get_agent_wait_state"
     )
 }
 
 fn is_job_terminal_continuation_app_tool_name(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "job_terminal_continuation_bind"
-            | "job_terminal_continuation_state"
-            | "job_terminal_continuation_prepare"
-            | "job_terminal_continuation_finish"
-            | "job_terminal_continuation_unbind"
+        "bind_job_terminal_continuation"
+            | "get_job_terminal_continuation_state"
+            | "prepare_job_terminal_continuation"
+            | "finish_job_terminal_continuation"
+            | "unbind_job_terminal_continuation"
     )
 }
 
@@ -1222,7 +1227,7 @@ fn project_mcp_runtime_status_input_schema(input_schema: &mut Value) {
 
 fn project_mcp_model_default_input_schema(tool_name: &str, input_schema: &mut Value) {
     match tool_name {
-        "runtime_status" => project_mcp_runtime_status_input_schema(input_schema),
+        "get_runtime_status" => project_mcp_runtime_status_input_schema(input_schema),
         "observe_jobs" => {
             if let Some(summary) = input_schema
                 .pointer_mut("/properties/summary_only")
@@ -1253,7 +1258,7 @@ fn project_mcp_model_manifest_defaults(result: &mut ToolResult) {
 /// canonical tool identity. Explicit values and canonical HTTP defaults survive.
 pub(super) fn project_mcp_model_argument_defaults(tool_name: &str, arguments: &mut Value) {
     let field = match tool_name {
-        "runtime_status" => "compact",
+        "get_runtime_status" => "compact",
         "observe_jobs" => "summary_only",
         _ => return,
     };
@@ -1268,7 +1273,7 @@ pub(super) fn project_mcp_model_argument_defaults(tool_name: &str, arguments: &m
 fn mcp_tool_spec_json(mut spec: ToolSpec, compact: bool, app_enabled: bool) -> Value {
     let tool_name = spec.name.clone();
     project_mcp_model_default_input_schema(&tool_name, &mut spec.input_schema);
-    if tool_name == "runtime_status" {
+    if tool_name == "get_runtime_status" {
         spec.description
             .push_str(" MCP defaults to sparse status; compact=false opts into full diagnostics.");
     }
@@ -1278,10 +1283,10 @@ fn mcp_tool_spec_json(mut spec: ToolSpec, compact: bool, app_enabled: bool) -> V
             .push_str(" MCP defaults summary_only=true; set false for full retained logs.");
     }
 
-    if matches!(tool_name.as_str(), "computer_observe" | "browser_observe") {
+    if matches!(tool_name.as_str(), "observe_computer" | "observe_browser") {
         adapt_native_image_output_schema_for_mcp(&mut spec);
     }
-    if tool_name == "read_project_artifact" {
+    if tool_name == "read_project_artifact_chunk" {
         if let Some(properties) = spec.input_schema["properties"].as_object_mut() {
             properties.insert(
                 "as_image".to_string(),
@@ -1329,7 +1334,7 @@ fn mcp_tool_spec_json(mut spec: ToolSpec, compact: bool, app_enabled: bool) -> V
             );
         }
     }
-    if tool_name == "import_conversation_files_to_project" {
+    if tool_name == "import_host_files" {
         if let Some(required) =
             value.pointer_mut("/inputSchema/properties/openaiFileIdRefs/items/required")
         {
@@ -1693,7 +1698,7 @@ pub(super) fn host_file_import_trust_for_call(
     config: Option<&crate::Config>,
     db: Option<&crate::Database>,
 ) -> HostFileImportTrust {
-    if tool_name != Some("import_conversation_files_to_project") {
+    if tool_name != Some("import_host_files") {
         return HostFileImportTrust::Untrusted;
     }
     let decision = match config {
@@ -2044,7 +2049,7 @@ pub(super) struct McpInvocationEnvelope {
 fn mcp_invocation_envelope_supported_fields(tool: &str) -> Vec<&'static str> {
     if matches!(
         tool,
-        "goal_plan_sync" | "work_result_state" | "changes_file_diff" | "search_mentions"
+        "sync_goal_plan" | "get_work_result_state" | "read_changed_file_diff" | "search_mentions"
     ) || tool == WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME
         || is_host_continuation_app_tool_name(tool)
     {
@@ -2804,7 +2809,7 @@ pub(super) async fn handle_call(
     let work_result_app_admitted = server_mcp_apps_enabled && stateless_2026;
     let agent_continuation_app_admitted = server_mcp_apps_enabled && stateless_2026;
     let job_terminal_continuation_app_admitted = server_mcp_apps_enabled && stateless_2026;
-    let app_only_goal_plan_sync = goal_plan_app_admitted && params.name == "goal_plan_sync";
+    let app_only_goal_plan_sync = goal_plan_app_admitted && params.name == "sync_goal_plan";
     let work_result_thread_panel =
         work_result_app_admitted && params.name == WORK_RESULT_THREAD_ENTRYPOINT_TOOL_NAME;
     let mut work_result_thread_context = None;
@@ -2835,18 +2840,20 @@ pub(super) async fn handle_call(
             }
         };
         work_result_thread_context = Some(json!({"session_id": binding.session_id.clone()}));
-        params.name = "work_result_state".to_string();
+        params.name = "get_work_result_state".to_string();
         params.arguments = match binding.session_id {
             Some(session_id) => json!({"project": binding.project, "session_id": session_id}),
             None => json!({"project": binding.project}),
         };
     }
-    let app_only_work_result_state = work_result_app_admitted && params.name == "work_result_state";
+    let app_only_work_result_state =
+        work_result_app_admitted && params.name == "get_work_result_state";
     let app_only_work_result_activity_detail =
-        work_result_app_admitted && params.name == "work_result_activity_detail";
+        work_result_app_admitted && params.name == "read_work_result_activity_detail";
     let app_only_work_result_send_message =
-        work_result_app_admitted && params.name == "work_result_send_message";
-    let app_only_changes_file_diff = work_result_app_admitted && params.name == "changes_file_diff";
+        work_result_app_admitted && params.name == "send_work_result_message";
+    let app_only_changes_file_diff =
+        work_result_app_admitted && params.name == "read_changed_file_diff";
     let app_only_agent_continuation =
         agent_continuation_app_admitted && is_agent_continuation_app_tool_name(&params.name);
     let app_only_job_terminal_continuation = job_terminal_continuation_app_admitted
@@ -2937,10 +2944,10 @@ pub(super) async fn handle_call(
     if workbench_view_call
         || matches!(
             params.name.as_str(),
-            "goal_plan_sync"
-                | "work_result_state"
-                | "work_result_send_message"
-                | "changes_file_diff"
+            "sync_goal_plan"
+                | "get_work_result_state"
+                | "send_work_result_message"
+                | "read_changed_file_diff"
         )
     {
         session_id = None;
@@ -3067,7 +3074,7 @@ pub(super) async fn handle_call(
             .expect("tool kernel outcome without error must include result"),
     };
     debug_assert_eq!(outcome.success, result.success);
-    if params.name == "tool_manifest" {
+    if params.name == "read_tool_manifest" {
         project_mcp_model_manifest_defaults(&mut result);
     }
     project_job_terminal_resume_suggested_call(

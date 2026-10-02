@@ -23,7 +23,7 @@ Client：
 - `webcodex runner status --profile workstation` 能读取本地 Runner config（`runner.toml`）。
 - canonical project 的 `webcodex doctor` 通过；managed deployment 则使用
   `webcodex ops status --strict --server-url https://your-domain.example`。
-- `list_runners` / `runtime_status` 显示 Runner online。
+- `list_runners` / `get_runtime_status` 显示 Runner online。
 
 ## 先判断故障发生在哪一层
 
@@ -34,11 +34,11 @@ Client：
 | --- | --- | --- |
 | ChatGPT 返回 `FORBIDDEN: This conversation does not support developer MCPs`，或提示当前会话已禁用 developer MCP server；同时 WebCodex 没有观察到对应请求 | ChatGPT Host / conversation 的 MCP admission | 从 operator/Runner 主机独立验证 WebCodex，再单独排查 Host 连接 |
 | WebCodex 返回 HTTP 401/403、MCP authentication error，或正常 structured ToolResult failure | Server auth / authorization / ToolRuntime | 检查 user/API credential、OAuth scope、Server 日志与精确 WebCodex error |
-| `runtime_status` 能成功执行，但显示 Runner offline 或 project missing | Runner / project registration | 在 Runner 主机执行 `webcodex runner status` 并查看有界日志 |
+| `get_runtime_status` 能成功执行，但显示 Runner offline 或 project missing | Runner / project registration | 在 Runner 主机执行 `webcodex runner status` 并查看有界日志 |
 | `plugin_tool` 已到达 WebCodex，并返回 `ready=false`、`plugin_check_busy`、`plugin_reload_busy` 等 Plugin diagnostic | WebCodex Native Tool Plugin runtime | 使用 `webcodex plugin check/list/describe/reload`，并查看 [Native Tool Plugin 文档](PLUGINS.zh-CN.md) |
 
-第一行尤其重要：如果 ChatGPT Host 根本没有 dispatch `runtime_status`，界面显示的
-`FORBIDDEN` **不是** WebCodex 的 `runtime_status` 返回值。一个没有到达 Server 的
+第一行尤其重要：如果 ChatGPT Host 根本没有 dispatch `get_runtime_status`，界面显示的
+`FORBIDDEN` **不是** WebCodex 的 `get_runtime_status` 返回值。一个没有到达 Server 的
 请求，无法通过重启或重配 Runner 来修复。
 
 ### ChatGPT 提示 developer MCP 被禁用或当前会话不支持
@@ -98,7 +98,7 @@ Runner。
 - ChatGPT surface，以及相同 MCP 在新会话中是否可用；
 - `webcodex --version` 与 `webcodex-runner --version`；
 - 已脱敏的 `webcodex runner status` / `webcodex ops status`；
-- 如果另一个会话/client 仍能调用 `runtime_status`，提供其已脱敏的 build / connection-layer summary；
+- 如果另一个会话/client 仍能调用 `get_runtime_status`，提供其已脱敏的 build / connection-layer summary；
 - 故障时间点 Server 是否观察到对应 request/trace。
 
 不要公开 access token、OAuth secret、`Authorization` header、完整 env file、完整
@@ -260,15 +260,10 @@ sudo webcodex runner logs --scope system --lines 100
 
 同时确认 server URL、本地 token files 和 Runner `allowed_roots`。缺失或为空的 `allowed_roots` 默认使用 `$HOME`；显式 `allowed_roots` 会覆盖该默认值。
 
-### `tool_manifest` discovery 范围过大
+### `read_tool_manifest` discovery 范围过大
 
-GPT Actions 应直接调用 canonical `tool_manifest` operation，并优先传 exact
-`tool_name`，或使用 `category` / `intent` filter 来保持 discovery 紧凑。generic
-Actions surface 已不再暴露退休的 `listRuntimeTools` facade。
-
-### GPT Action 仍在使用旧 schema
-
-先确认部署的 Server 是使用 `legacy-gpt-actions` 构建的；默认构建不会挂载 `/openapi.json` 或 `/api/actions/*`。对于明确保留的 legacy 部署，重新导入 `/openapi.json`。它的 operation set 是冻结兼容快照加 `call_runtime_tool`，正常维护的 Adaptive Runtime 变化不会再扩张该 surface。修改这层 adapter 时运行独立 legacy workflow 或 feature-enabled tests。
+传入 exact `tool_name`，或用 `category` / `intent` 缩小范围。以当前
+MCP schema 和返回的调用路径为准；工具改名后不再接受旧名称。
 
 ### MCP tool list 看起来是旧的
 
@@ -278,7 +273,7 @@ Actions surface 已不再暴露退休的 `listRuntimeTools` facade。
 
 ### Runner offline
 
-先运行 `runtime_status` 或 `list_runners`，再在 Runner host 上检查：
+先运行 `get_runtime_status` 或 `list_runners`，再在 Runner host 上检查：
 
 ```bash
 webcodex runner status --scope user
@@ -291,14 +286,14 @@ webcodex runner logs --scope user --lines 100
 ### Token type 错误
 
 Hosted quick-start 中，MCP 与 Runner 使用同一个非 `wc_` shared key。Managed
-mode 中，GPT Actions、MCP 和普通 REST/project API 使用
+mode 中，MCP 和普通 REST/project API 使用
 `webcodex-user-token`（`wc_pat_*`）；Runner 令牌（`wc_agent_*`）只给
 Runner transport 使用——`webcodex login` 之后它内联在 `runner.toml` 中，
 没有单独的 `webcodex-runner-token` 文件。把 `wc_agent_*` 放入
 `--token` 或 `--token-file` 后得到 403，正是预期安全边界；应改用生成的
 `webcodex-user-token`。新版 CLI 也会在不打印完整 token 的前提下诊断这个错误。
 `WEBCODEX_TOKEN` 面向 bootstrap/admin，
-不应复制到 GPT Actions、MCP 或 Runner config。
+不应复制到 MCP 或 Runner config。
 
 ### 一条命令能看到 Runner service，另一条却看不到
 
@@ -313,20 +308,18 @@ system scope 调用 system manager，并使用 `/etc/systemd/system`。
 `--service-file`，后续命令也要传同一 absolute path 与 scope。WebCodex 不会静默
 迁移或覆盖另一 scope 的 unit。
 
-### 非 git smoke workspace 不能运行 `git_status`
+### 非 git smoke workspace 不能运行 `get_git_status`
 
-`git_status` 需要 git repository，部署 smoke 才能得到 clean 结果。为 disposable
+`get_git_status` 需要 git repository，部署 smoke 才能得到 clean 结果。为 disposable
 smoke project 初始化 git 并创建初始 commit，或把 smoke 指向另一个安全的
 Runner-backed git project。
 
-### `operation_count` 超过 30
 
-只有启用 `legacy-gpt-actions` 的兼容构建才受这项限制。direct operations 来自冻结快照，long-tail entries 通过 `call_runtime_tool`；不要通过普通 Adaptive Runtime 调整来迁就这个 legacy budget。若冻结 surface 本身触及上限，应在 legacy adapter 内做明确兼容性调整，并由独立 legacy CI 验证。
 
-### `artifact_upload_chunk` 报 `path` 缺失
+### `upload_artifact_chunk` 报 `path` 缺失
 
-`artifact_upload_chunk`、`artifact_upload_finish` 和 `artifact_upload_abort`
-必须重复 `artifact_upload_begin` 使用的完全相同 `path`。这是为了把 opaque
+`upload_artifact_chunk`、`finish_artifact_upload` 和 `abort_artifact_upload`
+必须重复 `begin_artifact_upload` 使用的完全相同 `path`。这是为了把 opaque
 `upload_id` 绑定到请求的目标 artifact path。
 
 ### `application/octet-stream` 因 unsafe extension 被拒绝

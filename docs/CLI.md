@@ -77,7 +77,7 @@ For public `share`, WebCodex best-effort copies only the MCP URL to the clipboar
 
 For supervised machine integration, `webcodex share --json --stop-on-stdin-eof` keeps the same foreground lifecycle but also treats the supervising parent's closed stdin as a stop request. This lets Desktop or another structured process owner ask `share` to clean up its own temporary Server, Runner, and Tunnel without shell-command signaling. The flag is rejected outside `--json` mode.
 
-`webcodex connect <server> --auth oauth --oauth-redirect-uri <exact-callback>` is the ordinary hosted OAuth path. The Runner keeps its existing hosted credential while the MCP client uses OAuth. Add `--oauth-computer-permissions`, `--oauth-local-mcp`, or `--oauth-local-ssh` only when those optional capabilities are actually needed; they are explicit permission changes and can require reauthorization. `--oauth-local-ssh` grants the MCP client the optional `ssh:local` authority needed by the model-facing `ssh_resource` onboarding tool; it does not expose SSH credentials or make a registered resource active without the Runner restart reported by that tool. See [MCP](MCP.md#oauth2) for client setup and [Authentication](AUTH_MODEL.md#oauth2) for the security model.
+`webcodex connect <server> --auth oauth --oauth-redirect-uri <exact-callback>` is the ordinary hosted OAuth path. The Runner keeps its existing hosted credential while the MCP client uses OAuth. Add `--oauth-computer-permissions`, `--oauth-local-mcp`, or `--oauth-local-ssh` only when those optional capabilities are actually needed; they are explicit permission changes and can require reauthorization. `--oauth-local-ssh` grants the MCP client the optional `ssh:local` authority needed by the model-facing `manage_ssh_resource` onboarding tool; it does not expose SSH credentials or make a registered resource active without the Runner restart reported by that tool. See [MCP](MCP.md#oauth2) for client setup and [Authentication](AUTH_MODEL.md#oauth2) for the security model.
 
 The advanced managed identity flow remains available as `--auth managed-oauth --oauth-redirect-uri <exact-callback>` and requires `webcodex login`; `--user` applies only to that mode.
 
@@ -216,7 +216,7 @@ makes a FAIL report exit with status 2.
 
 ### Review and runtime activity
 
-The legacy `webcodex task` namespace has been removed with the separate Connector Task/Result/Approval lifecycle. Local `webcodex run` prints the Runtime Console URL (`/runtime`). Runtime review uses the canonical Workflow Session, Job, Git/diff, `show_changes`, and `finish_coding_task` paths rather than a host-side result accept/reject queue.
+The legacy `webcodex task` namespace has been removed with the separate Connector Task/Result/Approval lifecycle. Local `webcodex run` prints the Runtime Console URL (`/runtime`). Runtime review uses the canonical Workflow Session, Job, Git/diff, `read_workspace_changes`, and `finish_coding_task` paths rather than a host-side result accept/reject queue.
 
 ### Credentials and accounts
 
@@ -271,13 +271,13 @@ quick answer.
 
 | Credential | Prefix | Created by | Used for | Do not use for |
 | --- | --- | --- | --- | --- |
-| Server bootstrap token | (env `WEBCODEX_TOKEN`) | `webcodex server init` | server/admin setup, user creation, pairing | GPT Actions, MCP, Runner, daily use |
+| Server bootstrap token | (env `WEBCODEX_TOKEN`) | `webcodex server init` | server/admin setup, user creation, pairing | MCP, Runner, daily use |
 | Shared key | `wck_...` | `webcodex connect` (generated once) | hosted shared-key MCP + Runner | production IAM |
 | Project Credential | (private file) | `webcodex setup` | one ProjectGrant's ordinary runtime API/MCP access | other ProjectGrants, admin, Runner transport |
-| Account credential | `wc_acct_...` | `webcodex users create --issue-credential` | local token creation | GPT Actions, MCP, Runner |
-| Personal API token (PAT) | `wc_pat_...` | `webcodex tokens create-local` | GPT Actions, MCP, REST API | Runner connectivity |
-| Runner token | `wc_agent_...` | `webcodex runner-tokens create-local` | `webcodex-runner` transport only | MCP, REST, GPT Actions |
-| OAuth access token | `wc_oat_...` | OAuth2 authorization flow | GPT Actions / MCP when OAuth is enabled | — |
+| Account credential | `wc_acct_...` | `webcodex users create --issue-credential` | local token creation | MCP, Runner |
+| Personal API token (PAT) | `wc_pat_...` | `webcodex tokens create-local` | MCP, REST API | Runner connectivity |
+| Runner token | `wc_agent_...` | `webcodex runner-tokens create-local` | `webcodex-runner` transport only | MCP, REST |
+| OAuth access token | `wc_oat_...` | OAuth2 authorization flow | MCP when OAuth is enabled | — |
 
 ### Practical credential rules
 

@@ -31,7 +31,6 @@ async fn mcp_2026_computer_app_is_minimal_handshake_and_snapshot_only() {
     // The URI is a host cache key. Bump it whenever the App delivery contract
     // changes so a previously failed/blank iframe cannot pin the old resource.
     assert_eq!(MCP_COMPUTER_UI_RESOURCE_URI, "ui://webcodex/computer/v12");
-    assert!(MCP_COMPUTER_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/computer/v11"));
     assert_eq!(MCP_COMPUTER_UI_RESOURCE_TTL_MS, 0);
     assert!(mcp_computer_app_resource_meta(None)["ui"]
         .get("domain")
@@ -87,7 +86,7 @@ async fn mcp_2026_computer_app_is_minimal_handshake_and_snapshot_only() {
         .iter()
         .any(|tool| { tool["name"] == crate::mcp::tools::ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME }));
     assert!(
-        !tools.iter().any(|tool| tool["name"] == "computer_observe"),
+        !tools.iter().any(|tool| tool["name"] == "observe_computer"),
         "Computer observation remains model-visible long tail and must use call_runtime_tool"
     );
     for retired in [
@@ -103,7 +102,7 @@ async fn mcp_2026_computer_app_is_minimal_handshake_and_snapshot_only() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|tool| tool["name"] == "computer_observe"));
+        .any(|tool| tool["name"] == "observe_computer"));
 
     let resources = handle_mcp_request(
         &runtime,
@@ -203,37 +202,6 @@ async fn mcp_2026_computer_app_is_minimal_handshake_and_snapshot_only() {
         );
     }
 
-    for legacy_uri in MCP_COMPUTER_UI_RESOURCE_LEGACY_URIS {
-        let legacy = handle_mcp_request(
-            &runtime,
-            rpc(
-                "resources/read",
-                Some(json!(21041)),
-                mcp_2026_params(json!({ "uri": legacy_uri })),
-            ),
-            None,
-        )
-        .await;
-        let McpOutcome::Ok(legacy) = legacy else {
-            panic!("legacy advertised UI resource must remain readable: {legacy_uri}");
-        };
-        assert_eq!(legacy["result"]["contents"][0]["uri"], *legacy_uri);
-        assert_eq!(legacy["result"]["ttlMs"], 0);
-        assert_eq!(legacy["result"]["cacheScope"], "private");
-        assert_eq!(
-            legacy["result"]["contents"][0]["mimeType"],
-            MCP_UI_RESOURCE_MIME_TYPE
-        );
-        assert_eq!(
-            legacy["result"]["contents"][0]["_meta"],
-            expected_resource_meta
-        );
-        assert_eq!(
-            legacy["result"]["contents"][0]["text"].as_str(),
-            Some(MCP_COMPUTER_APP_HTML)
-        );
-    }
-
     let unknown = handle_mcp_request(
         &runtime,
         rpc(
@@ -264,7 +232,7 @@ async fn mcp_2026_computer_app_is_minimal_handshake_and_snapshot_only() {
     assert!(names
         .iter()
         .any(|tool| { tool["name"] == crate::mcp::tools::ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME }));
-    assert!(!names.iter().any(|tool| tool["name"] == "computer_observe"));
+    assert!(!names.iter().any(|tool| tool["name"] == "observe_computer"));
 
     let no_ui_resources = handle_mcp_request(
         &runtime,
@@ -334,7 +302,7 @@ async fn mcp_computer_snapshot_resource_links_are_unique_caller_bound_and_scope_
 
     for generation in 1..=4u64 {
         let framed = mcp_runtime_tool_result_with_snapshot_resource(
-            "computer_observe",
+            "observe_computer",
             false,
             ToolResult::ok(json!({
                 "client_id": "msi",
@@ -431,7 +399,7 @@ async fn mcp_computer_snapshot_resource_links_are_unique_caller_bound_and_scope_
     let window_auth = snapshot_auth("snapshot-window-owner", false);
     let window_caller = mcp_artifact_export_caller_binding(Some(&window_auth)).unwrap();
     let window = mcp_runtime_tool_result_with_snapshot_resource(
-        "computer_observe",
+        "observe_computer",
         false,
         ToolResult::ok(json!({
             "client_id": "mini",

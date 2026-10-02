@@ -231,12 +231,12 @@ See also [`TESTING.md`](../TESTING.md).
   `unresolved_failures`, and separate evidence-gap facts. Resolved or stale
   history is advisory; only current actionable command/test failures are hard
   blockers.
-- `validation_summary` is a read of existing ledger evidence; it does not
+- `read_validation_summary` is a read of existing ledger evidence; it does not
   re-run Cargo/shell or replace `finish_coding_task`. Handoff and finish reuse
   this projection instead of building independent validation truth.
 - `continuation_feedback` (surfaced by `finish_coding_task` and
-  `session_handoff_summary`; its `validation_delta` part
-  also by `validation_summary`) is a deterministic, read-only projection of
+  `read_session_handoff`; its `validation_delta` part
+  also by `read_validation_summary`) is a deterministic, read-only projection of
   the prior attempt over existing ledger/evidence/Job/message-board state. It
   is never an LLM summary, never a new verdict, never a second attempt state
   machine, and introduces no new persistent table. Validation delta is only
@@ -281,9 +281,9 @@ canonical authority mode.
 | Default (unset/empty) | `trusted_agent`; source reported as `default` |
 | `trusted_agent` | Consequential runtime tools auto-execute after hard safety with no approval interruptions; external release actions remain user-task-scoped; every permission-bearing call records an auditable ledger decision (`policy=trusted_agent`, `status=auto_approved`, `reason=trusted_agent_authority`) |
 | `restricted` | Consequential runtime tools deny (`restricted_requires_human_authorization`); there is no separate Connector approval loop |
-| Legacy env set | Unambiguous legacy values migrate: `dev_auto_approve` → `trusted_agent`, `require_approval` → `restricted`; legacy-only configuration reports `migrated_env:WEBCODEX_PERMISSION_MODE`. Unknown or conflicting legacy/current values remain invalid and fail closed with source `rejected_legacy_env:WEBCODEX_PERMISSION_MODE` |
+| Retired env set | v0.5 rejects any set `WEBCODEX_PERMISSION_MODE`, even empty, with source `rejected_legacy_env:WEBCODEX_PERMISSION_MODE`. There is no automatic migration or value alias. Unset the variable and choose a canonical authority mode. |
 | Shared surfaces | Both modes share the same tool implementations, schemas, session model, evidence, and audit records |
-| Projection | `runtime_status` and internal full startup diagnostics report one canonical `authority` object; the sparse external `work_on_project` projection omits it. The old `permissions` profile object is deleted |
+| Projection | `get_runtime_status` and internal full startup diagnostics report one canonical `authority` object; the sparse external `work_on_project` projection omits it. The old `permissions` profile object is deleted |
 
 Hard boundaries are never relaxed by authority mode: OAuth scopes, project
 boundary/allowed roots, explicitly read-only sessions, path and sensitive-path
@@ -305,8 +305,8 @@ it never infers readiness from configuration.
 | Explicit Workflow targeting | Workflow Sessions have no implicit credential/window selection. Ordinary project tools without an explicit business Session or authorized wrapper recorder execute unlinked to Workflow Session state |
 | Full-runtime start/continue | `work_on_project(session_id=<id>)` continues exactly that authorized Active same-project Session; omission creates a fresh Workflow Session. Stable window or credential identity never selects a Workflow Session. `work_on_project` calls the shared coding workflow engine directly; there is no second internal ToolCall identity |
 | Canonical model coding bootstrap | `work_on_project` is the external runtime coding bootstrap. `registered_tool_specs` defines the canonical model-visible runtime universe used by discovery and generic ToolCall admission. There is one model-facing runtime contract: Adaptive Runtime. Canonical `ToolDefinition` rank defines direct admission/order; ordinary model-visible long-tail tools use `call_runtime_tool`; an admitted direct target may also use the gateway as an invocation fallback. Retired wire names such as `start_coding_task` fail closed before dispatch. |
-| Adaptive Runtime presentation | MCP and GPT Actions project the same canonical Adaptive routing policy. Protocol/App-only extensions are admitted independently by server-owned protocol capability and App metadata; they do not create another runtime surface. Direct/gateway dispatch preserves the target tool's scopes, Project authority, permission, argument, Runner capability, effect, and Session/ACK semantics. `WEBCODEX_MCP_COMPACT_SCHEMAS` changes MCP discovery schema projection only; unset defaults to compact discovery and explicit true/false overrides that projection. Runtime status, MCP initialize/discover/info, and tools/list audit summaries do not emit a redundant runtime-surface taxonomy. |
-| Meaningful-activity rule | `last_successful_tool_call` records only successful meaningful calls, scoped by principal/project/surface/session/tool. `runtime_status`, `list_tools`, `list_runners`, `list_projects`, and `tool_manifest` never refresh it. Bounded in-memory store; no arguments, outputs, or secrets |
+| Adaptive Runtime presentation | MCP project the same canonical Adaptive routing policy. Protocol/App-only extensions are admitted independently by server-owned protocol capability and App metadata; they do not create another runtime surface. Direct/gateway dispatch preserves the target tool's scopes, Project authority, permission, argument, Runner capability, effect, and Session/ACK semantics. `WEBCODEX_MCP_COMPACT_SCHEMAS` changes MCP discovery schema projection only; unset defaults to compact discovery and explicit true/false overrides that projection. Runtime status, MCP initialize/discover/info, and tools/list audit summaries do not emit a redundant runtime-surface taxonomy. |
+| Meaningful-activity rule | `last_successful_tool_call` records only successful meaningful calls, scoped by principal/project/surface/session/tool. `get_runtime_status`, `list_tools`, `list_runners`, `list_projects`, and `read_tool_manifest` never refresh it. Bounded in-memory store; no arguments, outputs, or secrets |
 | Independence | Layers degrade independently; `not_observed` on one layer must not be collapsed into a global offline verdict |
 
 ---
@@ -335,7 +335,7 @@ No alias or dual shape is kept for the removed flags (consistent with §2).
 ## 9. Mixed-version diagnostics without compatibility fallback
 
 Runner registration reports `process_started_at` and
-`build {version, git_commit, git_dirty}`; `runtime_status` projects
+`build {version, git_commit, git_dirty}`; `get_runtime_status` projects
 package/protocol compatibility separately from exact source alignment.
 
 | Decision | Choice |
@@ -430,34 +430,27 @@ the explicit `WEBCODEX_MCP_TEXT_JSON_COMPAT=true` compatibility projection to
 mirror that same canonical JSON into standard text content without changing the
 source of truth.
 
-The product concept and public lifecycle namespace are **Runner**. The local
-primary config filename is `runner.toml`, and all newly generated 0.4.x
-configuration uses that name. Persisted pre-0.4 startup state has a deliberately
-narrow compatibility window through the 0.4.x line: automatic/default/profile
-discovery still accepts a legacy-only `agent.toml`, while a directory containing
-both names fails closed so a stale legacy file cannot silently look authoritative.
-A directory containing neither creates/targets `runner.toml`. Explicit
-`--config PATH` remains exact and does not reinterpret the chosen filename.
-Explicit `--profile` similarly selects its authoritative profile directory
-before environment defaults are considered. `WEBCODEX_RUNNER_CONFIG` is the
-canonical default-path env override; legacy-only `WEBCODEX_AGENT_CONFIG` remains
-a deprecated fallback during 0.4.x, while setting both env names is ambiguous and
-fails closed. These persisted startup aliases are scheduled for removal at the
-0.5.0 compatibility boundary rather than a 0.4.x patch/minor restart.
+The product concept and public lifecycle namespace are **Runner**. The canonical
+local config filename is `runner.toml`. Through the 0.4.x line, persisted
+pre-0.4 startup state had a deliberately narrow migration window for
+`agent.toml`, `WEBCODEX_AGENT_CONFIG`, `projects_dir`, and a sole physical
+`projects.d/` registry. That compatibility ended at the 0.5 boundary.
 
-Runner-owned project registries use `project_registry_dir` and
-`project-registry/` for new state. During 0.4.x, a legacy-only persisted
-`projects_dir` field is normalized into the canonical runtime
-`project_registry_dir`; configuring both fields remains an error. The old
-`--projects-dir` CLI spelling stays retired because interactive CLI aliases are
-not required for cold-start compatibility. The physical legacy `projects.d/`
-directory remains readable in place when it is the sole default registry layout,
-so upgrading does not require an implicit data move. If both default directory
-names exist WebCodex fails closed; it does not merge, copy, rename, or choose
-between two registries implicitly. The registry remains a directory of
-Runner-owned project registration records, not a second workspace or project-root
-abstraction.
+From 0.5 onward, automatic/default/profile discovery targets only `runner.toml`;
+`WEBCODEX_RUNNER_CONFIG` is the only default-path environment override; Runner
+configuration uses only `project_registry_dir`; and default registry placement is
+only `project-registry/`. A retired `projects_dir` field is rejected before
+runtime use instead of being ignored or normalized, preventing an old config from
+silently retargeting to a different registry. A historical `agent.toml` or
+`projects.d/` artifact does not participate in discovery or precedence. Explicit
+`--config PATH` remains exact and may use any caller-chosen filename; this is not
+legacy filename discovery. Historical config/registry paths remain classified as
+sensitive so stale credentials or registration records are not accidentally
+searched, edited, packaged, or committed.
 
+The old `--projects-dir` CLI spelling stays retired. The registry remains a
+directory of Runner-owned project registration records, not a second workspace or
+project-root abstraction.
 Project registration provenance is also normalized before the `v0.4.0` floor.
 The generic project-record `kind` field remains open project metadata, while the
 optional `registration_source` field describes how the record entered the

@@ -37,63 +37,23 @@ pub(super) const MAX_MCP_ARTIFACT_EXPORTS_PER_CALLER: usize = 16;
 pub(super) const MCP_ARTIFACT_EXPORT_BUSY_CODE: i64 = -32029;
 pub(super) const MCP_UI_EXTENSION: &str = "io.modelcontextprotocol/ui";
 pub(super) const MCP_COMPUTER_UI_RESOURCE_URI: &str = "ui://webcodex/computer/v12";
-pub(super) const MCP_COMPUTER_UI_RESOURCE_LEGACY_URIS: &[&str] = &[
-    "ui://webcodex/computer/v1",
-    "ui://webcodex/computer/v2",
-    "ui://webcodex/computer/v3",
-    "ui://webcodex/computer/v4",
-    "ui://webcodex/computer/v5",
-    "ui://webcodex/computer/v6",
-    "ui://webcodex/computer/v7",
-    "ui://webcodex/computer/v8",
-    "ui://webcodex/computer/v9",
-    "ui://webcodex/computer/v10",
-    "ui://webcodex/computer/v11",
-];
 // Temporary gray-card diagnostic: force the host to re-read the canonical App
 // resource for every card so resource reuse/cache is not an unobserved variable.
 pub(super) const MCP_COMPUTER_UI_RESOURCE_TTL_MS: u64 = 0;
-pub(super) const MCP_RESULT_UI_RESOURCE_URI: &str = "ui://webcodex/changes/v2";
-pub(super) const MCP_RESULT_UI_RESOURCE_LEGACY_URIS: &[&str] = &[
-    "ui://webcodex/changes/v1",
-    "ui://webcodex/result/v1",
-    "ui://webcodex/result/v2",
-    "ui://webcodex/result/v3",
-];
-pub(super) const MCP_WORKBENCH_UI_RESOURCE_URI: &str = "ui://webcodex/workbench/v1";
+pub(super) const MCP_RESULT_UI_RESOURCE_URI: &str = "ui://webcodex/changes/v4";
+pub(super) const MCP_WORKBENCH_UI_RESOURCE_URI: &str = "ui://webcodex/workbench/v2";
 const MCP_WORKBENCH_APP_HTML: &str = include_str!("../mcp_workbench_app.html");
-
-pub(super) const MCP_WORK_RESULT_UI_RESOURCE_URI: &str = "ui://webcodex/work-result/v15";
-// Hosts can retain previously shipped Work Result / Changes resources across
-// deploys. Keep those URIs readable with the current safe template, but only the
-// canonical v15 descriptor admits a new card. Legacy payloads are never promoted
-// into authoritative Work Result state.
-pub(super) const MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS: &[&str] = &[
-    "ui://webcodex/work-result/v14",
-    "ui://webcodex/work-result/v13",
-    "ui://webcodex/work-result/v12",
-    "ui://webcodex/work-result/v11",
-    "ui://webcodex/work-result/v10",
-    "ui://webcodex/work-result/v9",
-    "ui://webcodex/work-result/v8",
-    "ui://webcodex/work-result/v7",
-    "ui://webcodex/work-result/v1",
-    "ui://webcodex/work-result/v2",
-    "ui://webcodex/work-result/v3",
-    "ui://webcodex/work-result/v4",
-    "ui://webcodex/work-result/v6",
-    "ui://webcodex/work-result/v5",
-    "ui://webcodex/changes/v3",
-];
+pub(super) const MCP_WORK_RESULT_UI_RESOURCE_URI: &str = "ui://webcodex/work-result/v16";
+// v0.5 uses one current template identity per App. Retired URIs are not aliases.
 // Goal Plan intentionally serves only one current resource identity. Hosts may
 // retain a live/cached View by URI across Server deploys, so any shipped App
 // template or incompatible App-tool wire change must advance this URI rather
 // than relying on a same-URI resource refresh.
-pub(super) const MCP_GOAL_PLAN_UI_RESOURCE_URI: &str = "ui://webcodex/goal-plan/v6";
+pub(super) const MCP_GOAL_PLAN_UI_RESOURCE_URI: &str = "ui://webcodex/goal-plan/v7";
 pub(super) const MCP_AGENT_CONTINUATION_UI_RESOURCE_URI: &str =
-    "ui://webcodex/agent-continuation/v17";
+    "ui://webcodex/agent-continuation/v18";
 pub(super) const MCP_JOB_TERMINAL_CONTINUATION_UI_RESOURCE_URI: &str =
-    "ui://webcodex/job-terminal-continuation/v1";
+    "ui://webcodex/job-terminal-continuation/v2";
 pub(super) const MCP_UI_RESOURCE_MIME_TYPE: &str = "text/html;profile=mcp-app";
 pub(super) const MCP_COMPUTER_APP_HTML: &str = include_str!("../mcp_computer_app.html");
 pub(super) const MCP_RESULT_APP_HTML: &str = include_str!("../mcp_result_app.html");
@@ -143,7 +103,7 @@ pub(super) fn mcp_computer_app_resources_list(domain: Option<&str>) -> Value {
         "resources": [{
             "uri": MCP_COMPUTER_UI_RESOURCE_URI,
             "name": "WebCodex Computer",
-            "description": "Minimal read-only WebCodex Computer screenshot card that performs only the standard MCP Apps handshake and renders native images returned by computer_observe snapshot actions.",
+            "description": "Minimal read-only WebCodex Computer screenshot card that performs only the standard MCP Apps handshake and renders native images returned by observe_computer snapshot actions.",
             "mimeType": MCP_UI_RESOURCE_MIME_TYPE,
             "_meta": mcp_computer_app_resource_meta(domain)
         }]
@@ -205,7 +165,7 @@ pub(super) fn mcp_app_resources_list(domain: Option<&str>) -> Value {
 }
 
 pub(super) fn is_mcp_computer_app_resource_uri(uri: &str) -> bool {
-    uri == MCP_COMPUTER_UI_RESOURCE_URI || MCP_COMPUTER_UI_RESOURCE_LEGACY_URIS.contains(&uri)
+    uri == MCP_COMPUTER_UI_RESOURCE_URI
 }
 
 pub(super) fn mcp_computer_app_resource_read(uri: &str, domain: Option<&str>) -> Option<Value> {
@@ -227,7 +187,7 @@ pub(super) fn mcp_computer_app_resource_read(uri: &str, domain: Option<&str>) ->
 }
 
 pub(super) fn is_mcp_result_app_resource_uri(uri: &str) -> bool {
-    uri == MCP_RESULT_UI_RESOURCE_URI || MCP_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&uri)
+    uri == MCP_RESULT_UI_RESOURCE_URI
 }
 
 pub(super) fn mcp_result_app_resource_read(uri: &str, domain: Option<&str>) -> Option<Value> {
@@ -244,7 +204,7 @@ pub(super) fn mcp_result_app_resource_read(uri: &str, domain: Option<&str>) -> O
 }
 
 pub(super) fn is_mcp_work_result_app_resource_uri(uri: &str) -> bool {
-    uri == MCP_WORK_RESULT_UI_RESOURCE_URI || MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&uri)
+    uri == MCP_WORK_RESULT_UI_RESOURCE_URI
 }
 
 pub(super) fn mcp_work_result_app_resource_read(uri: &str, domain: Option<&str>) -> Option<Value> {
@@ -279,27 +239,7 @@ pub(super) fn mcp_goal_plan_app_resource_read(uri: &str, domain: Option<&str>) -
 }
 
 pub(super) fn is_mcp_agent_continuation_app_resource_uri(uri: &str) -> bool {
-    // Thin hidden read aliases for existing cards; discovery advertises only v17.
     uri == MCP_AGENT_CONTINUATION_UI_RESOURCE_URI
-        || matches!(
-            uri,
-            "ui://webcodex/agent-continuation/v1"
-                | "ui://webcodex/agent-continuation/v2"
-                | "ui://webcodex/agent-continuation/v3"
-                | "ui://webcodex/agent-continuation/v4"
-                | "ui://webcodex/agent-continuation/v5"
-                | "ui://webcodex/agent-continuation/v6"
-                | "ui://webcodex/agent-continuation/v7"
-                | "ui://webcodex/agent-continuation/v8"
-                | "ui://webcodex/agent-continuation/v9"
-                | "ui://webcodex/agent-continuation/v10"
-                | "ui://webcodex/agent-continuation/v11"
-                | "ui://webcodex/agent-continuation/v12"
-                | "ui://webcodex/agent-continuation/v13"
-                | "ui://webcodex/agent-continuation/v14"
-                | "ui://webcodex/agent-continuation/v15"
-                | "ui://webcodex/agent-continuation/v16"
-        )
 }
 
 pub(super) fn mcp_agent_continuation_app_resource_read(
@@ -575,13 +515,13 @@ impl McpSnapshotResourceKind {
             return None;
         }
         match tool_name {
-            "browser_observe"
+            "observe_browser"
                 if output.get("browser_id").is_some() && output.get("page_id").is_some() =>
             {
                 Some(Self::Browser)
             }
-            "computer_observe" if output.get("display_id").is_some() => Some(Self::Display),
-            "computer_observe" => Some(Self::Window),
+            "observe_computer" if output.get("display_id").is_some() => Some(Self::Display),
+            "observe_computer" => Some(Self::Window),
             _ => None,
         }
     }
@@ -806,7 +746,7 @@ pub(super) fn mcp_runtime_tool_result_with_snapshot_resource(
     result_presentation: McpToolResultPresentation,
 ) -> Value {
     let native_image_requested = as_image_requested
-        || (matches!(tool_name, "computer_observe" | "browser_observe")
+        || (matches!(tool_name, "observe_computer" | "observe_browser")
             && result.output.get("content_base64").is_some());
     if native_image_requested && result.success {
         match mcp_native_image_tool_result(tool_name, &mut result, snapshot_caller) {
@@ -1749,12 +1689,12 @@ pub(super) fn project_artifact_presentation_mode(
     arguments: &Value,
 ) -> ProjectArtifactPresentationMode {
     match tool_name {
-        "read_project_artifact"
+        "read_project_artifact_chunk"
             if arguments.get("as_image").and_then(Value::as_bool) == Some(true) =>
         {
             ProjectArtifactPresentationMode::Image
         }
-        "project_artifact" => match arguments.get("action").and_then(Value::as_str) {
+        "inspect_project_artifact" => match arguments.get("action").and_then(Value::as_str) {
             Some("image") => ProjectArtifactPresentationMode::Image,
             Some("export") => ProjectArtifactPresentationMode::Export,
             _ => ProjectArtifactPresentationMode::None,
@@ -1764,7 +1704,7 @@ pub(super) fn project_artifact_presentation_mode(
 }
 
 fn artifact_export_operation_label(_tool_name: &str) -> &'static str {
-    "project_artifact(action=export)"
+    "inspect_project_artifact(action=export)"
 }
 
 #[derive(Debug, Default)]
@@ -1817,7 +1757,7 @@ pub(super) fn prepare_tool_call(
         None
     };
     let snapshot_resource_caller =
-        if stateless_2026 && matches!(tool_name, "computer_observe" | "browser_observe") {
+        if stateless_2026 && matches!(tool_name, "observe_computer" | "observe_browser") {
             mcp_artifact_export_caller_binding(auth).ok()
         } else {
             None
@@ -1852,7 +1792,7 @@ pub(super) fn adapt_tool_result(
         ));
     }
     if artifact_presentation == ProjectArtifactPresentationMode::Image
-        || matches!(tool_name, "computer_observe" | "browser_observe")
+        || matches!(tool_name, "observe_computer" | "observe_browser")
     {
         return McpResourceToolResultAdaptation::Framed(
             mcp_runtime_tool_result_with_snapshot_resource(

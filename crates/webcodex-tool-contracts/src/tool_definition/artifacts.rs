@@ -34,7 +34,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             false,
             super::ToolSessionEvidencePolicy::NONE,
             ),
-            "Write a bounded binary project artifact when the caller already holds the bounded binary/base64 content. Do not read a current ChatGPT/host attachment and base64-encode it through the model; use import_conversation_files_to_project for host-native attachment import. Suitable for generated images, PDFs, ZIP archives, and DOCX/PPTX/XLSX Office artifacts already present as bounded caller data; not for UTF-8 source edits.",
+            "Write a bounded binary project artifact when the caller already holds the bounded binary/base64 content. Do not read a current ChatGPT/host attachment and base64-encode it through the model; use import_host_files for host-native attachment import. Suitable for generated images, PDFs, ZIP archives, and DOCX/PPTX/XLSX Office artifacts already present as bounded caller data; not for UTF-8 source edits.",
         ),
         PERMISSION_RISK_ARTIFACT_WRITE,
     ),
@@ -42,7 +42,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
         permission_risk(
             model_spec(
                 def(
-                    "import_conversation_files_to_project",
+                    "import_host_files",
                     super::ToolAuditPolicy::TYPED_CANONICAL,
                     ModelVisible,
                     TOOL_CATEGORY_ARTIFACT,
@@ -62,7 +62,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                     super::ToolSessionEvidencePolicy::NONE,
                 ),
                 "Import 1..10 current ChatGPT/host attachments into a Runner project using openaiFileIdRefs from the host file-reference mechanism, up to 256 MiB per file. This is the preferred host-native attachment-to-project transfer path: do not base64-transfer files, construct download URLs, or use local /mnt/data paths; Control streams downloads into project artifacts. A multi-file batch is not atomic: if a later item fails, structured output preserves imported/succeeded items, identifies the failed item and reason, and sets partial_success=true. MCP trust has two tiers: an active authenticated OAuth client may import only from OpenAI file hosts; an exact WEBCODEX_OAUTH2_TRUSTED_MCP_FILE_CLIENT_IDS match may import from arbitrary public HTTPS. Both retain DNS/public-IP, pinning, redirect, bounded-download, and Project write protections.",
-            ).with_gpt_action_description("Import 1..10 current ChatGPT attachments (max 256 MiB each) into a Runner project through host-populated openaiFileIdRefs. Do not invent ids/URLs or base64-transfer attachments. Multi-file import is non-atomic and reports partial success; host provenance and runtime authority remain canonical."),
+            ),
             PERMISSION_RISK_ARTIFACT_WRITE,
         ),
         55,
@@ -94,14 +94,14 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 &[PROJECT_READ, PROJECT_WRITE],
             ),
             "Transfer one regular artifact directly from a source Project to a destination Project through Control. Requires source project:read and destination project:write; each Project is independently resolved and authorized. Control fences the exact source bytes/SHA-256/MIME snapshot, streams bounded internal chunks into the existing destination artifact upload protocol, and verifies the committed destination bytes/SHA-256. Binary payloads do not pass through Host attachments or model text. overwrite defaults to false.",
-        ).with_gpt_action_description("Transfer one Project artifact directly through Control. Requires project:read on source and project:write on destination; both are independently authorized. Streams exact bytes/SHA without Host attachments or model base64. overwrite defaults to false."),
+        ),
         PERMISSION_RISK_ARTIFACT_WRITE,
     ),
     permission_risk(
         model_spec(
             require_all_scopes(
                 def(
-                    "accept_artifact_handoff",
+                    "import_artifact_handoff",
                     super::ToolAuditPolicy::TYPED_CANONICAL,
                     ModelVisible,
                     TOOL_CATEGORY_ARTIFACT,
@@ -123,13 +123,13 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 &[PROJECT_WRITE],
             ),
             "Accept one exact artifact handoff grant as its bound destination principal and import the frozen source snapshot into the destination Project. Requires only destination project:write; the grant authorizes the exact source read. Control revalidates destination authority and grant state, re-reads the source snapshot through the existing snapshot-fenced Runner export path, fails stale on changed bytes, and streams bounded internal chunks into the existing destination artifact upload protocol. Same idempotency_key + complete request replays the original result; conflicting or one-shot replay fails closed.",
-        ).with_gpt_action_description("Accept an exact artifact handoff grant into the bound destination Project. Requires destination project:write only. Reuses snapshot-fenced Control↔Runner transfer, fails stale, and reconciles keyed retries."),
+        ),
         PERMISSION_RISK_ARTIFACT_WRITE,
     ),
     adaptive_runtime_direct(
         model_spec(
             def(
-                "project_artifact",
+                "inspect_project_artifact",
                 super::ToolAuditPolicy::TYPED_CANONICAL,
                 ModelVisible,
                 TOOL_CATEGORY_ARTIFACT,
@@ -148,9 +148,8 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
                 false,
                 super::ToolSessionEvidencePolicy::NONE,
             ),
-            "Project artifact read: metadata=facts; inspect=fenced segment; image=MCP image; export=MCP ResourceLink. Use export for whole files, not repeated inspect calls; use import_conversation_files_to_project for host-to-Project attachments.",
-        )
-        .with_gpt_action_description("Project artifact read surface. GPT Actions supports metadata and bounded inspect; native image and ResourceLink export require MCP."),
+            "Project artifact read: metadata=facts; inspect=fenced segment; image=MCP image; export=MCP ResourceLink. Use export for whole files, not repeated inspect calls; use import_host_files for host-to-Project attachments.",
+        ),
         56,
         super::ToolDirectReason::CoreWorkflow,
     ),
@@ -179,7 +178,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
     ),
     model_spec(
         def(
-            "read_project_artifact",
+            "read_project_artifact_chunk",
             super::ToolAuditPolicy::TYPED_CANONICAL,
             ModelVisible,
             TOOL_CATEGORY_ARTIFACT,
@@ -198,11 +197,11 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             false,
             super::ToolSessionEvidencePolicy::NONE,
         ),
-        "Bounded chunk inspection API for a project artifact. Returns base64 for one small segment plus full-file sha256/MIME metadata. A truncated ranged read emits one parser-ready suggested_call that carries the observed full-file sha256 as expected_sha256, so continuation either reads the same exact content incarnation or fails closed with snapshot_changed before returning changed bytes; do not manually translate next_offset or sha256 bookkeeping. If the goal is to deliver the complete file to ChatGPT/host/user, do not loop over base64 chunks; use project_artifact(action=export) instead.",
+        "Bounded chunk inspection API for a project artifact. Returns base64 for one small segment plus full-file sha256/MIME metadata. A truncated ranged read emits one parser-ready suggested_call that carries the observed full-file sha256 as expected_sha256, so continuation either reads the same exact content incarnation or fails closed with snapshot_changed before returning changed bytes; do not manually translate next_offset or sha256 bookkeeping. If the goal is to deliver the complete file to ChatGPT/host/user, do not loop over base64 chunks; use inspect_project_artifact(action=export) instead.",
     ),
     model_spec(
         def(
-            "artifact_upload_begin",
+            "begin_artifact_upload",
             super::ToolAuditPolicy::TYPED_CANONICAL,
             ModelVisible,
             TOOL_CATEGORY_ARTIFACT,
@@ -221,11 +220,11 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             false,
             super::ToolSessionEvidencePolicy::NONE,
         ),
-        "Begin a bounded low-level chunked binary artifact upload up to 256 MiB. Creates a project-local temporary upload session; finish commits atomically to the target path. This is not the preferred path for a current ChatGPT/host attachment; use import_conversation_files_to_project for host-native import. MIME is presentation metadata: unknown regular artifacts may use application/octet-stream; Project authorization, sensitive-path checks, root containment, symlink protection, fencing, and byte/SHA validation remain the safety boundary.",
+        "Begin a bounded low-level chunked binary artifact upload up to 256 MiB. Creates a project-local temporary upload session; finish commits atomically to the target path. This is not the preferred path for a current ChatGPT/host attachment; use import_host_files for host-native import. MIME is presentation metadata: unknown regular artifacts may use application/octet-stream; Project authorization, sensitive-path checks, root containment, symlink protection, fencing, and byte/SHA validation remain the safety boundary.",
     ),
     requires_artifact_upload_path_binding(model_spec(
         def(
-            "artifact_upload_chunk",
+            "upload_artifact_chunk",
             super::ToolAuditPolicy::TYPED_CANONICAL,
             ModelVisible,
             TOOL_CATEGORY_ARTIFACT,
@@ -244,12 +243,12 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             false,
             super::ToolSessionEvidencePolicy::NONE,
         ),
-        "Append one base64 chunk up to 1 MiB decoded to an active artifact upload. path is required and must exactly match artifact_upload_begin; this binds upload_id to the target path.",
+        "Append one base64 chunk up to 1 MiB decoded to an active artifact upload. path is required and must exactly match begin_artifact_upload; this binds upload_id to the target path.",
     )),
     requires_artifact_upload_path_binding(permission_risk(
         model_spec(
             def(
-            "artifact_upload_finish",
+            "finish_artifact_upload",
             super::ToolAuditPolicy::TYPED_CANONICAL,
             ModelVisible,
             TOOL_CATEGORY_ARTIFACT,
@@ -268,14 +267,14 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             false,
             super::ToolSessionEvidencePolicy::NONE,
             ),
-            "Finish an active artifact upload. path is required and must exactly match artifact_upload_begin; this binds upload_id before atomic commit.",
+            "Finish an active artifact upload. path is required and must exactly match begin_artifact_upload; this binds upload_id before atomic commit.",
         ),
         PERMISSION_RISK_ARTIFACT_WRITE,
     )),
     requires_artifact_upload_path_binding(permission_risk(
         model_spec(
             def(
-            "artifact_upload_abort",
+            "abort_artifact_upload",
             super::ToolAuditPolicy::TYPED_CANONICAL,
             ModelVisible,
             TOOL_CATEGORY_ARTIFACT,
@@ -294,7 +293,7 @@ pub(super) const DEFINITIONS: &[ToolDefinition] = &[
             false,
             super::ToolSessionEvidencePolicy::NONE,
             ),
-            "Abort an active artifact upload. path is required and must exactly match artifact_upload_begin; this binds upload_id before cleanup and reports final_file_exists without touching the final target.",
+            "Abort an active artifact upload. path is required and must exactly match begin_artifact_upload; this binds upload_id before cleanup and reports final_file_exists without touching the final target.",
         ),
         PERMISSION_RISK_ARTIFACT_WRITE,
     )),

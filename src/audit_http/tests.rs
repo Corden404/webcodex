@@ -35,7 +35,6 @@ fn seed_event(
 ) {
     let action_name = match endpoint {
         "/api/tools/call" => "callTool",
-        "/api/actions/{tool_name}" => "gpt_action",
         _ => operation,
     };
     record_action_event(
@@ -95,7 +94,7 @@ fn seed_attributed_event(
             session_title: None,
             endpoint: "/api/runtime/status".to_string(),
             action_name: "getRuntimeStatus".to_string(),
-            operation: Some("runtime_status".to_string()),
+            operation: Some("get_runtime_status".to_string()),
             project: Some("demo".to_string()),
             principal_kind: principal_kind.map(str::to_string),
             principal_user_id: principal_user_id.map(str::to_string),
@@ -368,7 +367,7 @@ async fn http_audit_stats_happy_path_scoped_to_session() {
     seed_event(
         &db,
         "stats-1",
-        "/api/actions/{tool_name}",
+        "/api/tools/call",
         "run_job",
         "success",
         json!({}),
@@ -376,7 +375,7 @@ async fn http_audit_stats_happy_path_scoped_to_session() {
     seed_event(
         &db,
         "stats-1",
-        "/api/actions/{tool_name}",
+        "/api/tools/call",
         "apply_unified_diff",
         "failed",
         json!({}),
@@ -390,7 +389,7 @@ async fn http_audit_stats_happy_path_scoped_to_session() {
         .await;
     assert_eq!(effective_status(&resp), StatusCode::OK);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["by_endpoint"]["/api/actions/{tool_name}"], 2);
+    assert_eq!(body["by_endpoint"]["/api/tools/call"], 2);
     assert_eq!(body["by_status"]["success"], 1);
     assert_eq!(body["by_status"]["failed"], 1);
     assert_eq!(body["job_count"], 1);
@@ -410,8 +409,8 @@ async fn http_audit_stats_global_over_recent_sessions() {
     seed_event(
         &db,
         "g-1",
-        "/api/actions/{tool_name}",
-        "git_status",
+        "/api/tools/call",
+        "get_git_status",
         "success",
         json!({}),
     );
@@ -432,7 +431,7 @@ async fn http_audit_stats_global_over_recent_sessions() {
         .await;
     assert_eq!(effective_status(&resp), StatusCode::OK);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["by_endpoint"]["/api/actions/{tool_name}"], 1);
+    assert_eq!(body["by_endpoint"]["/api/tools/call"], 1);
     assert_eq!(body["by_endpoint"]["/api/runtime/status"], 1);
     assert_eq!(body["git_count"], 1);
     assert_eq!(body["report_count"], 1);

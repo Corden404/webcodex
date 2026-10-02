@@ -37,10 +37,9 @@ shell state.
 
 Some compatibility-facing values still use the historical word `agent`, including the `wc_agent_*` Runner-token prefix and `agent:<client_id>:<project_id>` runtime Project address. They do not refer to WebCodex's separate Durable Agent domain, and ordinary users do not need the process-level lease identifiers behind Runner recovery.
 
-### Runner config filename migration
+### Runner configuration names
 
-`runner.toml` is the canonical config filename. During the WebCodex 0.4.x migration window, automatic/default/profile discovery still accepts a legacy-only `agent.toml`, and `WEBCODEX_AGENT_CONFIG` remains a deprecated fallback when `WEBCODEX_RUNNER_CONFIG` is unset. Likewise, a legacy-only `projects_dir` config field is normalized to `project_registry_dir` at load time. These compatibility inputs emit migration warnings and are planned for removal in WebCodex 0.5.0. Ambiguous dual state remains fail-closed: `runner.toml` plus `agent.toml`, both config-path environment variables, or both registry fields must be resolved by the operator. New/generated configurations always use `runner.toml`, `project_registry_dir`, and `WEBCODEX_RUNNER_CONFIG`.
-
+WebCodex 0.5 uses only the canonical Runner startup names: automatic/default/profile discovery targets `runner.toml`, the default-path environment override is `WEBCODEX_RUNNER_CONFIG`, the registry field is `project_registry_dir`, and the default registry directory is `project-registry/`. The 0.4.x compatibility inputs `agent.toml`, `WEBCODEX_AGENT_CONFIG`, `projects_dir`, and automatic `projects.d/` discovery are no longer startup inputs. A retired `projects_dir` field is rejected rather than silently ignored so an old configuration cannot appear to start against a different registry. Explicit `--config PATH` remains an exact caller-selected path; its filename is not reinterpreted.
 ## Connecting to the Server
 
 The Runner connects out to the Server using one of four transports, selected by
@@ -53,7 +52,7 @@ the `transport` setting in `runner.toml`:
 | WebSocket | `websocket` | Stable fallback for simple deployments without UDP. |
 | Polling | `polling` | Last-resort fallback for constrained networks. |
 
-The Runner authenticates with its Runner token (compatibility prefix `wc_agent_*`) or, in hosted shared-key mode, the matching shared key. This credential is for Runner transport only; it is not an MCP, REST, or GPT Actions credential.
+The Runner authenticates with its Runner token (compatibility prefix `wc_agent_*`) or, in hosted shared-key mode, the matching shared key. This credential is for Runner transport only; it is not an MCP or REST credential.
 
 WebSocket and polling authenticate the first-party Runner with
 `Authorization: Bearer <token>`; query-string Runner credentials are not
@@ -68,7 +67,7 @@ The exact protocol-generation field names, baseline capability list, registratio
 
 A ChatGPT Host message that the current conversation does not support developer
 MCPs is not a Runner heartbeat or reconnect result. If ChatGPT cannot dispatch
-`runtime_status`, first run `webcodex runner status` locally (and inspect bounded
+`get_runtime_status`, first run `webcodex runner status` locally (and inspect bounded
 Runner logs) before restarting or changing Runner configuration. See
 [Troubleshooting](TROUBLESHOOTING.md) for the Host-vs-Server-vs-Runner decision
 tree.
@@ -95,15 +94,7 @@ allow_patch = true
 `id` and `path` are the important fields; `kind` is optional descriptive metadata.
 The registry directory is storage for Project records, not a workspace root.
 
-New configurations use `project-registry/` and `project_registry_dir`. An
-existing installation whose only physical registry directory is `projects.d/`
-continues to use that directory in place. During 0.4.x, a legacy-only
-`projects_dir` config field is also accepted with a deprecation warning and is
-normalized to `project_registry_dir`; the old `--projects-dir` CLI flag remains
-retired. If both physical registry directories or both config fields exist,
-WebCodex fails closed instead of merging or guessing precedence. Use
-`--project-registry-dir` for explicit CLI selection.
-
+New configurations and default discovery use only `project-registry/` and `project_registry_dir`. WebCodex 0.5 does not automatically select a historical `projects.d/` directory, and the retired `projects_dir` config field is rejected with migration guidance. Move or explicitly recreate required registration records under the canonical registry before upgrading. The old `--projects-dir` CLI flag remains retired; use `--project-registry-dir` for explicit CLI selection.
 Runtime Project ids take the canonical shape `agent:<client_id>:<project_id>`, for example `agent:workstation:my-repo`. That canonical identity remains the authorization, persistence, audit, Runner-routing, diagnostic, API and CLI address. Model-facing bootstrap/discovery may additionally return a short Server-issued `project_ref` such as `~p1`. Models should normally reuse that selector on later Project-scoped tool calls instead of copying the canonical id. The mapping is durable and scoped to the authenticated caller, is pinned to the canonical id plus Runner-reported Project root identity, and grants no authority: every use re-runs current Project visibility/authorization. It never depends on Workflow Session, ClientWindow, MCP session, transport connection, recent activity or hidden Host state, and a stale ref is never silently rebound to another Project.
 
 ### Allowed roots
@@ -135,10 +126,10 @@ Runner's `allowed_roots` policy.
 
 ## Skill sources
 
-`skill_list` presents one catalog while preserving three distinct ownership and
+`list_skills` presents one catalog while preserving three distinct ownership and
 lifecycle models:
 
-**Available since v0.4.2:** configured live Runner Skill roots and the Managed Runner Skill Store participate in this unified catalog. WebCodex v0.4.1 `skill_list` did not implicitly scan `~/.codex/skills`; configure `[skills].roots` explicitly on v0.4.2+ when that directory should participate.
+**Available since v0.4.2:** configured live Runner Skill roots and the Managed Runner Skill Store participate in this unified catalog. WebCodex v0.4.1 `list_skills` did not implicitly scan `~/.codex/skills`; configure `[skills].roots` explicitly on v0.4.2+ when that directory should participate.
 
 | Source | Location / owner | Trust | Version semantics |
 | --- | --- | --- | --- |
@@ -174,7 +165,7 @@ roots = [
 A root has the form `<root>/<package>/SKILL.md`, with optional package resources
 such as `references/` and `scripts/`. These directories are read directly by the
 Runner. WebCodex does not modify files in configured roots or copy them into the
-managed Store; `skill_install`, `skill_activate`, and `skill_remove_revision`
+managed Store; `install_skill`, `activate_skill`, and `remove_skill_revision`
 continue to mutate only that Store. This non-mutating behavior does not make the
 source non-executable: `run_skill_resource` may execute supported `scripts/*.py`
 or `scripts/*.sh` from an operator-configured trusted Skill.
@@ -195,12 +186,12 @@ bytes: `run_skill_resource` re-reads the selected script at execution and return
 `skill_sha256` for the actual bytes executed. Managed installed Skills additionally
 use `expected_package_revision` to fence the immutable package. Changing the
 configured `roots` list is a hot-reloadable Runner configuration change: edit
-`runner.toml`, run `runner_config_check`, then `runner_config_reload` with the
+`runner.toml`, run `check_runner_config`, then `reload_runner_config` with the
 current generation. No Runner process restart is required.
 
 ## Runner build identity
 
-A connected Runner reports bounded, non-secret binary identity through `runtime_status(client_id=...)` and `list_runners`: package version, Git commit/dirty state, build timestamp, Cargo target triple, and architecture. Older Runners may omit any of these optional fields. This is intended for deployment/source-alignment diagnostics; executable paths, environment, tokens, and credentials are not included. `webcodex-runner --version` remains the local pre-connection identity check.
+A connected Runner reports bounded, non-secret binary identity through `get_runtime_status(client_id=...)` and `list_runners`: package version, Git commit/dirty state, build timestamp, Cargo target triple, and architecture. Older Runners may omit any of these optional fields. This is intended for deployment/source-alignment diagnostics; executable paths, environment, tokens, and credentials are not included. `webcodex-runner --version` remains the local pre-connection identity check.
 
 ## Runner-level configured instructions
 
@@ -257,7 +248,7 @@ sources make the instruction scan incomplete without exposing their native paths
 or failing the entire Project bootstrap.
 
 Changing `[instructions].files` is hot-reloadable: edit `runner.toml`, run
-`runner_config_check`, then `runner_config_reload` with the current generation.
+`check_runner_config`, then `reload_runner_config` with the current generation.
 No Runner restart is required. The files themselves remain live: editing a
 configured `AGENTS.md` is visible to the next `work_on_project`/new Project
 bootstrap without any config reload. Each Project bootstrap observes the current
@@ -631,7 +622,7 @@ generation; already-started SSH commands keep their own bounded lifecycle and
 are never redirected, replayed, or blindly retried.
 
 Authorized model clients can also onboard Runner-local SSH resources with the
-`ssh_resource` MCP tool. `list` returns only safe logical names plus
+`manage_ssh_resource` MCP tool. `list` returns only safe logical names plus
 `static|managed`, active/pending-restart state, and an opaque exact-Runner /
 registry-revision binding. `register` accepts one explicit OpenSSH destination
 argv and optional default cwd; `remove` deletes only managed desired state.
@@ -665,9 +656,9 @@ run on the repository machine:
 | Python | `pyright` | `pyproject.toml`, `setup.py`, `requirements.txt`, … |
 | TypeScript / JavaScript | `typescript-language-server` | `tsconfig.json`, `package.json`, … |
 
-The tools are `lsp_status`, `document_symbols`, `goto_definition`,
-`find_references`, `document_diagnostics`, `hover`, and `workspace_symbols`.
-The distinct `call_hierarchy` operation performs prepare plus bounded
+The tools are `get_lsp_status`, `list_document_symbols`, `find_definition`,
+`find_references`, `read_document_diagnostics`, `hover`, and `list_workspace_symbols`.
+The distinct `read_call_hierarchy` operation performs prepare plus bounded
 incoming/outgoing breadth-first traversal inside the Runner. The canonical
 Connector projects it as `code_impact`; raw protocol methods and opaque LSP
 item data are never exposed.
@@ -716,20 +707,20 @@ For an already-running Runner, use the first-class configuration workflow instea
 of finding its PID or sending signals manually:
 
 1. Edit the Runner's existing startup-bound `runner.toml`.
-2. Call `runner_config_check(client_id=...)`. It reads only that bound path, does
+2. Call `check_runner_config(client_id=...)`. It reads only that bound path, does
    not activate the candidate, and returns the current generation plus bounded
    validation/restart metadata.
 3. If valid, call
-   `runner_config_reload(client_id=..., expected_generation=<current_generation>)`.
+   `reload_runner_config(client_id=..., expected_generation=<current_generation>)`.
    The optimistic generation fence rejects stale callers before activation.
-4. Inspect `runtime_status(client_id=...)` (or `list_runners`) after reload.
+4. Inspect `get_runtime_status(client_id=...)` (or `list_runners`) after reload.
 
-`runner_config_reload` never writes `runner.toml`; it only activates the candidate
+`reload_runner_config` never writes `runner.toml`; it only activates the candidate
 already on disk. Hot-reloadable policy, shell, configured Skill roots, configured
 instruction files, Native Plugin, and static SSH-resource changes can become active
 immediately, while fields reported in `restart_required_fields`
 remain startup-only until the Runner restarts. Invalid candidates leave the active
-snapshot and generation unchanged. Managed `ssh_resource` mutations are different:
+snapshot and generation unchanged. Managed `manage_ssh_resource` mutations are different:
 they use a frozen startup snapshot and require a Runner restart exactly when the
 tool reports `restart_required=true`.
 

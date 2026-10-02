@@ -73,7 +73,7 @@ impl ToolRuntime {
 
             ToolCall::SshResource(_) => {
                 unreachable!(
-                    "ssh_resource is dispatched before generic static ToolDefinition policy"
+                    "manage_ssh_resource is dispatched before generic static ToolDefinition policy"
                 )
             }
 
@@ -237,11 +237,6 @@ impl ToolRuntime {
             | ToolCall::HeartbeatAgentTaskAttempt { .. }
             | ToolCall::CompleteAgentTaskAttempt { .. }) => {
                 self.dispatch_agent_work_authorized(call, auth).await
-            }
-
-            #[cfg(feature = "legacy-gpt-actions")]
-            call @ ToolCall::AttachAgentEndpoint { .. } => {
-                self.dispatch_agents_authorized(call, auth, window).await
             }
 
             call @ (ToolCall::CreateAgentIdentity { .. }

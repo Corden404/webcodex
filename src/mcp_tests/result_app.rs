@@ -20,23 +20,23 @@ fn presentation<'a>(call_result: &'a Value) -> &'a Value {
 
 const RESULT_APP_TOOLS: [&str; 0] = [];
 const UNBOUND_RESULT_APP_TOOLS: [&str; 17] = [
-    "show_changes",
+    "read_workspace_changes",
     "list_jobs",
     "observe_jobs",
     "cargo_check",
     "cargo_test",
     "go_test",
-    "validation_summary",
-    "git_review_summary",
+    "read_validation_summary",
+    "read_git_review_summary",
     "cargo_fmt",
     "run_shell",
     "run_process",
     "run_job",
     "finish_coding_task",
-    "git_diff_hunks",
-    "git_status",
-    "git_commit_paths",
-    "git_restore_paths",
+    "read_git_diff_hunks",
+    "get_git_status",
+    "commit_git_paths",
+    "restore_git_paths",
 ];
 
 fn assert_presentation_strings_bounded(value: &Value) {
@@ -65,31 +65,6 @@ fn projected_result(tool_name: &str, success: bool, output: Value) -> Value {
     super::super::presentation::attach_result_app_presentation(tool_name, &mut framed);
     assert_eq!(framed["structuredContent"], structured_before);
     framed
-}
-
-async fn handle_with_server_apps_enabled(
-    runtime: &ToolRuntime,
-    request: JsonRpcRequest,
-    auth: Option<&crate::auth::AuthContext>,
-    server_mcp_apps_enabled: bool,
-) -> McpOutcome {
-    let protocol_era = super::super::inferred_protocol_era(&request);
-    super::super::handle_mcp_request_with_lifecycle(
-        runtime,
-        request,
-        auth,
-        protocol_era,
-        super::super::HostFileImportTrust::Untrusted,
-        None,
-        None,
-        None,
-        crate::model_surface::effective_mcp_compact_schemas(
-            crate::config::mcp_compact_schemas_override(),
-        ),
-        server_mcp_apps_enabled,
-        None,
-    )
-    .await
 }
 
 #[test]
@@ -171,23 +146,11 @@ fn result_tool_app_metadata_is_capability_scoped_compact_safe_and_merge_safe() {
 async fn result_app_descriptor_and_resource_exposure_require_ui_operator_capability() {
     const PUBLIC_URL: &str = "https://self-host.example";
     let runtime = test_runtime_with_public_url(PUBLIC_URL);
-    assert_eq!(MCP_RESULT_UI_RESOURCE_URI, "ui://webcodex/changes/v2");
+    assert_eq!(MCP_RESULT_UI_RESOURCE_URI, "ui://webcodex/changes/v4");
     assert_eq!(
         MCP_WORK_RESULT_UI_RESOURCE_URI,
-        "ui://webcodex/work-result/v15"
+        "ui://webcodex/work-result/v16"
     );
-    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v9"));
-    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v10"));
-    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v11"));
-    assert!(MCP_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/changes/v1"));
-    assert!(MCP_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/result/v1"));
-    assert!(MCP_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/result/v2"));
-    assert!(MCP_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/result/v3"));
-    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v1"));
-    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v2"));
-    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v4"));
-    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v5"));
-    assert!(MCP_WORK_RESULT_UI_RESOURCE_LEGACY_URIS.contains(&"ui://webcodex/work-result/v6"));
     assert!(mcp_result_app_resource_meta(None)["ui"]
         .get("domain")
         .is_none());
@@ -311,27 +274,6 @@ async fn result_app_descriptor_and_resource_exposure_require_ui_operator_capabil
         read["result"]["contents"][0]["_meta"]["ui"]["domain"],
         PUBLIC_URL
     );
-    for legacy_uri in MCP_RESULT_UI_RESOURCE_LEGACY_URIS {
-        let legacy = handle_mcp_request(
-            &runtime,
-            rpc(
-                "resources/read",
-                Some(json!(32041)),
-                mcp_2026_params(json!({"uri": legacy_uri})),
-            ),
-            None,
-        )
-        .await;
-        let McpOutcome::Ok(legacy) = legacy else {
-            panic!("legacy Result App resource must remain readable: {legacy_uri}");
-        };
-        assert_eq!(legacy["result"]["contents"][0]["uri"], *legacy_uri);
-        assert_eq!(legacy["result"]["contents"][0]["text"], MCP_RESULT_APP_HTML);
-        assert_eq!(
-            legacy["result"]["contents"][0]["_meta"]["ui"]["domain"],
-            PUBLIC_URL
-        );
-    }
 
     let no_ui_resources = handle_mcp_request(
         &runtime,
@@ -386,7 +328,7 @@ async fn result_app_descriptor_and_resource_exposure_require_ui_operator_capabil
 async fn server_mcp_apps_setting_disables_only_app_presentation() {
     let runtime = test_runtime();
 
-    let enabled = handle_with_server_apps_enabled(
+    let enabled = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/list",
@@ -408,7 +350,7 @@ async fn server_mcp_apps_setting_disables_only_app_presentation() {
         MCP_WORK_RESULT_UI_RESOURCE_URI
     );
 
-    let discover = handle_with_server_apps_enabled(
+    let discover = handle_with_app_policy(
         &runtime,
         rpc(
             "server/discover",
@@ -426,7 +368,7 @@ async fn server_mcp_apps_setting_disables_only_app_presentation() {
     assert_eq!(capabilities["resources"]["listChanged"], false);
     assert!(capabilities["extensions"].get(MCP_UI_EXTENSION).is_none());
 
-    let tools = handle_with_server_apps_enabled(
+    let tools = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/list",
@@ -446,7 +388,7 @@ async fn server_mcp_apps_setting_disables_only_app_presentation() {
             .is_none());
     }
 
-    let resources = handle_with_server_apps_enabled(
+    let resources = handle_with_app_policy(
         &runtime,
         rpc(
             "resources/list",
@@ -464,7 +406,7 @@ async fn server_mcp_apps_setting_disables_only_app_presentation() {
         .as_array()
         .is_some_and(Vec::is_empty));
 
-    let read = handle_with_server_apps_enabled(
+    let read = handle_with_app_policy(
         &runtime,
         rpc(
             "resources/read",
@@ -485,7 +427,7 @@ async fn server_mcp_apps_setting_disables_only_app_presentation() {
         other => panic!("disabled static App resource must fail closed: {other:?}"),
     }
 
-    let computer_read = handle_with_server_apps_enabled(
+    let computer_read = handle_with_app_policy(
         &runtime,
         rpc(
             "resources/read",
@@ -506,7 +448,7 @@ async fn server_mcp_apps_setting_disables_only_app_presentation() {
         other => panic!("disabled Computer App resource must fail closed: {other:?}"),
     }
 
-    let call = handle_with_server_apps_enabled(
+    let call = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/call",
@@ -969,7 +911,7 @@ fn validation_summary_presentation_preserves_evidence_statuses_and_history_bound
     ];
     for (status, current_status, evidence_gap_count) in cases {
         let framed = projected_result(
-            "validation_summary",
+            "read_validation_summary",
             true,
             json!({
                 "validation": {
@@ -1046,7 +988,7 @@ fn validation_summary_presentation_bounds_events_and_excludes_private_event_fiel
         })
         .collect::<Vec<_>>();
     let framed = projected_result(
-        "validation_summary",
+        "read_validation_summary",
         true,
         json!({
             "validation": {
@@ -1104,7 +1046,7 @@ fn validation_summary_presentation_bounds_events_and_excludes_private_event_fiel
 #[test]
 fn git_changes_presentation_preserves_canonical_workspace_states() {
     let clean = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": true,
@@ -1138,7 +1080,7 @@ fn git_changes_presentation_preserves_canonical_workspace_states() {
     assert_eq!(clean_meta["files_total"], 0);
 
     let dirty = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": true,
@@ -1190,7 +1132,7 @@ fn git_changes_presentation_preserves_canonical_workspace_states() {
     );
 
     let stats_unavailable = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": true,
@@ -1214,7 +1156,7 @@ fn git_changes_presentation_preserves_canonical_workspace_states() {
     assert!(stats_unavailable_meta.get("deletions").is_none());
 
     let non_git = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": false,
@@ -1269,7 +1211,7 @@ fn git_changes_presentation_bounds_paths_and_excludes_raw_private_fields() {
         })
     }));
     let framed = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": true,
@@ -1371,7 +1313,7 @@ fn git_changes_presentation_bounds_diff_hunks_and_text() {
         .map(|_| json!({"diff": oversized_diff, "truncated": false}))
         .collect::<Vec<_>>();
     let framed = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": true,
@@ -1411,7 +1353,7 @@ fn git_changes_presentation_bounds_diff_hunks_and_text() {
         .map(|index| json!({"diff": format!("@@ -1 +1 @@\n-old-{index}\n+new-{index}"), "truncated": false}))
         .collect::<Vec<_>>();
     let exact_budget = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": true,
@@ -1453,7 +1395,7 @@ fn git_changes_presentation_distributes_diff_preview_across_presented_files() {
         })
         .collect::<Vec<_>>();
     let framed = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": true,
@@ -1488,7 +1430,7 @@ fn git_changes_presentation_matches_diff_hunks_before_display_path_truncation() 
     let first_path = format!("{shared}-first.rs");
     let second_path = format!("{shared}-second.rs");
     let framed = projected_result(
-        "show_changes",
+        "read_workspace_changes",
         true,
         json!({
             "git_available": true,
@@ -1530,7 +1472,7 @@ fn git_review_presentation_preserves_scope_stats_files_and_partial_state() {
     let base = "a".repeat(40);
     let head = "b".repeat(40);
     let complete = projected_result(
-        "git_review_summary",
+        "read_git_review_summary",
         true,
         json!({
             "scope": {"requested_base": base, "requested_head": head, "merge_base": "a".repeat(40), "base_is_ancestor": true, "commit_count": 3, "diff_range": "raw range"},
@@ -1569,7 +1511,7 @@ fn git_review_presentation_preserves_scope_stats_files_and_partial_state() {
     assert_eq!(meta["truncated"], false);
 
     let partial = projected_result(
-        "git_review_summary",
+        "read_git_review_summary",
         true,
         json!({
             "scope": {"requested_base": "c".repeat(40), "requested_head": "d".repeat(40), "merge_base": "c".repeat(40), "base_is_ancestor": true, "commit_count": 9},
@@ -1626,7 +1568,7 @@ fn git_review_presentation_bounds_file_metadata_and_excludes_raw_diff_context() 
         })
     }));
     let framed = projected_result(
-        "git_review_summary",
+        "read_git_review_summary",
         true,
         json!({
             "scope": {"requested_base": base, "requested_head": head, "merge_base": "e".repeat(40), "base_is_ancestor": true, "commit_count": 2, "diff_range": format!("{}..{}", "e".repeat(40), "f".repeat(40))},
@@ -1989,7 +1931,7 @@ async fn mcp_show_changes_result(
     let params = json!({
         "name": "call_runtime_tool",
         "arguments": {
-            "tool": "show_changes",
+            "tool": "read_workspace_changes",
             "arguments": {"project": "agent:result-app-runner:demo", "include_diff": false}
         }
     });
@@ -1998,7 +1940,7 @@ async fn mcp_show_changes_result(
     } else {
         mcp_2026_params(params)
     };
-    let call = handle_with_server_apps_enabled(
+    let call = handle_with_app_policy(
         runtime,
         rpc("tools/call", Some(json!(id)), params),
         Some(auth),
@@ -2010,7 +1952,7 @@ async fn mcp_show_changes_result(
     };
     let (outcome, _) = tokio::join!(call, complete);
     let McpOutcome::Ok(body) = outcome else {
-        panic!("expected show_changes MCP result");
+        panic!("expected read_workspace_changes MCP result");
     };
     body["result"].clone()
 }
@@ -2240,7 +2182,7 @@ async fn mcp_validation_run_and_summary_use_real_canonical_contracts() {
             mcp_2026_ui_params(json!({
                 "name": crate::mcp::tools::ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME,
                 "arguments": {
-                    "tool": "validation_summary",
+                    "tool": "read_validation_summary",
                     "arguments": {"project": project, "session_id": session.session_id}
                 }
             })),
@@ -2249,7 +2191,7 @@ async fn mcp_validation_run_and_summary_use_real_canonical_contracts() {
     )
     .await;
     let McpOutcome::Ok(summary) = summary else {
-        panic!("expected real validation_summary MCP result");
+        panic!("expected real read_validation_summary MCP result");
     };
     let summary_result = &summary["result"];
     let canonical_validation = &summary_result["structuredContent"]["output"]["validation"];
@@ -2275,7 +2217,7 @@ async fn mcp_validation_run_and_summary_use_real_canonical_contracts() {
         1
     );
 
-    let disabled = handle_with_server_apps_enabled(
+    let disabled = handle_with_app_policy(
         &runtime,
         rpc(
             "tools/call",
@@ -2283,7 +2225,7 @@ async fn mcp_validation_run_and_summary_use_real_canonical_contracts() {
             mcp_2026_ui_params(json!({
                 "name": crate::mcp::tools::ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME,
                 "arguments": {
-                    "tool": "validation_summary",
+                    "tool": "read_validation_summary",
                     "arguments": {"project": project, "session_id": session.session_id}
                 }
             })),
@@ -2293,7 +2235,7 @@ async fn mcp_validation_run_and_summary_use_real_canonical_contracts() {
     )
     .await;
     let McpOutcome::Ok(disabled) = disabled else {
-        panic!("Apps-disabled validation_summary should remain callable");
+        panic!("Apps-disabled read_validation_summary should remain callable");
     };
     assert_eq!(
         disabled["result"]["structuredContent"],
@@ -2311,7 +2253,7 @@ async fn mcp_validation_run_and_summary_use_real_canonical_contracts() {
             mcp_2026_params(json!({
                 "name": crate::mcp::tools::ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME,
                 "arguments": {
-                    "tool": "validation_summary",
+                    "tool": "read_validation_summary",
                     "arguments": {"project": project, "session_id": session.session_id}
                 }
             })),
@@ -2320,7 +2262,7 @@ async fn mcp_validation_run_and_summary_use_real_canonical_contracts() {
     )
     .await;
     let McpOutcome::Ok(plain) = plain else {
-        panic!("non-UI validation_summary should remain callable");
+        panic!("non-UI read_validation_summary should remain callable");
     };
     assert_eq!(
         plain["result"]["structuredContent"],
