@@ -250,7 +250,9 @@ impl ShellJobValidationStep {
             }
             ("check", "python") => args == ["-m", "ruff", "check"] || args == ["-m", "mypy"],
             ("test", "python") => {
-                args == ["-m", "pytest"] || args == ["-B", "-m", "unittest", "discover", "-v"]
+                args == ["-m", "pytest"]
+                    || args == ["-B", "-m", "unittest", "discover", "-v"]
+                    || self.is_structured_pytest()
             }
             (kind, "npm" | "pnpm" | "yarn" | "bun") => {
                 args.len() == 3
@@ -260,6 +262,20 @@ impl ShellJobValidationStep {
             }
             _ => false,
         }
+    }
+
+    /// Exact project pytest argv; no executable, free flags or environment input.
+    pub fn is_structured_pytest(&self) -> bool {
+        if self.name != "test" || self.program != "python" || !self.env.is_empty() {
+            return false;
+        }
+        let args = self.args.iter().map(String::as_str).collect::<Vec<_>>();
+        let base = ["-m", "pytest", "--color=no", "-rA"];
+        args == base
+            || (args.len() == 6
+                && args[..4] == base
+                && args[4] == "-k"
+                && matches!(normalize_pytest_filter(args[5]), Ok(Some(value)) if value == args[5]))
     }
 
     /// True only for the first-class machine-readable Go test shape. Package
@@ -462,6 +478,18 @@ fn normalize_go_package(raw: &str) -> Result<String, &'static str> {
         }
     }
     Ok(raw.to_string())
+}
+
+/// A single native pytest -k expression. Preserve its whitespace except the
+/// all-whitespace spelling of no selection; reject option-shaped values.
+pub fn normalize_pytest_filter(raw: &str) -> Result<Option<String>, &'static str> {
+    if raw.len() > RUST_TEST_FILTER_MAX_BYTES
+        || raw.chars().any(char::is_control)
+        || raw.trim_start().starts_with('-')
+    {
+        return Err("pytest filter must be a bounded -k expression, not flags");
+    }
+    Ok((!raw.trim().is_empty()).then(|| raw.to_string()))
 }
 
 /// Bounded native Go -run expression. Do not trim: spaces and slash-separated
@@ -808,12 +836,18 @@ impl ShellJobValidationMetadata {
             return false;
         }
         if self.minimum_tests.is_some()
-            && !matches!(self.adapter.as_str(), "cargo_test" | "go_test")
+            && !matches!(
+                self.adapter.as_str(),
+                "cargo_test" | "go_test" | "python:pytest:test"
+            )
         {
             return false;
         }
         if (self.require_tests.is_some() || self.no_run.is_some())
-            && !matches!(self.adapter.as_str(), "cargo_test" | "go_test")
+            && !matches!(
+                self.adapter.as_str(),
+                "cargo_test" | "go_test" | "python:pytest:test"
+            )
         {
             return false;
         }
@@ -838,6 +872,7 @@ impl ShellJobValidationMetadata {
                     (provenance.backend.as_str(), self.adapter.as_str()),
                     ("rust", "cargo_fmt" | "cargo_check" | "cargo_test")
                         | ("go", "go_vet" | "go_test")
+                        | ("python", "python:pytest:test")
                 )
                 || (self.require_tests, self.minimum_tests)
                     != provenance.request.test_requirements()
@@ -858,6 +893,11 @@ impl ShellJobValidationMetadata {
             }
             "cargo_test" => self.kind == "test" && step.name == "test" && step.program == "cargo",
             "go_test" => self.kind == "test" && step.is_structured_go_test_json(),
+            "python:pytest:test" => {
+                self.tool == "project_validate"
+                    && self.kind == "test"
+                    && step.is_structured_pytest()
+            }
             "go_vet" => self.kind == "check" && step.name == "check" && step.program == "go",
             _ => false,
         }

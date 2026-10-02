@@ -1455,3 +1455,13 @@ fn process_alias_and_python_are_host_visible_without_opening_objects() {
     let shell = input_schema_for_tool("run_shell");
     assert_eq!(shell["properties"]["login"]["type"], "boolean");
 }
+
+#[test]
+fn project_validation_python_adapter_is_public_without_a_pytest_tool() {
+    let value = json!({"project":"demo","action":"test","adapter":"python",
+        "test":{"filter":"selected and not slow","require_tests":true,"min_tests":2}});
+    let schema = input_schema_for_tool("project_validate");
+    assert!(test_support::validate_schema_instance(&value, &schema).is_ok());
+    assert!(ToolCall::from_tool_name("project_validate", value).is_ok());
+    assert!(ToolCall::from_tool_name("pytest", json!({"project":"demo"})).is_err());
+}

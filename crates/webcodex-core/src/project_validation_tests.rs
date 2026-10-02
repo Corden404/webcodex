@@ -244,3 +244,77 @@ fn project_validation_locked_policy_rejects_format_check_without_silent_ignore()
         "dependency_policy requires project_validate action=check or test"
     );
 }
+
+#[test]
+fn project_validation_python_argv_identity_and_metadata_are_closed() {
+    use crate::runner_protocol::{
+        normalize_pytest_filter, ShellJobValidationMetadata, ShellJobValidationStep,
+    };
+    use crate::validation_identity::{
+        structured_validation_target_identity, ToolValidationIdentityKind,
+    };
+    let step = ShellJobValidationStep {
+        name: "test".into(),
+        program: "python".into(),
+        args: [
+            "-m",
+            "pytest",
+            "--color=no",
+            "-rA",
+            "-k",
+            "name and not slow",
+        ]
+        .map(str::to_string)
+        .to_vec(),
+        env: vec![],
+    };
+    assert!(step.is_canonical() && step.is_structured_pytest());
+    for filter in ["--collect-only", " -x", "x\ny", &"a".repeat(201)] {
+        assert!(normalize_pytest_filter(filter).is_err());
+    }
+    assert_eq!(normalize_pytest_filter("  ").unwrap(), None);
+    let identity = |filter| {
+        structured_validation_target_identity(
+            ToolValidationIdentityKind::PythonPytest,
+            &serde_json::json!({"cwd":".","filter":filter}),
+        )
+        .unwrap()
+    };
+    assert_eq!(identity(None::<&str>), identity(Some("")));
+    assert_ne!(identity(Some("name")), identity(Some("other")));
+    let mut metadata = ShellJobValidationMetadata {
+        tool: "project_validate".into(),
+        kind: "test".into(),
+        steps: vec![step],
+        effective_timeout_secs: 60,
+        sync_wait_secs: 1,
+        adapter: "python:pytest:test".into(),
+        validation_target_id: Some(identity(Some("name and not slow"))),
+        source_fence: None,
+        minimum_tests: Some(1),
+        require_tests: Some(true),
+        no_run: None,
+        project_validation: Some(ProjectValidationProvenance {
+            request: ProjectValidationRequest {
+                project_id: "demo".into(),
+                cwd: None,
+                action: ProjectValidationAction::Test,
+                adapter: ProjectValidationAdapter::Python,
+                scope: None,
+                dependency_policy: None,
+                test: None,
+            },
+            backend: "python".into(),
+            recipe_root: ".".into(),
+            root_digest: "a".repeat(64),
+            manifest_digest: "b".repeat(64),
+            invocation_digest: "c".repeat(64),
+        }),
+    };
+    assert!(metadata.is_valid());
+    let wire =
+        serde_json::to_value(&metadata.project_validation.as_ref().unwrap().request).unwrap();
+    assert_eq!(wire["adapter"], "python");
+    metadata.steps[0].args.push("--collect-only".into());
+    assert!(!metadata.is_valid());
+}

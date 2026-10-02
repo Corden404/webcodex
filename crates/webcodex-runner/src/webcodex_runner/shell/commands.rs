@@ -186,6 +186,65 @@ pub(crate) fn configured_prepared_shell_job_command(
     Ok(cmd)
 }
 
+/// Resolve one existing Python runtime and use that exact executable and profile
+/// environment for both the bounded availability probe and actual pytest spawn.
+/// No shell fallback, environment creation or package installation is permitted.
+pub(crate) fn configured_pytest_job_command(
+    shell: &ShellConfig,
+    profile: Option<&PreparedShellProfile>,
+    args: &[String],
+    cwd: &Path,
+    stop_requested: Option<&AtomicBool>,
+) -> Result<Command, String> {
+    let unavailable =
+        || webcodex_core::runner_protocol::VALIDATION_TOOL_UNAVAILABLE_CODE.to_string();
+    let program = configured_script_interpreter(shell, profile, ShellScriptLanguage::Python)
+        .map_err(|_| unavailable())?;
+    let mut probe = Command::new(&program);
+    const PROBE: &str = "import sys,importlib.util;sys.exit(0 if sys.version_info.major == 3 and importlib.util.find_spec('pytest') else 42)";
+    // Keep the same profile PYTHONPATH/module search environment as the actual
+    // pytest process. Isolation here would reject explicitly configured tooling.
+    probe
+        .args(["-c", PROBE])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    super::scripts::apply_script_environment(&mut probe, shell, profile)
+        .map_err(|_| unavailable())?;
+    // PYTEST_ADDOPTS is parsed as additional command-line argv before pytest
+    // resolves rootdir/config. Structured validation owns the complete argv, so
+    // ambient profile/shell values must not widen selection or inject flags.
+    probe.env_remove("PYTEST_ADDOPTS");
+    if stop_requested.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err(unavailable());
+    }
+    let mut child = ManagedChild::spawn(&mut probe).map_err(|_| unavailable())?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let available = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None)
+                if Instant::now() < deadline
+                    && !stop_requested.is_some_and(|flag| flag.load(Ordering::SeqCst)) =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => break false,
+        }
+    };
+    // Probe descendants must not outlive preflight, including success and timeout.
+    if terminate_child_process_tree(&mut child).is_err() || !available {
+        return Err(unavailable());
+    }
+    let mut command = Command::new(&program);
+    command.args(args);
+    super::scripts::apply_script_environment(&mut command, shell, profile)
+        .map_err(|_| unavailable())?;
+    command.env_remove("PYTEST_ADDOPTS");
+    Ok(command)
+}
+
 pub(crate) fn configured_validation_job_command(
     shell: &ShellConfig,
     profile: Option<&PreparedShellProfile>,

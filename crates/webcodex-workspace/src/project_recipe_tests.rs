@@ -132,7 +132,10 @@ fn explicit_python_keeps_manifestless_cwd_even_with_other_markers() {
             .unwrap();
     assert_eq!(resolved.recipe, ProjectRecipeId::Python);
     assert_eq!(resolved.relative_root, "nested");
-    assert_eq!(resolved.absolute_root, temp.path().join("nested"));
+    assert_eq!(
+        resolved.absolute_root,
+        temp.path().join("nested").canonicalize().unwrap()
+    );
 }
 
 #[test]

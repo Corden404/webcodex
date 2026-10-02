@@ -192,11 +192,11 @@ fn blocked_max_prompt_write_respects_total_deadline_and_reaps_tree() {
         PromptDispatchGateState::PromptDispatchMayHaveOccurred
     );
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
@@ -206,8 +206,8 @@ fn blocked_max_prompt_write_respects_total_deadline_and_reaps_tree() {
     assert_eq!(manager.worker_count(), 0);
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }
 
@@ -252,11 +252,11 @@ fn cancel_returns_while_max_prompt_write_is_blocked() {
         CodingAgentExecutionState::OutcomeUnknown
     );
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
@@ -265,8 +265,8 @@ fn cancel_returns_while_max_prompt_write_is_blocked() {
     assert_eq!(manager.worker_count(), 0);
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }
 
@@ -302,18 +302,18 @@ fn shutdown_remains_bounded_while_max_prompt_write_is_blocked() {
         CodingAgentExecutionState::OutcomeUnknown
     );
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }
 
@@ -388,19 +388,19 @@ fn blocked_cancel_notification_is_bounded_by_cancel_grace() {
         Some("coding_agent_cancel_write_uncertain")
     );
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
     assert_eq!(manager.worker_count(), 0);
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }
 
@@ -621,11 +621,11 @@ fn shutdown_drains_setup_worker_and_reaps_provider_tree() {
     wait_for_path(&temp.path().join("initialize.ready"));
     assert!(manager.worker_count() > 0);
     let log = wire_log(&temp);
-    let startup_pid = log
+    let _startup_pid = log
         .iter()
         .find_map(|entry| entry.get("startup_pid").and_then(Value::as_u64))
         .unwrap();
-    let descendant_pid = log
+    let _descendant_pid = log
         .iter()
         .find_map(|entry| entry.get("descendant_pid").and_then(Value::as_u64))
         .unwrap();
@@ -652,7 +652,7 @@ fn shutdown_drains_setup_worker_and_reaps_provider_tree() {
     );
     #[cfg(target_os = "linux")]
     {
-        wait_for_proc_exit(startup_pid);
-        wait_for_proc_exit(descendant_pid);
+        wait_for_proc_exit(_startup_pid);
+        wait_for_proc_exit(_descendant_pid);
     }
 }

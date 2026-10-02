@@ -323,7 +323,7 @@ fn project_validation_nearest_root_hint_and_ambiguity() {
 }
 #[test]
 fn project_validation_deferred_backends_do_not_resolve_scripts() {
-    for (marker, backend) in [("package.json", "node"), ("pyproject.toml", "python")] {
+    for (marker, backend) in [("package.json", "node")] {
         let (_tmp, _root, registry, policy) = fixture(marker);
         assert_eq!(
             project::plan(&policy, &registry, &request(ProjectValidationAction::Test)).unwrap_err(),
@@ -476,6 +476,64 @@ fn project_validation_manifest_fence_and_exact_recovery_plan() {
     assert!(project::fence(&policy, &registry, &op).is_err());
     assert_eq!(restored.steps[0].program, "cargo");
     assert_eq!(restored.project_validation.unwrap().backend, "rust");
+}
+
+#[test]
+fn project_validation_python_pytest_detects_explicit_and_auto_and_fences_config() {
+    let (_tmp, root, registry, policy) = fixture("pyproject.toml");
+    let mut req = request(ProjectValidationAction::Test);
+    let (baseline, _) = project::plan(&policy, &registry, &req).unwrap();
+    assert_eq!(baseline.adapter, "python:pytest:test");
+    assert_eq!(baseline.provenance.backend, "python");
+    req.adapter = ProjectValidationAdapter::Python;
+    let (explicit, _) = project::plan(&policy, &registry, &req).unwrap();
+    assert_eq!(explicit.step, baseline.step);
+    assert_eq!(explicit.validation_target_id, baseline.validation_target_id);
+    req.test = Some(ProjectValidationTestOptions {
+        filter: Some("selected and not slow".into()),
+        ..Default::default()
+    });
+    let (filtered, _) = project::plan(&policy, &registry, &req).unwrap();
+    assert!(filtered.step.is_structured_pytest());
+    assert_ne!(filtered.validation_target_id, baseline.validation_target_id);
+    fs::write(root.join("pytest.ini"), "[pytest]\naddopts = -q\n").unwrap();
+    let (changed, _) = project::plan(&policy, &registry, &req).unwrap();
+    assert_ne!(
+        changed.provenance.manifest_digest,
+        filtered.provenance.manifest_digest
+    );
+    req.scope = Some(ProjectValidationScope {
+        packages: vec!["tests".into()],
+        all_packages: false,
+    });
+    assert!(
+        matches!(project::plan(&policy, &registry, &req), Err(ProjectValidationPlanningResult::Unavailable {code,..}) if code == "validation_scope_unsupported")
+    );
+    req.scope = Some(ProjectValidationScope {
+        packages: Vec::new(),
+        all_packages: true,
+    });
+    assert!(
+        matches!(project::plan(&policy, &registry, &req), Err(ProjectValidationPlanningResult::Unavailable {code,..}) if code == "validation_scope_unsupported")
+    );
+    req.scope = None;
+    for action in [
+        ProjectValidationAction::Check,
+        ProjectValidationAction::FormatCheck,
+    ] {
+        req.action = action;
+        req.test = None;
+        assert!(
+            matches!(project::plan(&policy, &registry, &req), Err(ProjectValidationPlanningResult::Unavailable {code,..}) if code == "validation_action_unsupported")
+        );
+    }
+    fs::remove_file(root.join("pyproject.toml")).unwrap();
+    req.action = ProjectValidationAction::Test;
+    assert!(project::plan(&policy, &registry, &req)
+        .unwrap()
+        .0
+        .step
+        .is_structured_pytest());
 }
 
 fn start_project_validation_operation(

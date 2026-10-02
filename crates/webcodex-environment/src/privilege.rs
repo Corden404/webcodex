@@ -577,6 +577,8 @@ fn verify_requester(file: &std::fs::File, request: &ServiceRequest) -> SetupResu
 }
 
 fn verify_request_owner(file: &std::fs::File, requester: &LocalAccount) -> SetupResultValue<()> {
+    #[cfg(not(unix))]
+    let _ = (file, requester);
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;

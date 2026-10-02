@@ -1,6 +1,7 @@
-//! Structured Cargo and Go validation adapters.
+//! Structured Cargo, Go and project pytest validation adapters.
 
 mod go;
+mod python;
 mod rust;
 
 use webcodex_core::project_validation::{ProjectDependencyMode, ProjectDependencyPolicy};
@@ -96,9 +97,15 @@ pub enum GoReadOnlyValidationOperation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonTestOptions {
+    pub filter: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadOnlyValidationOperation {
     Cargo(CargoReadOnlyValidationOperation),
     Go(GoReadOnlyValidationOperation),
+    Python(PythonTestOptions),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +130,10 @@ impl ReadOnlyValidationOperation {
                 options.filter = webcodex_core::runner_protocol::normalize_go_test_filter(filter)
                     .map_err(|_| "test_filter_unsupported")?;
             }
+            Self::Python(options) => {
+                options.filter = webcodex_core::runner_protocol::normalize_pytest_filter(filter)
+                    .map_err(|_| "test_filter_unsupported")?;
+            }
             _ => return Err("test_filter_unsupported"),
         }
         Ok(self)
@@ -136,7 +147,7 @@ impl ReadOnlyValidationOperation {
             return Ok(self);
         };
         match &mut self {
-            Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => {
+            Self::Python(_) | Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => {
                 return Err("dependency_policy_unsupported")
             }
             Self::Cargo(CargoReadOnlyValidationOperation::Check(options)) => {
@@ -157,7 +168,7 @@ impl ReadOnlyValidationOperation {
 
     fn dependency_mode(&self) -> Option<ProjectDependencyMode> {
         match self {
-            Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => None,
+            Self::Python(_) | Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => None,
             Self::Cargo(CargoReadOnlyValidationOperation::Check(options)) => {
                 options.dependency_mode
             }
@@ -173,12 +184,16 @@ impl ReadOnlyValidationOperation {
             Self::Cargo(CargoReadOnlyValidationOperation::Test(options)) => options.all_packages,
             Self::Go(GoReadOnlyValidationOperation::Check(options)) => options.all_packages,
             Self::Go(GoReadOnlyValidationOperation::Test(options)) => options.all_packages,
-            Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => false,
+            Self::Python(_) | Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => false,
         }
     }
 
     pub fn compatibility_profile(&self) -> ValidationCompatibilityProfile {
         match self {
+            Self::Python(_) => ValidationCompatibilityProfile {
+                tool_identity: "python:pytest:test",
+                validation_identity: ToolValidationIdentityKind::PythonPytest,
+            },
             Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => {
                 ValidationCompatibilityProfile {
                     tool_identity: "cargo_fmt",
@@ -210,6 +225,7 @@ impl ReadOnlyValidationOperation {
 
     pub fn adapter(&self) -> &'static dyn ValidationAdapter {
         match self {
+            Self::Python(_) => python::test_adapter(),
             Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => rust::format_adapter(),
             Self::Cargo(CargoReadOnlyValidationOperation::Check(_)) => rust::check_adapter(),
             Self::Cargo(CargoReadOnlyValidationOperation::Test(_)) => rust::test_adapter(),
@@ -220,6 +236,12 @@ impl ReadOnlyValidationOperation {
 
     pub fn build_readonly_plan(&self) -> Result<ReadOnlyValidationPlan, String> {
         match self {
+            Self::Python(options) => self
+                .adapter()
+                .build_readonly_plan(ValidationCommandOptions {
+                    filter: options.filter.clone(),
+                    ..Default::default()
+                }),
             Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => self
                 .adapter()
                 .build_readonly_plan(ValidationCommandOptions {
@@ -246,6 +268,7 @@ impl ReadOnlyValidationOperation {
     pub fn validation_target_id(&self, cwd: Option<&str>) -> Option<String> {
         let profile = self.compatibility_profile();
         let arguments = match self {
+            Self::Python(options) => serde_json::json!({"cwd":cwd,"filter":options.filter}),
             Self::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => serde_json::json!({
                 "cwd": cwd,
                 "check": true,
@@ -351,6 +374,11 @@ pub fn project_validation_operation(
                 ..Default::default()
             }),
         )),
+        ("python", _) if packages.is_some() || all_packages => Err("validation_scope_unsupported"),
+        ("python", Test) => Ok(ReadOnlyValidationOperation::Python(PythonTestOptions {
+            filter: None,
+        })),
+        ("python", _) => Err("validation_action_unsupported"),
         _ => Err("validation_adapter_unavailable"),
     }
 }
@@ -525,6 +553,7 @@ pub fn validation_adapter_for_tool(tool_identity: &str) -> Option<&'static dyn V
         .copied()
         .find(|adapter| adapter.tool_identity() == tool_identity)
         .or_else(|| go::validation_adapter(tool_identity))
+        .or_else(|| (tool_identity == "python:pytest:test").then(python::test_adapter))
 }
 
 /// Canonical project selection; direct tools remain compatibility entry points.
@@ -539,6 +568,7 @@ pub fn validation_adapter_for_recipe(
         ("rust", Test) => "cargo_test",
         ("go", Check) => "go_vet",
         ("go", Test) => "go_test",
+        ("python", Test) => "python:pytest:test",
         _ => return None,
     })
 }

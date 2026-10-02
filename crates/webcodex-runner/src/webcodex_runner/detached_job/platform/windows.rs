@@ -3,17 +3,14 @@ use super::super::*;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt as WindowsOpenOptionsExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-use std::os::windows::process::CommandExt as WindowsCommandExt;
-use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
+use windows_sys::Win32::Foundation::{FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::Storage::FileSystem::{
     MoveFileExW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, MOVEFILE_REPLACE_EXISTING,
     MOVEFILE_WRITE_THROUGH,
 };
 use windows_sys::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    GetProcessTimes, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE,
 };
 
 pub(in crate::webcodex_runner::detached_job) fn native_process_start_identity(

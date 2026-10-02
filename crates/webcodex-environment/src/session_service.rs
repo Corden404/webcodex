@@ -16,8 +16,10 @@ struct HelperPlan {
     marker: String,
     program: PathBuf,
     session_dir: PathBuf,
+    #[cfg(windows)]
     account_name: String,
     account_identity: String,
+    #[cfg(target_os = "macos")]
     home: Option<PathBuf>,
 }
 
@@ -34,6 +36,7 @@ fn plan(spec: &ServiceSpec, session_dir: &Path) -> Result<HelperPlan, ServiceErr
     let ServiceAccount::SystemUser {
         name,
         expected_identity,
+        #[cfg(target_os = "macos")]
         home,
         ..
     } = &spec.account
@@ -88,8 +91,10 @@ fn plan(spec: &ServiceSpec, session_dir: &Path) -> Result<HelperPlan, ServiceErr
         marker: format!("webcodex-computer-helper:v1:{}", &suffix[..32]),
         program: spec.program.clone(),
         session_dir: session_dir.to_path_buf(),
+        #[cfg(windows)]
         account_name: name.clone(),
         account_identity: expected_identity.clone(),
+        #[cfg(target_os = "macos")]
         home: home.clone(),
     })
 }

@@ -1499,7 +1499,7 @@ pub enum ToolCall {
     },
 
     /// Run portable read-only project validation. The Runner resolves the nearest
-    /// supported Rust/Go recipe and admits one canonical structured validation Job.
+    /// supported Rust/Go or Python recipe and admits one canonical structured validation Job.
     ProjectValidate {
         /// Exact registered Runner Project.
         project: String,

@@ -1,7 +1,7 @@
 // Every test in this module is Unix-only; the glob import is only needed there.
 #[cfg(unix)]
 use super::super::support::*;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use crate::webcodex_cli::test_support::executable_test_tempdir;
 
 #[cfg(unix)]

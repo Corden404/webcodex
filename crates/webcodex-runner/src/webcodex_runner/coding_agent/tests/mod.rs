@@ -1,7 +1,10 @@
 use super::protocol::{
-    bounded_json_summary, bounded_text, notification_frame, request_frame, wait_outbound_write,
-    AcpOutboundWriter, OutboundInterruption, OutboundWriteOutcome,
+    bounded_json_summary, bounded_text, wait_outbound_write, AcpOutboundWriter,
+    OutboundInterruption, OutboundWriteOutcome,
 };
+#[cfg(unix)]
+use super::protocol::{notification_frame, request_frame};
+#[cfg(unix)]
 use super::store::TerminalWriteGate;
 use super::store::{DurableDispatchPhase, DurableRunRecord, DurableRunStore, STORE_SCHEMA_VERSION};
 use super::*;
@@ -577,7 +580,9 @@ fn prompt_count(temp: &TempDir) -> usize {
         .count()
 }
 mod admission;
+#[cfg(unix)]
 mod dogfood;
+#[cfg(unix)]
 mod lifecycle;
 #[cfg(unix)]
 mod model_gateway;

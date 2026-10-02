@@ -35,9 +35,11 @@ pub(crate) use lifecycle::{handle_project_lifecycle_operation, handle_project_op
 
 pub(crate) use managed_worktree::handle_prepare_managed_worktree_operation;
 
-pub(crate) use registration::handle_resolve_or_register_project_operation;
 #[cfg(test)]
-use registration::{build_project_toml, sync_parent_dir};
+use registration::build_project_toml;
+pub(crate) use registration::handle_resolve_or_register_project_operation;
+#[cfg(all(test, unix))]
+use registration::sync_parent_dir;
 #[cfg(test)]
 pub(crate) use registration::{
     fail_next_project_parent_sync_after_rename, fail_next_project_publish_before_rename,

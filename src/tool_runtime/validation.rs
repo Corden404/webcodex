@@ -457,7 +457,7 @@ impl ToolRuntime {
         let plan = match serde_json::from_str::<ProjectValidationPlanningResult>(response.stdout.as_deref().unwrap_or("")) {
             Ok(ProjectValidationPlanningResult::Ready { plan }) => plan,
             Ok(ProjectValidationPlanningResult::Unavailable { code, detected_backend }) => return ToolResult::err_with_output(
-                "Project validation unavailable; select a supported Rust/Go recipe or a supported action, then retry.",
+                "Project validation unavailable; use a supported Rust/Go action or Python pytest tests with an existing environment.",
                 json!({"execution_source":"project_validate", "execution_state":"not_started", "command_started":false, "command_completed":false, "failure_kind":code, "detected_backend":detected_backend})),
             Err(_) => return ToolResult::err("invalid Runner validation plan; upgrade Server and Runner together"),
         };

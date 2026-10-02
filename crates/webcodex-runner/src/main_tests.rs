@@ -1,5 +1,3 @@
-#[cfg(windows)]
-use super::parse_service_runner_args;
 use super::{parse_runner_args, RunnerCliAction};
 use reqwest::blocking::Client;
 #[cfg(test)]

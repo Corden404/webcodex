@@ -47,9 +47,6 @@ fn fixture(
                 }
                 Err(error) => panic!("HTTP fixture accept failed: {error}"),
             };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
             let request = read_request(&mut stream);
             let (status, headers, body) = reply(&request);
             captured.lock().unwrap().push(request);
@@ -68,6 +65,12 @@ fn fixture(
 }
 
 fn read_request(stream: &mut TcpStream) -> HttpRequest {
+    // macOS accepts sockets with the listener's nonblocking flag; Linux does
+    // not. Request parsing uses bounded blocking reads on either platform.
+    stream.set_nonblocking(false).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
     let mut bytes = Vec::new();
     let header_end = loop {
         let mut chunk = [0u8; 1024];
@@ -113,6 +116,28 @@ fn read_request(stream: &mut TcpStream) -> HttpRequest {
         authorization,
         body,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn http_fixture_clears_inherited_nonblocking_mode_before_reading() {
+    use std::os::fd::AsRawFd;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut stream, _) = listener.accept().unwrap();
+    // Force macOS's accepted-socket state on Linux CI as well.
+    stream.set_nonblocking(true).unwrap();
+    client
+        .write_all(b"GET /fixture HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let request = read_request(&mut stream);
+    assert_eq!(request.method, "GET");
+    assert_eq!(request.path, "/fixture");
+    let flags = unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_GETFL) };
+    assert_ne!(flags, -1);
+    assert_eq!(flags & libc::O_NONBLOCK, 0);
+    assert!(stream.read_timeout().unwrap().is_some());
 }
 
 fn record(

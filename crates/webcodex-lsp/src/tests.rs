@@ -10,6 +10,22 @@ use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[cfg(target_os = "macos")]
+#[test]
+fn fake_lsp_binary_has_finalized_local_signature() {
+    let output = std::process::Command::new("/usr/bin/codesign")
+        .args(["--display", "--verbose=2"])
+        .arg(fake_server_path())
+        .output()
+        .unwrap();
+    let details = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{details}");
+    assert!(details.contains("Signature=adhoc"), "{details}");
+    // A linker-only signature leaves concurrent first launches exposed to
+    // macOS policy rejection before the fake server can record its start.
+    assert!(!details.contains("linker-signed"), "{details}");
+}
+
 struct Fixture {
     // Drop the supervisor before the temporary directory so the fake server
     // can persist its graceful-exit marker during supervisor Drop.

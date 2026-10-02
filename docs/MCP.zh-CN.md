@@ -308,7 +308,7 @@ work_on_project
 
 `present_work_result` 是 substantial coding 的一次性可视化层，不是 correctness primitive。挂载后，卡片通过 App-only state read 持续显示 Progress、Workspace、Validation 与 Review，无需模型轮询。`finish_coding_task` 在 non-blocking closeout 时把 eligible final changes seal 到 presentation cache，同一张卡随后发现这份 immutable snapshot，并按文件 lazy 展开 diff。tiny/read-only 工作应跳过这张卡，同一 Session 不应重复 presentation。
 
-普通的 portable read-only validation 优先使用 `project_validate`。它只接受封闭的 `format_check` / `check` / `test` intent，以及可选的 `auto` / `rust` / `go` adapter hint；Runner 在自己注册的真实文件系统上解析最近且无歧义的 recipe，然后进入现有 structured validation Job。Rust 分别映射到 `cargo fmt -- --check`、`cargo check --all-targets`、`cargo test`；Go 映射到 `go vet ./...` 或 `go test -json ./...`。Go project validation 由 Runner 固定为 single-module 模式（`GO111MODULE=on`、`GOWORK=off`），因此 ambient module mode 或父目录 `go.work` 选择不会静默改变 gateway 的 workspace 语义；其 validation target identity 与 ambient Go specialist evidence 做 domain separation，因此不同 workspace 语义下产生的成功不会消解 gateway failure。独立的 `go_test` specialist 保持现有环境语义。可选 `scope` 只允许二选一的 portable package intent：有界 `packages`（1..8 项）把 Rust check/test 映射为重复 Cargo `-p` selector，把 Go check/test 映射为 project-relative package pattern；`all_packages=true` 则选择完整 project unit。Rust all-packages 只有在 Runner 证明 effective Cargo workspace root 与 registered Project root 完全一致后才映射为 Cargo `--workspace`，并把 Project 内 Cargo manifest graph 绑定到既有 re-plan fence；Go all-packages 保持 canonical `./...` single-module scope。带 scope 的格式检查会 fail closed。当前检测到 Node/Python 时会返回有界的 unsupported 结果。请求不会携带 arbitrary executable、argv、shell grammar、安装动作或 source mutation；需要 ecosystem-specific 高级参数时继续使用现有 `cargo_*` / `go_test`。`project_validate` 依赖 additive `project_validation_v1` Runner capability；显式 `packages` 额外要求 `project_validation_package_scope_v1`，而 `all_packages=true` 要求 `project_all_packages_v1`；Go project-validation Job 准入还额外要求 `project_go_single_module_v1`，因此 Server 不会把 Go gateway plan 交给仍可能继承 ambient workspace 状态的旧 Runner。
+普通的 portable read-only validation 优先使用 `project_validate`。它只接受封闭的 `format_check` / `check` / `test` intent，以及可选的 `auto` / `rust` / `go` / `python` adapter hint；Runner 在自己注册的真实文件系统上解析最近且无歧义的 recipe，然后进入现有 structured validation Job。Rust 分别映射到 `cargo fmt -- --check`、`cargo check --all-targets`、`cargo test`；Go 映射到 `go vet ./...` 或 `go test -json ./...`。Go project validation 由 Runner 固定为 single-module 模式（`GO111MODULE=on`、`GOWORK=off`），因此 ambient module mode 或父目录 `go.work` 选择不会静默改变 gateway 的 workspace 语义；其 validation target identity 与 ambient Go specialist evidence 做 domain separation，因此不同 workspace 语义下产生的成功不会消解 gateway failure。独立的 `go_test` specialist 保持现有环境语义。可选 `scope` 只允许二选一的 portable package intent：有界 `packages`（1..8 项）把 Rust check/test 映射为重复 Cargo `-p` selector，把 Go check/test 映射为 project-relative package pattern；`all_packages=true` 则选择完整 project unit。Rust all-packages 只有在 Runner 证明 effective Cargo workspace root 与 registered Project root 完全一致后才映射为 Cargo `--workspace`，并把 Project 内 Cargo manifest graph 绑定到既有 re-plan fence；Go all-packages 保持 canonical `./...` single-module scope。带 scope 的格式检查会 fail closed。Python 仅支持 test，复用 configured/profile/PATH 中已有的 Python 3，canonical argv 为 `python -m pytest --color=no -rA`；Python check/format、所有 scope 与 dependency policy 均 fail closed。Node 仍返回有界 unsupported。Python planning 与 Job 准入均要求 `project_validation_python_pytest_v1`；缺失 pytest 为明确的 not-started tooling failure，不自动安装或 fallback。环境、证据与同 Job 行为见 [Python/pytest validation](implementation/python-pytest-project-validation.md)。请求不会携带 arbitrary executable、argv、shell grammar、安装动作或 source mutation；需要 ecosystem-specific 高级参数时继续使用现有 `cargo_*` / `go_test`。`project_validate` 依赖 additive `project_validation_v1` Runner capability；显式 `packages` 额外要求 `project_validation_package_scope_v1`，而 `all_packages=true` 要求 `project_all_packages_v1`；Go project-validation Job 准入还额外要求 `project_go_single_module_v1`，因此 Server 不会把 Go gateway plan 交给仍可能继承 ambient workspace 状态的旧 Runner。
 
 Cargo all-packages provenance 是有界的 package-selection witness，并非完整构建输入快照。它要求 workspace 完全位于 registered Project 内，或独立 package 的祖先目录不存在 `Cargo.toml` marker；对 Project 外的祖先只探测 marker，不读取 manifest 内容。此 scope 不接受外部 path dependency，因为外部 manifest 的 `package.workspace` 可以把 Project 外 package 加入 workspace。相关 manifest／member／dependency alias 仍会被 fence，无关的非 manifest 链接会被忽略。无法证明的 topology 或超出边界上限时返回 `validation_scope_unavailable` / `build_scope_unavailable`；显式 package scope 和现有 specialist tools 保持各自契约。
 
@@ -381,23 +381,24 @@ stderr、provider stderr 或任意 provider prose。
 ### 项目级验证
 
 `project_validate` 通过 Runner 上的现有适配器执行 Rust 的格式检查／检查／测试，
-以及 Go 的检查／测试。`scope.packages` 表示有界包范围。
+以及 Go 的检查／测试、Python 的 pytest 测试。`scope.packages` 表示 Rust/Go 的有界包范围。
 `action="test"` 可使用 `test.filter`：Rust 为一个 libtest 子串，Go 为原生 `-run`
-正则表达式（包含子测试的斜杠语义），并非跨语言统一查询语法。Go 保留空格；
-空字符串或省略表示不加过滤。
+正则表达式（包含子测试的斜杠语义），Python 为原生 pytest `-k` 表达式，
+上限 200 UTF-8 bytes，拒绝控制字符及选项形状的前缀；并非跨语言统一查询语法。
+Go/Python 保留有意义的空格；空字符串或省略表示不加过滤。
 
 ```json
 {"project":"agent:runner:repo","action":"test","test":{"filter":"selected_test","require_tests":true,"min_tests":3}}
 ```
 
 `require_tests` 默认为 true，要求至少一个已证明执行的测试；false 且未设
-`min_tests` 时允许已证明的零测试结果。`min_tests` 为 1..1,000,000 的证据后置条件，
+`min_tests` 时保留原生成功，包括已证明的零测试或未知计数（未知计数仍未证明；source freshness 独立）。`min_tests` 为 1..1,000,000 的证据后置条件，
 即使 require_tests=false 仍需满足；计数未知不表示零。check／format_check 不接受
 该 test 块。任意显式 test 块均需 `project_validation_test_options_v1` 能力，
 规划与 Job 准入各检查一次；省略时保持原有行为。完整参数不会变成任意 argv／shell。
 长任务仍观察同一个 Job，不能因 Host 中断而重跑。
 
-构建产物、修改源码的格式化、lint、Node/Python 生产适配器，以及更广泛的
+构建产物、修改源码的格式化、lint、Node 与其他 Python 生产适配器，以及更广泛的
 workspace／依赖策略仍是 #599 后续工作；现有 cargo_*、go_test 与显式进程工具保留。
 
 ### ChatGPT 文件桥接
