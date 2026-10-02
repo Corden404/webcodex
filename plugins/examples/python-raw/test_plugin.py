@@ -164,12 +164,25 @@ class ProtocolTests(unittest.TestCase):
             self.assert_recovers(frame({**request(), "method": method}), -32600, 1)
 
     def test_malformed_json_utf8_and_numbers_recover(self):
-        frames = [b"\n", b"{\n", b"{}{}\n", b"\xff\n", b"[" * 2000 + b"]" * 2000 + b"\n"]
+        frames = [b"\n", b"{\n", b"{}{}\n", b"\xff\n"]
         for number in (b"NaN", b"Infinity", b"-Infinity", b"1e9999", b"9" * 5000):
             frames.append(b'{"jsonrpc":"2.0","id":' + number + b',"method":"tools/list"}\n')
         for value in frames:
             with self.subTest(prefix=value[:40]):
                 self.assert_recovers(value, -32700)
+
+    def test_json_structure_bounds_recover_without_parser_recursion_assumptions(self):
+        deep = None
+        for _ in range(plugin.MAX_JSON_DEPTH + 1):
+            deep = [deep]
+        too_deep = request()
+        too_deep["params"] = {"extra": deep}
+        self.assert_recovers(frame(too_deep), -32700)
+
+        too_wide = request()
+        too_wide["params"] = {"extra": [None] * plugin.MAX_JSON_NODES}
+        self.assertLessEqual(len(frame(too_wide)) - 1, plugin.MAX_INPUT_BYTES)
+        self.assert_recovers(frame(too_wide), -32700)
 
     def test_unpaired_surrogates_are_not_echoed(self):
         self.assert_recovers(b'{"jsonrpc":"2.0","id":"\\ud800","method":"tools/list"}\n', -32600)

@@ -10,6 +10,8 @@ PROTOCOL_VERSION = "webcodex-plugin-v1"
 MAX_INPUT_BYTES = 64 * 1024
 MAX_OUTPUT_BYTES = 128 * 1024
 MAX_TEXT_LENGTH = 4096
+MAX_JSON_DEPTH = 16
+MAX_JSON_NODES = 4096
 
 TEXT_SCHEMA = {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_LENGTH}
 TOOL = {
@@ -65,12 +67,32 @@ def valid_string(value):
     return True
 
 
+def json_structure_within_bounds(value):
+    """Apply deterministic structure bounds after decoding, independent of CPython recursion limits."""
+    pending = [(value, 0)]
+    nodes = 0
+    while pending:
+        current, depth = pending.pop()
+        if depth > MAX_JSON_DEPTH:
+            return False
+        nodes += 1
+        if nodes > MAX_JSON_NODES:
+            return False
+        if isinstance(current, dict):
+            pending.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list):
+            pending.extend((child, depth + 1) for child in current)
+    return True
+
+
 def handle_frame(frame):
     try:
         request = json.loads(
             frame.decode("utf-8"), parse_constant=reject_constant, parse_float=finite_float
         )
     except (ValueError, RecursionError):
+        return rpc_error(None, -32700, "parse error")
+    if not json_structure_within_bounds(request):
         return rpc_error(None, -32700, "parse error")
 
     if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":

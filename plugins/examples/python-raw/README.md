@@ -66,8 +66,9 @@ oversized input produces one fixed error; the remaining bytes up to LF/EOF are
 discarded in bounded chunks before the next request is read. The Runner owns
 transport deadlines, including a sender that never finishes a line.
 
-Invalid JSON/UTF-8, excessive parser nesting, and non-finite numbers produce
-`-32700`; invalid requests/framing produce `-32600`; unknown methods produce
+Invalid JSON/UTF-8, JSON deeper than 16 levels or exceeding 4,096 parsed nodes,
+and non-finite numbers produce `-32700`; invalid requests/framing produce
+`-32600`; unknown methods produce
 `-32601`; invalid parameters and unknown tools produce `-32602`. Error messages
 do not include request bodies. Valid string or numeric request IDs are preserved;
 invalid/unrecoverable IDs use `null`. A defensive output-limit failure also uses
