@@ -249,6 +249,13 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
 .file-navigator select { min-width: 0; width: 0; flex: 1; min-height: 36px; padding: 6px 8px; border: 1px solid var(--card-border); border-radius: 9px; color: CanvasText; background: var(--surface); font: inherit; text-overflow: ellipsis; }
 .file-navigator select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .file-navigator .refresh { min-width: 36px; }
+.review-sections { display: flex; flex-wrap: wrap; gap: 6px; }
+.check-summary, .check-summary > div { display: grid; min-width: 0; gap: 7px; }
+.preview-help { flex-basis: 100%; margin: 0; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.thread-review .check-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.thread-review #resultChecks { scroll-margin-top: 12px; }
+.thread-review .section:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 620px) { .thread-review .check-summary { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 </style>
 </head>
@@ -322,11 +329,18 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
         <button id="workspaceReload" class="refresh" type="button" hidden>Refresh file snapshot</button>
         <div id="workspaceMeta" class="secondary"></div>
       </section>
-      <section id="resultChecks" class="section">
-        <div class="section-head"><h2>Checks and review</h2></div>
-        <div id="validationStatus" class="primary"></div><div id="validationMeta" class="secondary"></div>
-        <div id="reviewStatus" class="primary"></div><div id="reviewMeta" class="secondary"></div>
-        <p class="secondary">Evidence for the linked Session; a clean workspace does not prove the task passed.</p>
+      <section id="resultChecks" class="section" tabindex="-1" aria-labelledby="checksHeading">
+        <div class="section-head"><h2 id="checksHeading">Checks and review</h2></div>
+        <div class="check-summary">
+          <div><div id="validationStatus" class="primary"></div><div id="validationMeta" class="secondary"></div></div>
+          <div><div id="reviewStatus" class="primary"></div><div id="reviewMeta" class="secondary"></div></div>
+        </div>
+        <p id="checksScope" class="secondary">Evidence for the linked Session; a clean workspace does not prove the task passed.</p>
+        <nav id="reviewSections" class="review-sections" aria-label="Review sections" hidden>
+          <button id="jumpWorkspace" class="refresh" type="button">Changed files</button>
+          <button id="jumpFinal" class="refresh" type="button">Final changes</button>
+          <button id="jumpOutputs" class="refresh" type="button">Task outputs</button>
+        </nav>
       </section>
       <button id="discussResults" class="refresh" type="button">Discuss these changes</button>
     </div>
@@ -1044,7 +1058,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       select.onchange = () => navigate(visibleFileRows(final).findIndex(row => row.filePath === select.value));
       previous.onclick = () => navigate(visibleFileRows(final).findIndex(row => row.filePath === select.value) - 1);
       next.onclick = () => navigate(visibleFileRows(final).findIndex(row => row.filePath === select.value) + 1);
-      nav.append(select, previous, next);
+      const checks = document.createElement("button"); checks.type = "button"; checks.className = "refresh";
+      checks.textContent = "Checks"; checks.setAttribute("aria-label", "Back to checks and review");
+      checks.onclick = () => jumpToReviewSection("resultChecks");
+      nav.append(select, previous, next, checks);
     }
     const paths = JSON.stringify(rows.map(row => row.filePath));
     if (view.paths !== paths) {
@@ -1135,6 +1152,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   const contentCache = new Map();
   const contentPending = new Map();
   let activeContentPreview = null;
+  let previewHelpId = 0;
   const CONTENT_PAGE_BYTES = 32 * 1024, CONTENT_MAX_BYTES = 256 * 1024;
   const contentReasons = {
     deleted: "Final version has no file · deleted",
@@ -1178,7 +1196,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     button.setAttribute("aria-expanded", "false");
     const wrap = document.createElement("div"); wrap.hidden = true;
     const state = document.createElement("div"); state.className = "secondary";
-    let pre = null, controls = null, preview = null, previewState = null, text = null, markdown = null, more = null, mdButton = null;
+    let pre = null, controls = null, preview = null, previewState = null, text = null, markdown = null, more = null, mdButton = null, markdownHelp = null, retry = null;
     let mode = "diff", localEpoch = 0, cacheKey = null, wrapping = true, wrapButton = null, pendingPosition = null;
     const positions = Object.create(null);
     const surface = () => mode === "diff" ? pre : mode === "text" ? text : markdown;
@@ -1201,20 +1219,31 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     const sourceCurrent = workspace => !tornDown && identity?.project === rowProject
       && (final ? snapshot?.snapshot_id === finalSnapshot && snapshot?.session_id === finalSession : workspace === workspaceEpoch);
     const current = (epoch, workspace) => epoch === localEpoch && sourceCurrent(workspace);
+    const explainMarkdown = message => {
+      mdButton.disabled = !!message;
+      mdButton.title = message || "Read the complete file as Markdown";
+      markdownHelp.textContent = message;
+      markdownHelp.hidden = mdButton.hidden || !message;
+    };
     const clearDisplay = () => {
       if (mode !== "diff") rememberPosition();
       pendingPosition = null;
-      localEpoch++; text.textContent = ""; markdown.replaceChildren(); mdButton.disabled = true; more.hidden = true;
+      localEpoch++; text.textContent = ""; markdown.replaceChildren(); more.hidden = true; retry.hidden = true;
+      explainMarkdown("Select Full text and load the complete file to enable Markdown.");
       previewState.textContent = "Preview closed · select Full text to view again";
     };
     const display = entry => {
       if (mode === "diff") return;
       text.hidden = mode !== "text"; markdown.hidden = mode !== "markdown";
-      more.hidden = !entry || entry.next === null || !!entry.reason;
-      mdButton.disabled = !entry?.complete;
+      more.hidden = !entry || entry.total === null || entry.next === null || !!entry.reason;
+      retry.hidden = true;
+      explainMarkdown(entry?.reason ? contentReasons[entry.reason] : entry?.limited
+        ? "Markdown requires a complete file. This file exceeds the 256 KiB preview limit."
+        : entry?.complete ? "" : "Load the remaining file content to enable Markdown.");
       if (!entry) return;
       if (entry.reason) { previewState.textContent = contentReasons[entry.reason]; text.textContent = ""; markdown.replaceChildren(); return; }
-      previewState.textContent = `${final ? "Final result" : "Pinned working-tree snapshot"} · ${entry.complete ? "Complete file" : "Partial content"} · ${entry.bytes}/${entry.total} bytes${entry.limited ? " · 256 KiB preview limit" : ""}`;
+      previewState.textContent = entry.total === null ? "Loading file content…"
+        : `${final ? "Final result" : "Pinned working-tree snapshot"} · ${entry.complete ? "Complete file" : "Partial content"} · Loaded ${entry.bytes} of ${entry.total} bytes${entry.limited ? " · 256 KiB preview limit" : ""}`;
       text.textContent = entry.content;
       if (mode === "markdown" && entry.complete) {
         WebCodexMarkdown.render(markdown, entry.content, document);
@@ -1225,10 +1254,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     const read = async () => {
       const epoch = localEpoch, workspace = workspaceEpoch;
       let requestKey = null, pendingToken = null;
-      if (file.kind === "deleted" || file.status === "deleted") { previewState.textContent = contentReasons.deleted; return; }
-      if (file.binary) { previewState.textContent = contentReasons.binary; return; }
-      previewState.textContent = "Loading file content…";
-      more.disabled = true;
+      if (file.kind === "deleted" || file.status === "deleted") { display({ reason: "deleted" }); return; }
+      if (file.binary) { display({ reason: "binary" }); return; }
+      const retained = cacheKey && contentCache.get(cacheKey);
+      previewState.textContent = retained?.bytes ? `Loading more content · ${retained.bytes} bytes retained` : "Loading file content…";
+      retry.hidden = true; retry.disabled = true;
+      more.disabled = true; more.textContent = "Loading…";
       try {
         const source = final ? snapshot : await ensureWorkspaceSnapshot();
         if (!source || !current(epoch, workspace)) return;
@@ -1271,13 +1302,18 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       } catch (_) {
         if (pendingToken) pendingToken.failed = true;
         if (current(epoch, workspace)) {
-          previewState.textContent = "Content unavailable · select Full text to retry or refresh files";
+          const retained = requestKey && contentCache.get(requestKey);
+          previewState.textContent = `Content unavailable for this snapshot${retained?.bytes ? ` · ${retained.bytes} bytes retained` : ""}. Retry preview to continue.`;
+          explainMarkdown("Markdown requires a complete file. Retry preview to continue loading.");
+          retry.hidden = false;
           more.hidden = true;
         }
       } finally {
         if (pendingToken && contentPending.get(requestKey) === pendingToken) contentPending.delete(requestKey);
         pendingToken?.resolve();
-        if (current(epoch, workspace) && !contentPending.has(requestKey)) more.disabled = false;
+        if (current(epoch, workspace) && !contentPending.has(requestKey)) {
+          more.disabled = false; more.textContent = "Load more content"; retry.disabled = false;
+        }
       }
     };
     const select = value => {
@@ -1317,8 +1353,16 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         };
         controls.append(wrapButton);
       }
-      more = document.createElement("button"); more.type = "button"; more.textContent = "Load next 32 KiB"; more.hidden = true; more.onclick = () => void read(); controls.append(more);
+      more = document.createElement("button"); more.type = "button"; more.textContent = "Load more content"; more.hidden = true; more.onclick = () => void read(); controls.append(more);
       if (threadSession !== undefined) more.className = "refresh";
+      retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Retry preview";
+      retry.hidden = true; retry.onclick = () => void read();
+      if (threadSession !== undefined) retry.className = "refresh";
+      markdownHelp = document.createElement("p"); markdownHelp.className = "preview-help";
+      markdownHelp.id = `preview-help-${++previewHelpId}`;
+      mdButton.setAttribute("aria-describedby", markdownHelp.id);
+      explainMarkdown("Select Full text and load the complete file to enable Markdown.");
+      controls.append(retry, markdownHelp);
       preview = document.createElement("div"); preview.hidden = true;
       previewState = document.createElement("div"); previewState.className = "secondary";
       text = document.createElement("pre"); text.className = "diff full-text";
@@ -1869,13 +1913,21 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     }
   }
   const panes = ["Activity", "Results", "Collaboration"];
+  function jumpToReviewSection(id) {
+    const section = el(id);
+    if (tornDown || !hostInitialized || section.hidden) return;
+    section.setAttribute("tabindex", "-1");
+    section.scrollIntoView?.({ block: "start", behavior: "instant" });
+    section.focus?.({ preventScroll: true });
+  }
   function enableThreadReview() {
     el("workResultCard").className = "card thread-review";
     el("workspaceHeading").textContent = "Changed files";
     el("tabResults").textContent = "Review";
     panes.splice(0, panes.length, "Results", "Activity", "Collaboration");
     el("viewTabs").append(el("tabResults"), el("tabActivity"), el("tabCollaboration"));
-    el("panelResults").append(el("workspaceChangesSection"), el("resultChecks"), el("finalChanges"), el("taskOutputsSection"), el("discussResults"));
+    el("panelResults").append(el("resultChecks"), el("workspaceChangesSection"), el("finalChanges"), el("taskOutputsSection"), el("discussResults"));
+    el("reviewSections").hidden = false;
     el("diagnosticContent").append(el("taskContext"));
     el("diagnostics").hidden = false;
     el("finalChangesDescription").hidden = false;
@@ -1982,7 +2034,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     renderMessages(state.collaboration);
     renderWorkspace(state.workspace);
     el("workspaceChangesSection").hidden = !state.workspace.git_available && !!state.task_outputs;
-    el("resultChecks").hidden = !state.session_id || (!state.validation && !state.review);
+    el("resultChecks").hidden = threadSession === undefined && (!state.session_id || (!state.validation && !state.review));
+    el("checksScope").textContent = state.session_id
+      ? "Evidence for the linked Session; workspace cleanliness is tracked separately."
+      : "No Session is linked to this panel. Check and review evidence is unavailable.";
+    el("jumpWorkspace").hidden = el("workspaceChangesSection").hidden;
+    el("jumpFinal").hidden = !hasFinalChanges;
+    el("jumpOutputs").hidden = !state.task_outputs;
     if (state.validation) renderValidation(state.validation);
     else { el("validationStatus").textContent = "Check status unavailable"; el("validationMeta").textContent = ""; }
     if (state.review) renderReview(state.review);
@@ -2306,6 +2364,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   el("askActivity").onclick = () => { selectPane("Collaboration"); el("messageInput").focus?.(); };
   el("viewResults").onclick = () => selectPane("Results", true);
   el("discussResults").onclick = () => { selectPane("Collaboration"); el("messageInput").focus?.(); };
+  el("jumpWorkspace").onclick = () => jumpToReviewSection("workspaceChangesSection");
+  el("jumpFinal").onclick = () => jumpToReviewSection("finalChanges");
+  el("jumpOutputs").onclick = () => jumpToReviewSection("taskOutputsSection");
   selectPane("Activity");
   el("refresh").onclick = () => { void refresh(false); };
   el("frozenMore").onclick = () => { void showMoreFiles(true); };

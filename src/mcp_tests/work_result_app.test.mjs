@@ -118,7 +118,7 @@ test("a mounted thread cannot be retargeted by a later presentation", async () =
   assert.equal(view.nodes.badge.textContent, "Unavailable");
 });
 
-test("thread review prioritizes files and checks while keeping diagnostics folded", async () => {
+test("thread review puts checks before long file lists while keeping diagnostics folded", async () => {
   const view = app("mcp_work_result_app.html");
   view.notification("ui/notifications/tool-result", threadResult(baseState, session_id));
   await view.initialize();
@@ -127,7 +127,7 @@ test("thread review prioritizes files and checks while keeping diagnostics folde
   assert.equal(view.nodes.tabResults.textContent, "Review");
   assert.equal(view.nodes.workspaceHeading.textContent, "Changed files");
   assert.deepEqual(view.nodes.viewTabs.children, [view.nodes.tabResults, view.nodes.tabActivity, view.nodes.tabCollaboration]);
-  assert.deepEqual(view.nodes.panelResults.children.slice(0, 3), [view.nodes.workspaceChangesSection, view.nodes.resultChecks, view.nodes.finalChanges]);
+  assert.deepEqual(view.nodes.panelResults.children.slice(0, 3), [view.nodes.resultChecks, view.nodes.workspaceChangesSection, view.nodes.finalChanges]);
   assert.equal(view.nodes.diagnostics.open, false);
   assert.deepEqual(view.nodes.diagnosticContent.children, [view.nodes.taskContext]);
   view.nodes.tabResults.onkeydown({ key: "ArrowRight", preventDefault() {} });
@@ -1672,7 +1672,8 @@ function filePreview(view, final = false, index = 0) {
   const row = view.nodes[final ? "frozenFiles" : "workspaceFiles"].children[index];
   row.children[0].onclick();
   const wrap = row.children[1], controls = wrap.children[2], preview = wrap.children[3];
-  return { row, wrap, controls, state: preview.children[0], text: preview.children[1], markdown: preview.children[2] };
+  return { row, wrap, controls, state: preview.children[0], text: preview.children[1], markdown: preview.children[2],
+    retry: controls.children.find(node => node.textContent === "Retry preview"), hint: controls.children.at(-1) };
 }
 function previewReply(request, text, extra = {}) {
   const args = request.params.arguments;
@@ -1700,6 +1701,59 @@ function readingFile(view, final = false, index = 0) {
   const controls = row.children[1].children[0], pre = row.children[1].children[2], preview = row.children[1].children[3];
   return { row, controls, pre, text: preview.children[1], markdown: preview.children[2], button: label => controls.children.find(node => node.textContent === label) };
 }
+
+test("thread section navigation moves focus without reading files or resetting an expanded row", async () => {
+  const view = await readingView(frozenWork());
+  assert.equal(view.nodes.reviewSections.hidden, false);
+  assert.equal(view.nodes.jumpWorkspace.hidden, false);
+  assert.equal(view.nodes.jumpFinal.hidden, false);
+  assert.equal(view.nodes.jumpOutputs.hidden, true);
+  const moves = [];
+  for (const id of ["workspaceChangesSection", "finalChanges", "resultChecks"]) {
+    view.nodes[id].scrollIntoView = () => moves.push(id);
+    view.nodes[id].focus = options => assert.equal(options.preventScroll, true);
+  }
+  view.nodes.jumpWorkspace.onclick();
+  view.nodes.jumpFinal.onclick();
+  view.nodes.workspaceNavigator.children[3].onclick();
+  view.nodes.frozenNavigator.children[3].onclick();
+  assert.deepEqual(moves, ["workspaceChangesSection", "finalChanges", "resultChecks", "resultChecks"]);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+  const file = readingFile(view, true);
+  const requests = view.sent.length;
+  view.nodes.frozenNavigator.children[3].onclick();
+  assert.equal(file.row.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.sent.length, requests);
+  await view.teardown();
+  const before = moves.length;
+  view.nodes.jumpWorkspace.onclick();
+  assert.equal(moves.length, before, "teardown stops section actions");
+});
+
+test("thread overview preserves failed, stale, missing and unrun evidence", async () => {
+  for (const [status, label] of [["passed", "Checks passed"], ["failed", "Checks need attention"],
+    ["stale", "Checks are out of date"], ["not_run", "Checks not run"], ["inconclusive", "Checks inconclusive"]]) {
+    const state = structuredClone(baseState);
+    state.validation.current_status = status;
+    state.workspace = structuredClone(nextState.workspace);
+    const view = await readingView(state);
+    assert.equal(view.nodes.validationStatus.textContent, label);
+    assert.equal(view.nodes.resultChecks.hidden, false);
+    assert.equal(view.nodes.jumpFinal.hidden, true);
+  }
+  const state = structuredClone(baseState);
+  for (const key of ["session_id", "session", "validation", "review"]) delete state[key];
+  const view = app("mcp_work_result_app.html");
+  view.notification("ui/notifications/tool-result", threadResult(state, null));
+  await view.initialize();
+  assert.equal(view.nodes.resultChecks.hidden, false);
+  assert.equal(view.nodes.validationStatus.textContent, "Check status unavailable");
+  assert.equal(view.nodes.reviewStatus.textContent, "Review status unavailable");
+  assert.match(view.nodes.checksScope.textContent, /No Session is linked/);
+  view.toolInput({ project: "other-project" });
+  assert.equal(view.nodes.resultChecks.hidden, true, "invalid binding clears the overview");
+});
 
 test("thread file navigation is scoped to visible loaded files and preserves mounted rows", async () => {
   const state = structuredClone(frozenWork());
@@ -1836,12 +1890,15 @@ test("workspace full text uses exact pinned snapshot, explicit pages and complet
   assert.deepEqual(JSON.parse(JSON.stringify(request.params.arguments)), { project,
     files: { snapshot_id, path: "README.md", view: "content", byte_offset: 0 } });
   assert.equal(nodes.controls.children[2].disabled, true);
+  assert.equal(nodes.controls.children[2].getAttribute("aria-describedby"), nodes.hint.id);
+  assert.equal(nodes.hint.hidden, false);
   const first = "# title\n\n" + "a".repeat(32 * 1024 - 10);
   const tail = '\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n~~gone~~ **bold**\n\n<script>alert(1)</script>\n\n![alt](https://example.com/track.png)\n\n[link](https://example.com/) [bad](javascript:alert(1))\n\n```js\n<script>literal</script>\n```';
   const total = new TextEncoder().encode(first + tail).length;
   const bytes = new TextEncoder().encode(first).length;
   await view.reply(request, previewReply(request, first, { bytes_total: total, complete: false, next_byte_offset: bytes }));
   assert.match(nodes.state.textContent, /Partial content/);
+  assert.match(nodes.hint.textContent, /remaining file content/);
   assert.equal(nodes.controls.children[2].disabled, true);
   assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 1, "no automatic page loop");
   nodes.controls.children[3].onclick(); await flush();
@@ -1850,6 +1907,7 @@ test("workspace full text uses exact pinned snapshot, explicit pages and complet
   await view.reply(next, previewReply(next, tail));
   assert.equal(nodes.text.textContent, first + tail);
   assert.match(nodes.state.textContent, /Complete file/);
+  assert.equal(nodes.hint.hidden, true);
   assert.equal(nodes.controls.children[2].disabled, false);
   nodes.controls.children[2].onclick();
   const dom = descendants(nodes.markdown);
@@ -1891,6 +1949,8 @@ test("preview marks the byte cap and unsupported encoding without enabling Markd
     await view.reply(request, previewReply(request, "", { unavailable_reason: reason }));
     assert.match(nodes.state.textContent, /preview unavailable/);
     assert.equal(nodes.controls.children[2].disabled, true);
+    assert.match(nodes.hint.textContent, /preview unavailable/);
+    assert.equal(nodes.retry.hidden, true, "an unsupported file is not a transient read failure");
   }
   const { view, nodes, request } = await workspacePreview();
   const chunk = "x".repeat(32 * 1024);
@@ -1904,6 +1964,44 @@ test("preview marks the byte cap and unsupported encoding without enabling Markd
   assert.equal(nodes.text.textContent.length, 256 * 1024);
   assert.equal(nodes.controls.children[3].hidden, true);
   assert.equal(nodes.controls.children[2].disabled, true);
+  assert.match(nodes.hint.textContent, /exceeds the 256 KiB preview limit/);
+});
+
+test("preview retry retains content and retries only the failed page of the same snapshot", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  await view.reply(request, previewReply(request, "first", { bytes_total: 9, complete: false, next_byte_offset: 5 }));
+  nodes.controls.children[3].onclick(); await flush();
+  const failed = view.calls("get_work_result_state").at(-1);
+  await view.reject(failed);
+  assert.equal(nodes.text.textContent, "first");
+  assert.match(nodes.state.textContent, /5 bytes retained/);
+  assert.equal(nodes.retry.hidden, false);
+  assert.equal(nodes.retry.disabled, false);
+  assert.equal(nodes.controls.children[2].disabled, true);
+  assert.match(nodes.hint.textContent, /Retry preview/);
+  nodes.retry.onclick(); nodes.retry.onclick(); await flush();
+  const retries = view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content");
+  assert.equal(retries.length, 3, "rapid retries share one owning request");
+  assert.deepEqual(retries.at(-1).params.arguments, failed.params.arguments);
+  assert.equal(nodes.retry.disabled, true);
+  await view.reply(retries.at(-1), previewReply(retries.at(-1), "tail"));
+  assert.equal(nodes.text.textContent, "firsttail");
+  assert.equal(nodes.retry.hidden, true);
+  assert.equal(nodes.controls.children[2].disabled, false);
+  assert.equal(nodes.hint.hidden, true);
+});
+
+test("initial preview retry stays pinned and a replaced snapshot cannot receive its late error", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  await view.reject(request);
+  assert.equal(nodes.retry.hidden, false);
+  nodes.retry.onclick(); await flush();
+  const retried = view.calls("get_work_result_state").at(-1);
+  assert.deepEqual(retried.params.arguments, request.params.arguments);
+  view.nodes.workspaceReload.onclick();
+  await view.reject(retried);
+  assert.equal(nodes.retry.hidden, true, "an obsolete retry does not revive its action");
+  assert.equal(nodes.text.textContent, "");
 });
 
 test("rapid Full text and next-page clicks share their owning request and settle together", async () => {
