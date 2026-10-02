@@ -64,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--tag", required=True)
     collect.add_argument("--output-dir", type=Path, required=True)
     collect.add_argument("--repo", default=collector.DEFAULT_REPO)
+    collect.add_argument("--require-unified-installers", action="store_true")
     collect.add_argument("--timeout", type=float, default=120.0)
     readiness_start = subparsers.add_parser(
         "readiness-start",
@@ -91,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_start.add_argument("--tag", required=True)
     build_start.add_argument("--state-file", type=Path, required=True)
     build_start.add_argument("--repo", default=collector.DEFAULT_REPO)
+    build_start.add_argument("--include-unified-installers", action="store_true")
     build_start.add_argument("--timeout", type=float, default=30.0)
     build_start.add_argument("--resolve-secs", type=int, default=60)
 
@@ -110,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_npm.add_argument("--source-root", type=Path, default=Path.cwd())
     stage_npm.add_argument("--output-dir", type=Path, required=True)
     stage_npm.add_argument("--repo", default=collector.DEFAULT_REPO)
+    stage_npm.add_argument("--require-unified-installers", action="store_true")
 
     verify_draft = subparsers.add_parser(
         "verify-draft",
@@ -117,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_draft.add_argument("--bundle-dir", type=Path, required=True)
     verify_draft.add_argument("--repo", default=collector.DEFAULT_REPO)
+    verify_draft.add_argument("--require-unified-installers", action="store_true")
     verify_draft.add_argument("--timeout", type=float, default=30.0)
 
     doctor_parser = subparsers.add_parser(
@@ -199,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             summary = collector.collect_bundle(
                 repo=args.repo,
+                require_unified_installers=args.require_unified_installers,
                 run_id=args.run_id,
                 expected_source_sha=args.source_sha,
                 expected_tag=args.tag,
@@ -244,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             summary, exit_code = publication.start_build(
                 repo=args.repo,
+                include_unified_installers=args.include_unified_installers,
                 source_sha=args.source_sha,
                 tag=args.tag,
                 state_file=args.state_file,
@@ -273,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             summary = publication.stage_npm(
                 repo=args.repo,
+                require_unified_installers=args.require_unified_installers,
                 bundle_dir=args.bundle_dir,
                 source_root=args.source_root,
                 output_dir=args.output_dir,
@@ -287,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             summary = publication.verify_draft_assets(
                 repo=args.repo,
+                require_unified_installers=args.require_unified_installers,
                 bundle_dir=args.bundle_dir,
                 timeout=args.timeout,
             )

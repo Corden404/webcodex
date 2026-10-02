@@ -36,6 +36,7 @@ def _versions(**overrides: str) -> dict[str, str]:
 def _state() -> dict:
     return {
         "schema_version": publication.BUILD_STATE_SCHEMA_VERSION,
+        "include_unified_installers": False,
         "kind": "release-build",
         "repo": collector.DEFAULT_REPO,
         "tag": TAG,
@@ -458,6 +459,44 @@ class BuildDispatchTests(unittest.TestCase):
         payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(payload["ref"], TAG)
         self.assertEqual(payload["inputs"], {"tag": TAG, "request_id": REQUEST})
+
+    def test_selected_installer_mode_is_dispatched_and_persisted(self):
+        for include in (False, True):
+            with self.subTest(include=include), tempfile.TemporaryDirectory() as temp:
+                client = self._client(); client.opener = _Opener(_Response())
+                state_file = Path(temp) / "build.json"
+                with mock.patch.object(collector, "GitHubClient", return_value=client), \
+                     mock.patch.object(collector, "resolve_github_token", return_value="fixture-only"), \
+                     mock.patch.object(publication, "_remote_annotated_tag_source", return_value=SOURCE), \
+                     mock.patch.object(publication, "_recover_build_run", return_value=None):
+                    summary, code = publication.start_build(
+                        repo=collector.DEFAULT_REPO, source_sha=SOURCE, tag=TAG,
+                        state_file=state_file, timeout=5, resolve_secs=0,
+                        include_unified_installers=include,
+                    )
+                self.assertEqual(code, 2)
+                self.assertEqual(summary["include_unified_installers"], include)
+                self.assertEqual(publication._load_state(state_file)["include_unified_installers"], include)
+                payload = json.loads(client.opener.requests[0][0].data)
+                if include:
+                    self.assertIs(payload["inputs"]["include_unified_installers"], True)
+                else:
+                    self.assertNotIn("include_unified_installers", payload["inputs"])
+
+    def test_build_schema_migrates_legacy_without_inventing_installer_selection(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "build.json"
+            legacy = _state(); legacy["schema_version"] = 1
+            legacy.pop("include_unified_installers")
+            publication._write_state(path, legacy)
+            loaded = publication._load_state(path)
+            self.assertEqual(loaded["schema_version"], publication.BUILD_STATE_SCHEMA_VERSION)
+            self.assertFalse(loaded["include_unified_installers"])
+            for invalid in (None, "true", 1):
+                state = _state(); state["include_unified_installers"] = invalid
+                publication._write_state(path, state)
+                with self.assertRaises(publication.PublicationError):
+                    publication._load_state(path)
 
     def test_4xx_is_rejected_and_transport_is_unknown(self) -> None:
         client = self._client()

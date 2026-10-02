@@ -1099,7 +1099,7 @@ jobs:
           export WEBCODEX_RELEASE_PLATFORM="$PLATFORM"
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
           npm exec --prefix apps/desktop tauri -- build --bundles app --config "$stage/tauri.bundle.conf.json" --ci -- --locked
-          bundle_dir="target/release/bundle/macos"
+          bundle_dir="$CARGO_TARGET_DIR/release/bundle/macos"
           shopt -s nullglob
           apps=("$bundle_dir"/*.app)
           shopt -u nullglob
@@ -1370,7 +1370,12 @@ jobs:
           cp candidate-input/linux-x64-elf.txt candidate-input/linux-arm64-elf.txt release-bundle/
 
           if [ "$BUILD_KIND" = release ]; then
+            metadata_options=()
+            if [ "$INCLUDE_UNIFIED_INSTALLERS" = true ]; then
+              metadata_options+=(--require-unified-installers)
+            fi
             python3 scripts/prepare_release_metadata.py \
+              "${metadata_options[@]}" \
               --version "$VERSION" \
               --source-sha "$SOURCE_SHA" \
               --workflow-run-id "$GITHUB_RUN_ID" \
@@ -1514,6 +1519,22 @@ jobs:
               echo "- macOS Intel Desktop: retained in the historical primary bundle contract"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify complete selected bundle
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          from scripts.collect_release_bundle import verify_bundle_directory
+          verify_bundle_directory(
+              Path("release-bundle"), repo=os.environ["GITHUB_REPOSITORY"],
+              run_id=int(os.environ["GITHUB_RUN_ID"]),
+              expected_source_sha=os.environ["SOURCE_SHA"], expected_tag=os.environ["INPUT_TAG"],
+              artifact_name=os.environ["ARCHIVE_STEM"] + "-bundle",
+              require_unified_installers=os.environ["INCLUDE_UNIFIED_INSTALLERS"] == "true",
+          )
+          PYTHON
 
       - name: Upload assembled candidate set
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
