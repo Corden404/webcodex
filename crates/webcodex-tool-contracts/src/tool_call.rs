@@ -51,6 +51,15 @@ pub const AGENT_CONTINUATION_REF_PATTERN: &str = "^~ac[1-9][0-9]{0,18}$";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum WebcodexResourceKind {
+    Project,
+    File,
+    Goal,
+    Artifact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum PluginToolAction {
     List,
     Check,
@@ -3309,8 +3318,43 @@ pub enum ToolCall {
         idempotency_key: String,
     },
 
+    /// Open the readonly workbench. Empty arguments show a chooser; a Project is selected only
+    /// when explicitly supplied. Session selection never creates a recorder or execution context.
+    OpenWebcodexWorkbench {
+        #[serde(default)]
+        project: Option<String>,
+        #[serde(default)]
+        session_id: Option<String>,
+    },
+
+    /// Search bounded authorized resources. File and artifact searches require an explicit project;
+    /// artifact search additionally requires an exact retained Workflow Session.
+    SearchWebcodexResources {
+        kind: WebcodexResourceKind,
+        #[serde(default)]
+        #[schemars(length(max = 200))]
+        query: Option<String>,
+        #[serde(default)]
+        project: Option<String>,
+        #[serde(default)]
+        session_id: Option<String>,
+        #[serde(default)]
+        offset: Option<usize>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Read current content of one pinned resource. References grant no authority.
+    ReadWebcodexResource {
+        #[schemars(length(min = 1, max = 8192))]
+        uri: String,
+    },
+
     /// List caller-visible durable Goals with an optional authoritative lifecycle filter.
     ListGoals {
+        /// Literal title/objective substring, matched within the current owner only.
+        #[serde(default)]
+        #[schemars(length(max = 200))]
+        query: Option<String>,
         /// Closed authoritative Goal lifecycle. Execution/presentation states such as implementing,
         /// blocked, or waiting_validation are not Goal lifecycle values.
         #[serde(default)]
@@ -4479,6 +4523,11 @@ pub enum ToolCall {
     /// project" in a single bounded call and never descends into ignored
     /// directories such as `.venv` or `target`.
     ListProjectTrackedFiles {
+        /// Literal case-sensitive path substring, filtered before paging. Supplying query (including
+        /// an empty query) lists exact file paths instead of directory rollup.
+        #[serde(default)]
+        #[schemars(length(max = 200))]
+        query: Option<String>,
         /// Runner-registered project id.
         project: String,
         /// Optional explicit wc_sess_* Workflow Session id from a prior compatible bootstrap. When
@@ -5954,6 +6003,9 @@ impl ToolCall {
             Self::PresentGoalPlan { .. } => "present_goal_plan",
             Self::GoalPlanSync { .. } => "goal_plan_sync",
             Self::CheckpointGoal { .. } => "checkpoint_goal",
+            Self::OpenWebcodexWorkbench { .. } => "open_webcodex_workbench",
+            Self::SearchWebcodexResources { .. } => "search_webcodex_resources",
+            Self::ReadWebcodexResource { .. } => "read_webcodex_resource",
             Self::ListGoals { .. } => "list_goals",
             Self::UpdateGoal { .. } => "update_goal",
             Self::AssociateGoalAgentTask { .. } => "associate_goal_agent_task",

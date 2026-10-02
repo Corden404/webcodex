@@ -7,7 +7,7 @@ fn tool<'a>(payload: &'a Value, name: &str) -> Option<&'a Value> {
         .find(|tool| tool["name"] == name)
 }
 
-async fn handle_with_server_apps_enabled(
+pub(super) async fn handle_with_server_apps_enabled(
     runtime: &ToolRuntime,
     request: JsonRpcRequest,
     auth: Option<&crate::auth::AuthContext>,
@@ -170,10 +170,21 @@ async fn work_result_descriptor_keeps_renderers_public_and_bridge_tools_app_only
                 "only Work Result presentation surfaces may bind the Work Result resource"
             );
         }
-        if name != "work_result_thread_panel" {
+        if name == "open_webcodex_workbench" {
+            assert_eq!(
+                descriptor.pointer("/_meta/ui/resourceUri"),
+                Some(&json!(
+                    super::super::resources::MCP_WORKBENCH_UI_RESOURCE_URI
+                ))
+            );
+            assert_eq!(
+                descriptor.pointer("/_meta/openai~1ui/entrypoints"),
+                Some(&json!([{"type":"global"},{"type":"thread"}]))
+            );
+        } else if name != "work_result_thread_panel" {
             assert!(
                 descriptor["_meta"].get("openai/ui").is_none(),
-                "only the empty-argument Work Result launcher may advertise the ChatGPT thread entrypoint"
+                "only the explicit Work Result and Workbench launchers may advertise OpenAI entrypoints"
             );
         }
     }

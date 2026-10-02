@@ -106,7 +106,12 @@ fn work_result_app_internal_tool(tool_name: Option<&str>) -> bool {
     matches!(
         tool_name,
         Some(
-            "present_work_result"
+            "search_mentions"
+                | "open_webcodex_workbench"
+                | "search_webcodex_resources"
+                | "read_webcodex_resource"
+                | "list_sessions"
+                | "present_work_result"
                 | "work_result_thread_panel"
                 | "work_result_state"
                 | "work_result_activity_detail"
@@ -1234,8 +1239,7 @@ async fn handle_mcp_request_with_lifecycle(
     correlation_out: Option<&mut crate::tool_runtime::ToolCallCorrelation>,
 ) -> McpOutcome {
     let stateless_2026 = protocol_era == McpProtocolEra::Stateless2026;
-    let resource_read_bypasses_runtime_read = stateless_2026
-        && request.method == "resources/read"
+    let resource_read_bypasses_runtime_read = request.method == "resources/read"
         && resources::resource_read_bypasses_runtime_read(&request.params);
     let mcp_app_enabled =
         resources::mcp_app_enabled(server_mcp_apps_enabled, stateless_2026, &request.params);
@@ -1266,6 +1270,8 @@ async fn handle_mcp_request_with_lifecycle(
                 | "tools/list"
                 | "tools/call"
                 | "notifications/initialized"
+                | "resources/list"
+                | "resources/read"
         )
     {
         return scope_forbidden(
@@ -1313,10 +1319,10 @@ async fn handle_mcp_request_with_lifecycle(
             return tools::handle_list(id, auth, stateless_2026, compact_schemas, mcp_app_enabled)
                 .await;
         }
-        "resources/list" if stateless_2026 && runtime_resource_method => {
+        "resources/list" if runtime_resource_method => {
             return resources::handle_list(runtime, id, mcp_app_enabled);
         }
-        "resources/read" if stateless_2026 && runtime_resource_method => {
+        "resources/read" if runtime_resource_method => {
             return resources::handle_read(
                 runtime,
                 request.params,

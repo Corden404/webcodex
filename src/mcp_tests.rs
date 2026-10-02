@@ -303,6 +303,8 @@ mod plugin_tools;
 mod protocol;
 #[path = "mcp_tests/request_policy.rs"]
 mod request_policy;
+#[path = "mcp_tests/resource_references.rs"]
+mod resource_references;
 #[path = "mcp_tests/response.rs"]
 mod response_tests;
 #[path = "mcp_tests/result_app.rs"]
@@ -439,3 +441,9 @@ fn readiness_audit_correlation_retains_exact_jobs_without_guessing_project() {
     assert!(correlation.resolved_project.is_none());
     assert!(correlation.async_job_id.is_none());
 }
+
+#[path = "mcp_tests/workbench_app.rs"]
+mod workbench_app;
+
+#[path = "mcp_tests/resource_mentions.rs"]
+mod resource_mentions;
