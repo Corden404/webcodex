@@ -983,7 +983,8 @@ test("live rows share one snapshot acquisition, load one diff, and keep collapse
   view.nodes.workspaceMore.onclick(); await flush();
   assert.equal(view.nodes.workspaceFiles.children.length, 10);
   view.nodes.workspaceLess.onclick();
-  assert.equal(view.nodes.workspaceFiles.children.length, 5);
+  assert.equal(view.nodes.workspaceFiles.children.filter(row => !row.hidden).length, 5);
+  assert.equal(view.nodes.workspaceFiles.children.length, 10, "hidden rows retain their reading state");
   assert.equal(view.nodes.workspaceFiles.children[0], first);
   view.nodes.workspaceCollapse.onclick();
   assert.equal(first.children[1].hidden, true);
@@ -1684,6 +1685,134 @@ function previewReply(request, text, extra = {}) {
   } });
 }
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
+
+async function readingView(state = baseState) {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({});
+  view.notification("ui/notifications/tool-result", threadResult(state, session_id));
+  await view.initialize();
+  return view;
+}
+
+function readingFile(view, final = false, index = 0) {
+  const row = view.nodes[final ? "frozenFiles" : "workspaceFiles"].children[index];
+  row.expand();
+  const controls = row.children[1].children[0], pre = row.children[1].children[2], preview = row.children[1].children[3];
+  return { row, controls, pre, text: preview.children[1], markdown: preview.children[2], button: label => controls.children.find(node => node.textContent === label) };
+}
+
+test("thread file navigation is scoped to visible loaded files and preserves mounted rows", async () => {
+  const state = structuredClone(frozenWork());
+  state.workspace.files = Array.from({ length: 8 }, (_, i) => ({ path: `src/file_${i}.rs`, status: "modified" }));
+  state.workspace.files_total = 30; state.workspace.truncated = true;
+  const view = await readingView(state);
+  const [select, previous, next] = view.nodes.workspaceNavigator.children;
+  assert.equal(select.children.length, 5);
+  assert.equal(previous.disabled, true); assert.equal(next.disabled, false);
+  assert.equal(view.calls("get_work_result_state").length, 0, "navigation does not eagerly read files");
+  const first = view.nodes.workspaceFiles.children[0];
+  let navigation = 0;
+  view.nodes.workspaceFiles.children[1].scrollIntoView = () => navigation++;
+  next.onclick(); await flush();
+  assert.equal(select.value, "src/file_1.rs"); assert.equal(navigation, 1);
+  const read = view.calls("get_work_result_state")[0];
+  await view.reply(read, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: 24, files_total: 30, source_truncated: false,
+    files: Array.from({ length: 24 }, (_, i) => frozenFile(i)),
+  } }));
+  const second = view.nodes.workspaceFiles.children[1];
+  first.remove = second.remove = () => { throw new Error("Reading row detached during paging"); };
+  view.nodes.workspaceMore.onclick(); await flush();
+  assert.equal(select.children.length, 10);
+  assert.equal(select.value, "src/file_1.rs");
+  view.nodes.workspaceLess.onclick();
+  assert.equal(select.children.length, 5);
+  assert.equal(second.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.nodes.frozenNavigator.children[0].value, finalChanges.files[0].path, "final navigation is independent");
+  view.nodes.frozenMore.onclick(); await flush();
+  assert.equal(view.nodes.frozenNavigator.children[0].children.length, 7);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+});
+
+test("thread Diff numbers follow hunk ranges, zero-length sides and literal plus/minus content", async () => {
+  const diff = ["diff --git a/demo b/demo", "--- a/demo", "+++ b/demo", "@@ -10,3 +20,4 @@ title", " same", "---literal", "+++literal", " after", "+extra", "\\ No newline at end of file", "@@ -0,0 +1 @@", "+new", "@@ -6 +0,0 @@", "-gone", "@@ malformed", "+unknown"].join("\n");
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { content: diff, content_kind: "diff" });
+  const view = await readingView(state), { pre, button } = readingFile(view);
+  const rows = pre.children.map(line => [line.getAttribute("data-old-line"), line.getAttribute("data-new-line"), line.children[0].textContent]);
+  assert.deepEqual(rows.slice(4, 9), [["10", "20", " same"], ["11", "", "---literal"], ["", "21", "+++literal"], ["12", "22", " after"], ["", "23", "+extra"]]);
+  assert.deepEqual(rows[11], ["", "1", "+new"]);
+  assert.deepEqual(rows[13], ["6", "", "-gone"]);
+  assert.deepEqual(rows[15], ["", "", "+unknown"]);
+  assert.equal(pre.children[5].className, "diff-line deleted");
+  assert.equal(pre.children[6].className, "diff-line added");
+  button("Wrap lines").onclick();
+  assert.equal(pre.className, "diff no-wrap");
+  assert.equal(button("Wrap lines").getAttribute("aria-pressed"), "false");
+  assert.equal(view.calls("get_work_result_state").length, 0);
+});
+
+test("thread keeps Diff DOM and wrap state through refresh and collapse", async () => {
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { content: "@@ -1 +1 @@\n-old\n+new", content_kind: "diff" });
+  const view = await readingView(state), file = readingFile(view);
+  const firstLine = file.pre.children[0];
+  file.button("Wrap lines").onclick();
+  file.row.collapse(); file.row.expand();
+  assert.equal(file.pre.children[0], firstLine);
+  assert.equal(file.pre.className, "diff no-wrap");
+  view.nodes.refresh.onclick();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result: { ...state, state_version: nextState.state_version } }));
+  assert.equal(view.nodes.workspaceFiles.children[0], file.row);
+  assert.equal(file.pre.children[0], firstLine);
+  assert.equal(file.row.children[0].getAttribute("aria-expanded"), "true");
+});
+
+test("thread restores each reading mode and fences asynchronous previews after snapshot reset", async () => {
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { path: "README.md", content: "@@ -1 +1 @@\n-old\n+new", content_kind: "diff" });
+  const view = await readingView(state), file = readingFile(view);
+  const bounds = () => ({ top: 100 - view.viewport.scrollY, bottom: 1100 - view.viewport.scrollY, height: 1000 });
+  file.pre.getBoundingClientRect = file.text.getBoundingClientRect = bounds;
+  view.viewport.scrollY = 300;
+  file.button("Full text").onclick(); await flush();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "README.md", kind: "modified", additions: 4, deletions: 1 }],
+  } }));
+  const read = view.calls("get_work_result_state")[1];
+  await view.reply(read, previewReply(read, "# Safe preview\n"));
+  view.viewport.scrollY = 450;
+  file.button("Changes").onclick();
+  assert.equal(view.viewport.scrollY, 300, "Diff restores its own offset");
+  file.button("Full text").onclick();
+  assert.equal(view.viewport.scrollY, 450, "Full text restores its separate offset");
+  assert.equal(view.calls("get_work_result_state").length, 2, "cached modes do not refetch");
+  view.nodes.workspaceReload.onclick();
+  assert.equal(view.nodes.workspaceNavigator.children[0].value, "README.md", "a new snapshot starts with a valid file selection");
+  const replacement = readingFile(view);
+  assert.notEqual(replacement.row, file.row);
+  assert.equal(replacement.pre.className, "diff");
+  replacement.button("Full text").onclick(); await flush();
+  const pending = view.calls("get_work_result_state").at(-1);
+  view.nodes.workspaceReload.onclick();
+  const currentRow = view.nodes.workspaceFiles.children[0];
+  await view.reply(pending, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "README.md", kind: "modified", additions: 4, deletions: 1 }],
+  } }));
+  assert.equal(view.nodes.workspaceFiles.children[0], currentRow);
+  assert.equal(currentRow.children[0].getAttribute("aria-expanded"), "false");
+  assert.equal(view.calls("get_work_result_state").at(-1), pending, "late snapshot cannot start another content read");
+});
+
+test("thread failure removes navigation together with file content", async () => {
+  const view = await readingView(frozenWork());
+  view.toolInput({ project: "other-project" });
+  assert.equal(view.nodes.badge.textContent, "Unavailable");
+  assert.equal(view.nodes.workspaceNavigator.hidden, true);
+  assert.equal(view.nodes.frozenNavigator.hidden, true);
+});
 
 async function workspacePreview() {
   const view = app("mcp_work_result_app.html");

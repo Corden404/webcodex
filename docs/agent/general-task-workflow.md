@@ -34,7 +34,17 @@ authority are unchanged.
 
 MCP failure messages omit exact duplicate stdout/stderr tail blocks while preserving their canonical output fields, diagnostics and recovery guidance. HTTP results and retained logs remain available. MCP `observe_jobs` defaults to `summary_only=true`, compacting proven successful validation logs; failures, unknown results and ordinary commands retain evidence. Explicit `summary_only=false` expands from the original observation cursor.
 
-`read_tool_manifest` describes the deployed canonical contract and admitted routes; it does not install Host callables. If ChatGPT has cached older direct definitions, use an admitted gateway fallback where the manifest allows it. MCP App presentation must retain its direct route. New Work Result cards use resource v17; retired resource URIs fail closed.
+`read_tool_manifest` describes the deployed canonical contract and admitted routes; it does not install Host callables. If ChatGPT has cached older direct definitions, use an admitted gateway fallback where the manifest allows it. MCP App presentation must retain its direct route. New Work Result cards use resource v18; retired resource URIs fail closed.
+
+The thread panel uses one continuous page for Changed files and Final changes.
+Each section has a sticky file selector and previous/next controls for its shown
+files; Show more explicitly extends that list. File expansion remains lazy.
+Unified Diff hunks show old/new line numbers, with wrapping enabled by default
+and an optional horizontal code scroller. Full text and Markdown reuse the same
+pinned snapshot reads and preview limits. Refreshing an unchanged snapshot keeps
+file nodes, folding, mode and reading position; refreshing the file snapshot
+discards those states. Inline cards keep their compact layout. No reading state
+is persisted across closing and reopening a panel.
 
 ## Repeatable acceptance
 
