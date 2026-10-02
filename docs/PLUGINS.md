@@ -479,7 +479,10 @@ forms of `additionalProperties`, union `type`, `anyOf`, `oneOf`, `allOf`, `not`,
 or arbitrary draft-specific keywords.
 
 See [`examples/native-tool-plugin.mjs`](../examples/native-tool-plugin.mjs) for
-a minimal no-dependency Node example. The repository also ships first-party SDK
+a minimal no-dependency Node example. A standard-library-only
+[Python raw-protocol example](../plugins/examples/python-raw/README.md) demonstrates
+bounded stdio, argument validation, and a deterministic echo tool without the
+TypeScript SDK. The repository also ships first-party SDK
 dogfood Plugins: [`plugins/safe-delete`](../plugins/safe-delete/README.md) is an optional
 project-root-fenced Plugin that moves one file or directory to the operating system
 Trash/Recycle Bin without adding permanent deletion to WebCodex's built-in tool

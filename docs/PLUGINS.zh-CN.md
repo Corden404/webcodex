@@ -421,7 +421,9 @@ keyword 会在 provider admission 时明确拒绝，不会 silently ignore。v1 
 `oneOf`、`allOf`、`not` 或任意 draft-specific keyword。
 
 最小无依赖 Node 示例见
-[`examples/native-tool-plugin.mjs`](../examples/native-tool-plugin.mjs)。仓库还提供多个
+[`examples/native-tool-plugin.mjs`](../examples/native-tool-plugin.mjs)。另有仅使用标准库的
+[Python 原始协议示例](../plugins/examples/python-raw/README.md)，展示有界 stdio、参数校验
+和确定性的 echo 工具，无需 TypeScript SDK。仓库还提供多个
 first-party SDK dogfood Plugin：[`plugins/safe-delete`](../plugins/safe-delete/README.zh-CN.md)
 把删除权限限制在配置的项目根内，只把单个文件或目录移入系统 Trash / Recycle Bin，
 不会把永久删除能力加入 WebCodex 内建工具面；
