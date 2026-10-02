@@ -127,7 +127,8 @@ test("thread review puts checks before long file lists while keeping diagnostics
   assert.equal(view.nodes.tabResults.textContent, "Review");
   assert.equal(view.nodes.workspaceHeading.textContent, "Changed files");
   assert.deepEqual(view.nodes.viewTabs.children, [view.nodes.tabResults, view.nodes.tabActivity, view.nodes.tabCollaboration]);
-  assert.deepEqual(view.nodes.panelResults.children.slice(0, 3), [view.nodes.resultChecks, view.nodes.workspaceChangesSection, view.nodes.finalChanges]);
+  assert.deepEqual(view.nodes.panelResults.children.slice(0, 4), [view.nodes.resultChecks, view.nodes.quotePanel, view.nodes.workspaceChangesSection, view.nodes.finalChanges]);
+  assert.equal(view.nodes.quotePanel.hidden, true);
   assert.equal(view.nodes.diagnostics.open, false);
   assert.deepEqual(view.nodes.diagnosticContent.children, [view.nodes.taskContext]);
   view.nodes.tabResults.onkeydown({ key: "ArrowRight", preventDefault() {} });
@@ -1855,6 +1856,215 @@ test("complete file paths copy explicitly with a manual fallback when clipboard 
     assert.equal(denied ? status.textContent.includes("manually") : copied[0] === path, true);
     await view.teardown(); await copy.onclick();
     assert.equal(copied.length, denied ? 0 : 1);
+  }
+});
+
+async function quoteView({ capabilities = { updateModelContext: { text: {} } }, hostContext, navigator, state = baseState } = {}) {
+  const copy = structuredClone(state);
+  Object.assign(copy.workspace.files[0], { content: "@@ -1 +1 @@\n-before\n+after", content_kind: "diff" });
+  const view = app("mcp_work_result_app.html", { navigator });
+  view.notification("ui/notifications/tool-result", threadResult(copy, session_id));
+  await view.reply(view.sent[0], { protocolVersion: "2026-01-26", hostCapabilities: capabilities, hostContext });
+  return view;
+}
+function selectExcerpt(view, file, text = "+after", node = file.pre.children.at(-1)) {
+  view.selection.value = { rangeCount: 1, isCollapsed: false, toString: () => text,
+    getRangeAt: () => ({ startContainer: node, endContainer: node, toString: () => text.replaceAll("\n", "") }) };
+  file.button("Quote selection").onclick();
+}
+const contextUpdates = view => view.sent.filter(request => request.method === "ui/update-model-context");
+
+test("quoting previews exact text and provenance without reads or sending, then adds only on confirmation", async () => {
+  const view = await quoteView(), file = readingFile(view), before = view.sent.length;
+  selectExcerpt(view, file, "-before\n+after <script>literal</script> 😀");
+  assert.equal(view.sent.length, before);
+  assert.equal(view.nodes.quotePanel.hidden, false);
+  assert.equal(view.nodes.quoteText.textContent, "-before\n+after <script>literal</script> 😀", "rendered line breaks are preserved");
+  assert.equal(view.nodes.quoteText.children.length, 0);
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Observation: ${baseState.state_version}`));
+  assert.match(view.nodes.quoteCopy.value, /not a pinned file snapshot/);
+  const adding = view.nodes.quoteAdd.onclick();
+  view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view).length, 1);
+  const request = contextUpdates(view)[0];
+  assert.equal(request.params.content.length, 1);
+  assert.equal(request.params.content[0].text, view.nodes.quoteCopy.value);
+  assert.match(request.params.content[0].text, /File: "src\/a.rs"/);
+  await view.reply(request, {}); await adding;
+  assert.equal(view.nodes.quoteDraft.hidden, true);
+  assert.equal(view.nodes.quoteReferences.children.length, 1);
+  assert.match(view.nodes.quoteReferences.children[0].children[0].textContent, /-before\n\+after/);
+  selectExcerpt(view, file, "-before\n+after <script>literal</script> 😀");
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view).length, 1, "duplicate quote does not replace context again");
+  assert.equal(view.sent.filter(request => request.method === "ui/message").length, 0);
+  assert.equal(view.calls("send_work_result_message").length, 0);
+});
+
+test("quotes reject cross-file and oversized selections, cancel locally and discard stale draft sources", async () => {
+  const view = await quoteView(), file = readingFile(view);
+  selectExcerpt(view, file, "outside", view.nodes.resultChecks);
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  selectExcerpt(view, file, "😀".repeat(4001));
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  view.selection.value = { rangeCount: 0, isCollapsed: true };
+  file.button("Quote selection").onclick();
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  selectExcerpt(view, file, "😀".repeat(4000));
+  assert.equal(Array.from(view.nodes.quoteText.textContent).length, 4000);
+  view.nodes.quoteCancel.onclick();
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  view.viewport.scrollY = 300;
+  let returned = false; file.button("Quote selection").focus = () => { returned = true; };
+  selectExcerpt(view, file); view.viewport.scrollY = 0;
+  view.nodes.quoteCancel.onclick();
+  assert.equal(view.viewport.scrollY, 300);
+  assert.equal(returned, true);
+  selectExcerpt(view, file);
+  view.nodes.workspaceReload.onclick();
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(view.nodes.quoteDraft.hidden, true);
+  assert.match(view.nodes.quoteStatus.textContent, /file view changed/);
+  assert.equal(contextUpdates(view).length, 0);
+});
+
+test("full text and Markdown quotes retain the exact working-tree snapshot without promoting Session scope", async () => {
+  const state = structuredClone(baseState); state.workspace.files[0].path = "README.md";
+  const view = await quoteView({ state }), file = readingFile(view);
+  file.button("Full text").onclick(); await flush();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [frozenFile(0, { path: "README.md" })],
+  } }));
+  const read = view.calls("get_work_result_state")[1];
+  await view.reply(read, previewReply(read, "# Snapshot text\n\nQuoted paragraph."));
+  const requests = view.sent.length;
+  selectExcerpt(view, file, "Quoted paragraph.", file.text);
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Snapshot: ${snapshot_id}`));
+  assert.doesNotMatch(view.nodes.quoteCopy.value, /Session:/);
+  assert.match(view.nodes.quoteCopy.value, /View: Full text/);
+  view.nodes.quoteCancel.onclick();
+  file.button("Markdown").onclick();
+  selectExcerpt(view, file, "Snapshot text", file.markdown.children[0]);
+  assert.match(view.nodes.quoteCopy.value, /View: Markdown/);
+  assert.equal(view.sent.length, requests);
+});
+
+test("final Diff quotes carry the frozen snapshot and explicit Session", async () => {
+  const view = await quoteView({ state: frozenWork() }), file = readingFile(view, true);
+  await view.reply(view.calls("read_changed_file_diff")[0], frozenDiff());
+  selectExcerpt(view, file, "+new");
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Snapshot: ${snapshot_id}`));
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Session: ${session_id}`));
+  assert.match(view.nodes.quoteCopy.value, /Source: Final changes/);
+});
+
+test("Hosts without text context get a copyable quote and never receive a fabricated resource or message", async () => {
+  for (const capabilities of [{}, { updateModelContext: { resource: {}, resourceLink: {} } }]) {
+    const view = await quoteView({ capabilities }), file = readingFile(view);
+    selectExcerpt(view, file);
+    assert.equal(view.nodes.quoteAdd.textContent, "Copy quote");
+    assert.equal(view.nodes.quoteCopy.hidden, false);
+    let selected = false; view.nodes.quoteCopy.select = () => { selected = true; };
+    await view.nodes.quoteAdd.onclick();
+    assert.equal(selected, true);
+    assert.equal(contextUpdates(view).length, 0);
+    assert.equal(view.sent.filter(request => request.method === "ui/message").length, 0);
+  }
+  const copied = [], view = await quoteView({ capabilities: {}, navigator: { clipboard: { async writeText(text) { copied.push(text); } } } });
+  selectExcerpt(view, readingFile(view));
+  assert.equal(copied.length, 0);
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(copied[0], view.nodes.quoteCopy.value);
+});
+
+test("context update uncertainty retries only the exact set and teardown stops all quote actions", async () => {
+  const view = await quoteView(), file = readingFile(view);
+  selectExcerpt(view, file);
+  const first = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  await view.reject(request); await first;
+  assert.equal(view.nodes.quoteRetry.hidden, false);
+  assert.equal(view.nodes.quoteAdd.disabled, true);
+  selectExcerpt(view, file, "different");
+  assert.equal(view.nodes.quoteText.textContent, "+after");
+  view.nodes.quoteRetry.onclick();
+  assert.deepEqual(contextUpdates(view)[1].params, request.params);
+  await view.reply(contextUpdates(view)[1], {});
+  assert.equal(view.nodes.quoteReferences.children.length, 1);
+  await view.teardown();
+  const requests = view.sent.length;
+  file.button("Quote selection").onclick();
+  await view.nodes.quoteAdd.onclick(); view.nodes.quoteRetry.onclick();
+  assert.equal(view.sent.length, requests);
+  assert.equal(view.nodes.quoteText.textContent, "");
+});
+
+test("advertised Host context restores other references and canonical removal wins over a delayed acknowledgment", async () => {
+  const original = { type: "resource_link", uri: "webcodex-resource://file/example", name: "Existing file" };
+  const capabilities = { updateModelContext: { text: {} }, experimental: { "openai/modelContext": {} } };
+  const view = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "initial", content: [original] } } });
+  const file = readingFile(view); selectExcerpt(view, file);
+  const adding = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  assert.deepEqual(JSON.parse(JSON.stringify(request.params.content[0])), original);
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": null });
+  await view.reply(request, { _meta: { "openai/modelContext": { updateId: "late" } } }); await adding;
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  assert.match(view.nodes.quoteStatus.textContent, /cleared in the chat/);
+  const second = view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view)[1].params.content.length, 1, "cleared resource is not resurrected");
+  await view.reply(contextUpdates(view)[1], { _meta: { "openai/modelContext": { updateId: "accepted" } } });
+  await second;
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "accepted" } });
+  assert.equal(view.nodes.quoteReferences.children.length, 1, "matching acknowledgment does not clear content");
+  const reference = view.nodes.quoteReferences.children[0];
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "same-content", content: JSON.parse(JSON.stringify(contextUpdates(view)[1].params.content)) } });
+  assert.equal(view.nodes.quoteReferences.children[0], reference, "unchanged context preserves keyboard focus");
+  view.nodes.quoteReferences.children[0].children[1].onclick();
+  assert.equal(contextUpdates(view)[2].params.content.length, 0);
+  await view.reply(contextUpdates(view)[2], {});
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+});
+
+test("unadvertised synchronization and oversized Host context cannot overwrite references", async () => {
+  const view = await quoteView();
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "ignored", content: [{ type: "text", text: "ignored" }] } });
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  const capabilities = { updateModelContext: { text: {} }, experimental: { "openai/modelContext": {} } };
+  for (const content of [Array.from({ length: 13 }, () => ({ type: "text", text: "old" })), [{ type: "text", text: "x".repeat(65536) }]]) {
+    const blocked = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "large", content } } });
+    selectExcerpt(blocked, readingFile(blocked));
+    await blocked.nodes.quoteAdd.onclick();
+    assert.equal(blocked.nodes.quoteAdd.disabled, true);
+    assert.equal(contextUpdates(blocked).length, 0);
+  }
+  const full = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "full", content: Array.from({ length: 12 }, () => ({ type: "text", text: "old" })) } } });
+  selectExcerpt(full, readingFile(full)); await full.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(full).length, 0);
+  assert.match(full.nodes.quoteStatus.textContent, /Context is full/);
+});
+
+test("a late context acknowledgment cannot restore a torn-down quote", async () => {
+  const view = await quoteView(); selectExcerpt(view, readingFile(view));
+  const adding = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  await view.teardown(); await adding;
+  await view.reply(request, {});
+  assert.equal(view.nodes.quoteText.textContent, "");
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  assert.equal(view.nodes.quoteAdd.disabled, true);
+  assert.equal(contextUpdates(view).length, 1);
+});
+
+test("context acknowledgment restores disabled-button focus without stealing it after the user moves away", async () => {
+  for (const movedAway of [false, true]) {
+    const view = await quoteView(), file = readingFile(view);
+    view.nodes.quotePanel.append(view.nodes.quoteAdd);
+    selectExcerpt(view, file); view.nodes.quoteAdd.focus();
+    const adding = view.nodes.quoteAdd.onclick();
+    // Browsers blur a focused button as soon as the pending action disables it.
+    view.document.activeElement = view.document.body;
+    if (movedAway) file.button("Quote selection").focus();
+    await view.reply(contextUpdates(view)[0], {}); await adding;
+    assert.equal(view.document.activeElement, movedAway ? file.button("Quote selection") : view.nodes.quotePanel);
   }
 });
 

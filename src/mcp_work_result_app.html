@@ -259,6 +259,11 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
 .review-sections { display: flex; flex-wrap: wrap; gap: 6px; }
 .check-summary, .check-summary > div { display: grid; min-width: 0; gap: 7px; }
 .preview-help { flex-basis: 100%; margin: 0; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.quote-text { max-height: 220px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--divider); border-radius: 8px; background: var(--surface); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--font-mono, ui-monospace, monospace); }
+.quote-copy { width: 100%; min-width: 0; min-height: 130px; resize: vertical; color: CanvasText; }
+.quote-reference { display: flex; align-items: start; gap: 8px; padding: 6px 0; }
+.quote-reference span { min-width: 0; flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+.quote-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .thread-review .check-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .thread-review #resultChecks { scroll-margin-top: 12px; }
 .thread-review .section:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -362,6 +367,22 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
         <div id="composerState" class="secondary"></div>
       </section>
     </div>
+    <section id="quotePanel" class="section" aria-labelledby="quoteHeading" tabindex="-1" hidden>
+      <h2 id="quoteHeading">Quoted context</h2>
+      <p id="quoteHint" class="secondary"></p>
+      <div id="quoteDraft" hidden>
+        <p id="quoteSource" class="secondary"></p>
+        <pre id="quoteText" class="quote-text" tabindex="0" aria-label="Selected excerpt"></pre>
+        <div class="file-views">
+          <button id="quoteAdd" class="refresh" type="button">Add to chat context</button>
+          <button id="quoteCancel" class="refresh" type="button">Cancel quote</button>
+        </div>
+        <textarea id="quoteCopy" class="quote-text quote-copy" readonly aria-label="Quote text for manual copy" hidden></textarea>
+      </div>
+      <div id="quoteReferences"></div>
+      <p id="quoteStatus" class="secondary" role="status"></p>
+      <button id="quoteRetry" class="refresh" type="button" hidden>Retry context update</button>
+    </section>
     <details id="diagnostics" class="details" hidden>
       <summary>Diagnostics</summary>
       <div id="diagnosticContent"></div>
@@ -1035,6 +1056,123 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     pre.restoreReadingPosition?.();
   }
 
+  const object = value => !!value && typeof value === "object" && !Array.isArray(value);
+  let quoteDraft = null, quoteContent = [], quoteBusy = false, quotePending = null;
+  let renderedQuoteReferences = "";
+  let quoteTextSupported = false, quoteAdapter = false, quoteContextId = null, quoteGeneration = 0, quoteBlocked = false;
+  const MAX_QUOTE_CHARS = 4000, MAX_QUOTE_REFERENCES = 12, MAX_QUOTE_CONTEXT_BYTES = 65536;
+  function quoteLabel(block) {
+    if (block.type !== "text" || !block.text.startsWith("WebCodex excerpt\n")) return block.title || block.name || block.uri || block.resource?.uri || "Attached context";
+    const lines = block.text.split("\n"), start = lines.indexOf("Selected file content (excerpt only):");
+    const excerpt = start < 0 ? "" : lines.slice(start + 1).join("\n");
+    return `${lines.find(line => line.startsWith("File: "))?.slice(6) || "Quoted excerpt"}\n${excerpt.slice(0, 120)}${excerpt.length > 120 ? "…" : ""}`;
+  }
+
+  function renderQuoteControls() {
+    if (quoteDraft && !quoteDraft.current()) {
+      quoteDraft = null; el("quoteText").textContent = ""; el("quoteCopy").value = "";
+      el("quoteStatus").textContent = "The file view changed. Select the excerpt again before adding it.";
+    }
+    const locked = tornDown || !hostInitialized || quoteBusy || !!quotePending || quoteBlocked;
+    el("quotePanel").hidden = threadSession === undefined || (!quoteDraft && !quoteContent.length && !quotePending && !el("quoteStatus").textContent);
+    el("quoteDraft").hidden = !quoteDraft;
+    el("quoteAdd").disabled = locked || !quoteDraft;
+    el("quoteCancel").disabled = quoteBusy || !!quotePending;
+    el("quoteAdd").textContent = quoteTextSupported ? "Add to chat context" : "Copy quote";
+    el("quoteCopy").hidden = quoteTextSupported || !quoteDraft;
+    el("quoteHint").textContent = quoteTextSupported
+      ? "Review the excerpt, then add it as context for your next message. No message is sent."
+      : "This Host does not accept text references. Copy the quote into your next message.";
+    el("quoteRetry").hidden = !quotePending;
+    el("quoteRetry").disabled = tornDown || quoteBusy || quoteBlocked;
+    if (quoteBlocked) el("quoteStatus").textContent = "Host context cannot be edited in this panel. Manage references in the chat.";
+    const fingerprint = JSON.stringify(quoteContent);
+    if (fingerprint !== renderedQuoteReferences) {
+      renderedQuoteReferences = fingerprint; el("quoteReferences").replaceChildren();
+      quoteContent.forEach((block, index) => {
+        const row = document.createElement("div"); row.className = "quote-reference";
+        const label = document.createElement("span"); label.textContent = quoteLabel(block);
+        const remove = document.createElement("button"); remove.type = "button"; remove.className = "refresh"; remove.textContent = "Remove";
+        remove.setAttribute("aria-label", `Remove reference ${index + 1}`);
+        remove.onclick = () => { if (!quoteBusy && !quotePending && JSON.stringify(quoteContent) === fingerprint) void updateQuoteContext(quoteContent.filter((_, i) => i !== index)); };
+        row.append(label, remove); el("quoteReferences").append(row);
+      });
+    }
+    for (const row of el("quoteReferences").children) row.children[1].disabled = locked || !quoteTextSupported;
+  }
+
+  async function updateQuoteContext(next) {
+    if (tornDown || !hostInitialized || !quoteTextSupported || quoteBusy || quoteBlocked) return;
+    if (next.length > MAX_QUOTE_REFERENCES || new TextEncoder().encode(JSON.stringify(next)).length > MAX_QUOTE_CONTEXT_BYTES) {
+      el("quoteStatus").textContent = "Context is full (12 references / 64 KiB). Remove a reference before adding another."; renderQuoteControls(); return;
+    }
+    const generation = quoteGeneration, draft = quoteDraft;
+    const focusedBefore = document.activeElement, startedHere = el("quotePanel").contains(focusedBefore);
+    let retainFocus = false;
+    quoteBusy = true; quotePending = next;
+    el("quoteStatus").textContent = "Updating chat context…"; renderQuoteControls();
+    try {
+      const result = await send("ui/update-model-context", { content: next });
+      if (tornDown || generation !== quoteGeneration) return;
+      retainFocus = startedHere && (document.activeElement === document.body || document.activeElement === focusedBefore);
+      quoteContent = next; quotePending = null;
+      const id = result?._meta?.["openai/modelContext"]?.updateId;
+      if (quoteAdapter && typeof id === "string" && id.length > 0 && id.length <= 256) quoteContextId = id;
+      if (draft && next.some(block => block.type === "text" && block.text === draft.text)) {
+        quoteDraft = null; el("quoteText").textContent = ""; el("quoteCopy").value = "";
+      }
+      el("quoteStatus").textContent = quoteContent.length ? "References ready for your next message." : "References removed.";
+    } catch (_) {
+      if (!tornDown && generation === quoteGeneration) el("quoteStatus").textContent = "The Host has not confirmed this change. Retry the same reference update.";
+    } finally {
+      quoteBusy = false;
+      if (!tornDown) { renderQuoteControls(); if (retainFocus) el("quotePanel").focus?.({ preventScroll: true }); }
+    }
+  }
+
+  function syncQuoteContext(context) {
+    if (tornDown || !quoteAdapter || !object(context) || !("openai/modelContext" in context)) return;
+    const state = context["openai/modelContext"];
+    if (state !== null && (!object(state) || typeof state.updateId !== "string" || !state.updateId.length || state.updateId.length > 256)) return;
+    if (state !== null && state.updateId === quoteContextId) return;
+    const content = state?.content ?? [];
+    quoteGeneration++; quoteContextId = state?.updateId || null; quotePending = null;
+    // Preserve the Host's complete context, including resource references from a
+    // remount. Never silently trim it and overwrite references we did not keep.
+    quoteBlocked = !Array.isArray(content) || content.length > MAX_QUOTE_REFERENCES
+      || new TextEncoder().encode(JSON.stringify(content)).length > MAX_QUOTE_CONTEXT_BYTES
+      || content.some(block => !object(block) || !["text", "resource_link", "resource", "image", "audio"].includes(block.type)
+        || block.type === "text" && typeof block.text !== "string");
+    if (!quoteBlocked) quoteContent = content;
+    el("quoteStatus").textContent = quoteBlocked ? "Host context cannot be edited in this panel. Manage references in the chat."
+      : content.length ? "References synchronized with the Host." : "References cleared in the chat.";
+    renderQuoteControls();
+  }
+
+  function previewQuote(node, source, current, feedback, returnFocus) {
+    if (tornDown || !hostInitialized || quoteBusy || quotePending || !current()) return;
+    const selection = globalThis.getSelection?.();
+    if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) { feedback.textContent = "Select text in this file, then choose Quote selection."; return; }
+    const range = selection.getRangeAt(0);
+    if (!node.contains(range.startContainer) || !node.contains(range.endContainer)) { feedback.textContent = "Select an excerpt within this file's current reading view."; return; }
+    // Selection preserves rendered line/paragraph breaks; Range concatenates
+    // adjacent Diff spans and would silently merge separate code lines.
+    const text = selection.toString();
+    if (!text.trim() || Array.from(text).length > MAX_QUOTE_CHARS) { feedback.textContent = "Select an excerpt of 1–4,000 characters. Quotes are never silently shortened."; return; }
+    const origin = ["WebCodex excerpt", `Project: ${JSON.stringify(source.project)}`, `File: ${JSON.stringify(source.path)}`,
+      `Source: ${source.final ? "Final changes" : "Working tree"}`, source.snapshot_id ? `Snapshot: ${source.snapshot_id}` : `Observation: ${source.state_version} (not a pinned file snapshot)`,
+      ...(source.session_id ? [`Session: ${source.session_id}`] : []), `View: ${source.view}`, "Selected file content (excerpt only):"].join("\n");
+    const scroll = globalThis.scrollY || 0;
+    quoteDraft = { text: `${origin}\n${text}`, current, returnToFile: () => {
+      if (!current()) return;
+      globalThis.scrollBy?.({ top: scroll - (globalThis.scrollY || 0), behavior: "instant" }); returnFocus?.();
+    } };
+    feedback.textContent = "";
+    el("quoteSource").textContent = `${source.path} · ${source.view} · ${source.final ? "Final changes" : "Working tree"} · ${source.snapshot_id ? "Snapshot" : "Observation"} ${source.snapshot_id || source.state_version}`;
+    el("quoteText").textContent = text; el("quoteCopy").value = quoteDraft.text; el("quoteStatus").textContent = "";
+    renderQuoteControls(); jumpToReviewSection("quotePanel");
+  }
+
   const fileNavigators = new Map();
   const fileQuery = final => String(fileNavigators.get(final)?.filter.value || "").trim().toLowerCase();
   const fileSource = final => final ? snapshot : workspaceSnapshot || workspaceSeed;
@@ -1264,7 +1402,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       node.scrollLeft = saved.left;
       globalThis.scrollBy?.({ top: rect.top + Math.min(saved.offset, Math.max(0, rect.height - 32)), behavior: "instant" });
     };
-    const rowProject = identity.project, finalSnapshot = final ? snapshot.snapshot_id : null, finalSession = final ? snapshot.session_id : null;
+    const rowProject = identity.project, rowVersion = lastRenderedState?.state_version;
+    const finalSnapshot = final ? snapshot.snapshot_id : null, finalSession = final ? snapshot.session_id : null;
     const sourceCurrent = workspace => !tornDown && identity?.project === rowProject
       && (final ? snapshot?.snapshot_id === finalSnapshot && snapshot?.session_id === finalSession : workspace === workspaceEpoch);
     const current = (epoch, workspace) => epoch === localEpoch && sourceCurrent(workspace);
@@ -1401,6 +1540,19 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
           pre.className = "diff" + (wrapping ? "" : " no-wrap"); text.className = "diff full-text" + (wrapping ? "" : " no-wrap");
         };
         controls.append(wrapButton);
+        const quote = document.createElement("button"); quote.type = "button"; quote.className = "refresh"; quote.textContent = "Quote selection";
+        quote.title = "Select text in this reading view, then preview it as a quote";
+        const quoteHelp = document.createElement("p"); quoteHelp.className = "preview-help"; quoteHelp.setAttribute("role", "status");
+        quote.onmousedown = event => event.preventDefault();
+        quote.onclick = () => {
+          const workspace = workspaceEpoch, observed = mode === "diff" && typeof file.content === "string";
+          const source = final ? { snapshot_id: finalSnapshot, session_id: finalSession }
+            : observed ? { state_version: rowVersion } : workspaceSnapshot;
+          if (!source) { quoteHelp.textContent = "Wait for this file view to finish loading."; return; }
+          previewQuote(surface(), { ...source, project: rowProject, path: file.path, final, view: ({ diff: "Changes", text: "Full text", markdown: "Markdown" })[mode] },
+            () => root.isConnected && sourceCurrent(workspace), quoteHelp, () => quote.focus?.({ preventScroll: true }));
+        };
+        controls.append(quote, quoteHelp);
       }
       more = document.createElement("button"); more.type = "button"; more.textContent = "Load more content"; more.hidden = true; more.onclick = () => void read(); controls.append(more);
       if (threadSession !== undefined) more.className = "refresh";
@@ -1512,6 +1664,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     contentCache.clear(); contentPending.clear();
     workspaceVisible = INITIAL_FROZEN_FILES;
     workspaceNodes.clear(); workspaceDiffCache.clear(); workspaceDiffPending.clear();
+    renderQuoteControls();
     const navigator = fileNavigators.get(false);
     if (navigator) { navigator.select.value = ""; navigator.paths = ""; }
     el("workspaceNavigator").hidden = true;
@@ -1975,7 +2128,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     el("tabResults").textContent = "Review";
     panes.splice(0, panes.length, "Results", "Activity", "Collaboration");
     el("viewTabs").append(el("tabResults"), el("tabActivity"), el("tabCollaboration"));
-    el("panelResults").append(el("resultChecks"), el("workspaceChangesSection"), el("finalChanges"), el("taskOutputsSection"), el("discussResults"));
+    el("panelResults").append(el("resultChecks"), el("quotePanel"), el("workspaceChangesSection"), el("finalChanges"), el("taskOutputsSection"), el("discussResults"));
     el("reviewSections").hidden = false;
     el("diagnosticContent").append(el("taskContext"));
     el("diagnostics").hidden = false;
@@ -1991,6 +2144,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       el("tab" + pane).setAttribute("tabindex", pane === name ? "0" : "-1");
     }
     if (focus) el("tab" + name).focus?.();
+    renderQuoteControls();
   }
 
   function renderWorkflow(workflow) {
@@ -2082,6 +2236,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     }
     renderMessages(state.collaboration);
     renderWorkspace(state.workspace);
+    renderQuoteControls();
     el("workspaceChangesSection").hidden = !state.workspace.git_available && !!state.task_outputs;
     el("resultChecks").hidden = threadSession === undefined && (!state.session_id || (!state.validation && !state.review));
     el("checksScope").textContent = state.session_id
@@ -2372,6 +2527,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       entry.reject(new Error("App torn down"));
     }
     pending.clear();
+    quoteDraft = null; quotePending = null; quoteGeneration++;
+    el("quoteText").textContent = ""; el("quoteCopy").value = ""; renderQuoteControls();
   }
 
   addEventListener("message", event => {
@@ -2392,6 +2549,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     }
     if (msg.method === "ui/notifications/tool-result") {
       acceptToolResult(msg.params);
+      return;
+    }
+    if (msg.method === "ui/notifications/host-context-changed") {
+      syncQuoteContext(msg.params);
       return;
     }
     if (msg.method === "ui/resource-teardown") {
@@ -2416,6 +2577,33 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   el("jumpWorkspace").onclick = () => jumpToReviewSection("workspaceChangesSection");
   el("jumpFinal").onclick = () => jumpToReviewSection("finalChanges");
   el("jumpOutputs").onclick = () => jumpToReviewSection("taskOutputsSection");
+  el("quoteAdd").onclick = async () => {
+    renderQuoteControls();
+    if (tornDown || !hostInitialized || !quoteDraft || quoteBusy || quotePending || quoteBlocked) return;
+    const draft = quoteDraft;
+    if (quoteTextSupported) {
+      if (quoteContent.some(block => block.type === "text" && block.text === draft.text)) { el("quoteStatus").textContent = "This excerpt is already attached."; return; }
+      await updateQuoteContext([...quoteContent, { type: "text", text: draft.text }]);
+    } else {
+      try {
+        if (!globalThis.navigator?.clipboard?.writeText) throw new Error("Clipboard unavailable");
+        await globalThis.navigator.clipboard.writeText(draft.text);
+        if (!tornDown && quoteDraft === draft) el("quoteStatus").textContent = "Quote copied. Paste it into your next message.";
+      } catch (_) {
+        if (!tornDown && quoteDraft === draft) {
+          el("quoteStatus").textContent = "Select the quote text below and copy it manually.";
+          el("quoteCopy").focus?.(); el("quoteCopy").select?.();
+        }
+      }
+    }
+  };
+  el("quoteCancel").onclick = () => {
+    if (quoteBusy || quotePending) return;
+    const draft = quoteDraft;
+    quoteDraft = null; el("quoteText").textContent = ""; el("quoteCopy").value = ""; el("quoteStatus").textContent = ""; renderQuoteControls();
+    draft?.returnToFile();
+  };
+  el("quoteRetry").onclick = () => { if (quotePending && !quoteBusy) void updateQuoteContext(quotePending); };
   selectPane("Activity");
   el("refresh").onclick = () => { void refresh(false); };
   el("frozenMore").onclick = () => { void showMoreFiles(true); };
@@ -2451,9 +2639,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   addEventListener("beforeunload", teardown, { once: true });
 
   send("ui/initialize", { protocolVersion: APP_PROTOCOL, appInfo: { name: "webcodex-work-result-app", title: "WebCodex", version: "3.0.0" }, appCapabilities: {} })
-    .then(() => {
+    .then(result => {
       if (tornDown) return;
+      quoteTextSupported = object(result?.hostCapabilities?.updateModelContext?.text);
+      quoteAdapter = object(result?.hostCapabilities?.experimental?.["openai/modelContext"]);
       hostInitialized = true;
+      renderQuoteControls(); syncQuoteContext(result?.hostContext);
       el("status").textContent = lastStateVersion !== null
         ? "Live"
         : identity ? "Waiting for Window activity" : "Ready";

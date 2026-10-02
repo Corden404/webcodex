@@ -13,6 +13,7 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
   const timers = new Map();
   const sent = [];
   const viewport = { scrollY: 0, innerHeight: 800, moves: [] };
+  const selection = { value: null };
   let nextTimer = 1;
   let nowMs = 2_000_000_000_000;
   const HostDate = class extends Date {
@@ -26,6 +27,8 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
       textContent: "", hidden: false, open: false, children: [], className: "", type: "", onclick: null, ontoggle: null,
       parentNode: null,
       get isConnected() { return !!this.documentNode || !!this.parentNode?.isConnected; },
+      contains(node) { return node === this || this.children.some(child => child.contains(node)); },
+      focus() { document.activeElement = this; },
       append(...children) { for (const child of children) this.appendChild(child); },
       appendChild(child) { return this.insertBefore(child, null); },
       insertBefore(child, before) {
@@ -49,9 +52,11 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
   }
   const document = {
     hidden: false,
+    body: element("body"),
     getElementById: id => nodes[id] ||= Object.assign(element(), { documentNode: true }),
     createElement: tagName => element(tagName),
   };
+  document.activeElement = document.body;
   function addEventListener(name, listener) {
     if (!listeners.has(name)) listeners.set(name, []);
     listeners.get(name).push(listener);
@@ -66,6 +71,7 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
   }
   runInNewContext(script, {
     document, parent, addEventListener, TextEncoder, crypto, navigator, btoa, Date: HostDate,
+    getSelection: () => selection.value,
     get scrollY() { return viewport.scrollY; },
     get innerHeight() { return viewport.innerHeight; },
     scrollBy({ top }) { viewport.moves.push(top); viewport.scrollY += top; },
@@ -79,7 +85,7 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
     emit("message", { source, data: { jsonrpc: "2.0", ...message } });
   }
   return {
-    nodes, timers, sent, viewport,
+    nodes, timers, sent, viewport, selection, document,
     calls(name) { return sent.filter(message => message.method === "tools/call" && message.params.name === name); },
     notification(method, params, source) {
       deliver({ method, params }, source);
