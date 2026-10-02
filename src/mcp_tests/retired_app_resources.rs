@@ -55,6 +55,7 @@ async fn retired_app_resources_fail_closed_instead_of_serving_current_templates(
         "ui://webcodex/work-result/v15",
         "ui://webcodex/work-result/v16",
         "ui://webcodex/work-result/v17",
+        "ui://webcodex/work-result/v18",
         "ui://webcodex/workbench/v1",
         "ui://webcodex/work-result/v2",
         "ui://webcodex/work-result/v3",
