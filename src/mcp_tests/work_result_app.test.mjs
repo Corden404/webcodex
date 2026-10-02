@@ -1666,3 +1666,159 @@ for (const jobs of [
   await view.initialize();
   assert.equal(view.nodes.badge.textContent, "Unavailable");
 });
+
+function filePreview(view, final = false, index = 0) {
+  const row = view.nodes[final ? "frozenFiles" : "workspaceFiles"].children[index];
+  row.children[0].onclick();
+  const wrap = row.children[1], controls = wrap.children[2], preview = wrap.children[3];
+  return { row, wrap, controls, state: preview.children[0], text: preview.children[1], markdown: preview.children[2] };
+}
+function previewReply(request, text, extra = {}) {
+  const args = request.params.arguments;
+  const offset = args.files.byte_offset;
+  return toolResult({ work_result_files: {
+    project: args.project, session_id: args.session_id ?? null,
+    snapshot_id: args.files.snapshot_id, path: args.files.path, view: "content",
+    byte_offset: offset, bytes_total: offset + new TextEncoder().encode(text).length,
+    content: text, complete: true, limited: false, next_byte_offset: null, ...extra,
+  } });
+}
+function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
+
+async function workspacePreview() {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({ project });
+  const state = structuredClone(baseState);
+  for (const key of ["session_id", "session", "validation", "review"]) delete state[key];
+  state.workspace.files[0].path = "README.md";
+  view.toolResult({ work_result: state });
+  await view.initialize();
+  const nodes = filePreview(view);
+  nodes.controls.children[1].onclick(); await flush();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "README.md", kind: "modified", additions: 4, deletions: 1 }],
+  } }));
+  return { view, nodes, request: view.calls("get_work_result_state").find(call => call.params.arguments.files?.view === "content") };
+}
+
+test("workspace full text uses exact pinned snapshot, explicit pages and complete-only safe Markdown", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  assert.deepEqual(JSON.parse(JSON.stringify(request.params.arguments)), { project,
+    files: { snapshot_id, path: "README.md", view: "content", byte_offset: 0 } });
+  assert.equal(nodes.controls.children[2].disabled, true);
+  const first = "# title\n\n" + "a".repeat(32 * 1024 - 10);
+  const tail = '\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n~~gone~~ **bold**\n\n<script>alert(1)</script>\n\n![alt](https://example.com/track.png)\n\n[link](https://example.com/) [bad](javascript:alert(1))\n\n```js\n<script>literal</script>\n```';
+  const total = new TextEncoder().encode(first + tail).length;
+  const bytes = new TextEncoder().encode(first).length;
+  await view.reply(request, previewReply(request, first, { bytes_total: total, complete: false, next_byte_offset: bytes }));
+  assert.match(nodes.state.textContent, /Partial content/);
+  assert.equal(nodes.controls.children[2].disabled, true);
+  assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 1, "no automatic page loop");
+  nodes.controls.children[3].onclick(); await flush();
+  const next = view.calls("get_work_result_state").at(-1);
+  assert.equal(next.params.arguments.files.byte_offset, bytes);
+  await view.reply(next, previewReply(next, tail));
+  assert.equal(nodes.text.textContent, first + tail);
+  assert.match(nodes.state.textContent, /Complete file/);
+  assert.equal(nodes.controls.children[2].disabled, false);
+  nodes.controls.children[2].onclick();
+  const dom = descendants(nodes.markdown);
+  assert.equal(dom.some(node => node.tagName === "H1" && descendants(node).some(child => child.textContent === "title")), true);
+  assert.equal(dom.some(node => node.tagName === "TABLE"), true);
+  assert.equal(dom.some(node => node.tagName === "S"), true);
+  assert.equal(dom.some(node => node.tagName === "STRONG"), true);
+  assert.equal(dom.some(node => ["SCRIPT", "IMG", "IFRAME", "A"].includes(node.tagName)), false);
+  assert.equal(dom.some(node => /external image not loaded/.test(node.textContent)), true);
+  assert.equal(dom.some(node => /<script>/.test(node.textContent)), true);
+  assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 2, "rendering needs no external resource request");
+});
+
+test("final full text retains explicit Session and rejects a mismatched content scope", async () => {
+  const view = await frozenView();
+  const nodes = filePreview(view, true);
+  nodes.controls.children[1].onclick(); await flush();
+  const request = view.calls("get_work_result_state")[0];
+  assert.equal(request.params.arguments.session_id, session_id);
+  await view.reply(request, previewReply(request, "wrong source", { session_id: null }));
+  assert.equal(nodes.text.textContent, "");
+  assert.match(nodes.state.textContent, /Content unavailable/);
+});
+
+test("preview ignores late responses after switching view, refreshing snapshot and teardown", async () => {
+  for (const action of ["switch", "refresh", "teardown"]) {
+    const { view, nodes, request } = await workspacePreview();
+    if (action === "switch") nodes.controls.children[0].onclick();
+    if (action === "refresh") view.nodes.workspaceReload.onclick();
+    if (action === "teardown") await view.teardown();
+    await view.reply(request, previewReply(request, "late content"));
+    assert.equal(nodes.text.textContent, "", action);
+  }
+});
+
+test("preview marks the byte cap and unsupported encoding without enabling Markdown", async () => {
+  for (const reason of ["binary", "non_utf8", "symlink", "submodule"]) {
+    const { view, nodes, request } = await workspacePreview();
+    await view.reply(request, previewReply(request, "", { unavailable_reason: reason }));
+    assert.match(nodes.state.textContent, /preview unavailable/);
+    assert.equal(nodes.controls.children[2].disabled, true);
+  }
+  const { view, nodes, request } = await workspacePreview();
+  const chunk = "x".repeat(32 * 1024);
+  for (let index = 0; index < 8; index++) {
+    const call = index === 0 ? request : view.calls("get_work_result_state").at(-1);
+    await view.reply(call, previewReply(call, chunk, { bytes_total: 256 * 1024 + 1,
+      complete: false, limited: index === 7, next_byte_offset: index === 7 ? null : (index + 1) * 32 * 1024 }));
+    if (index < 7) { nodes.controls.children[3].onclick(); await flush(); }
+  }
+  assert.match(nodes.state.textContent, /256 KiB preview limit/);
+  assert.equal(nodes.text.textContent.length, 256 * 1024);
+  assert.equal(nodes.controls.children[3].hidden, true);
+  assert.equal(nodes.controls.children[2].disabled, true);
+});
+
+test("rapid Full text and next-page clicks share their owning request and settle together", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  nodes.controls.children[1].onclick(); nodes.controls.children[1].onclick();
+  await flush();
+  const calls = () => view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content");
+  assert.equal(calls().length, 1);
+  await view.reply(request, previewReply(request, "first", { bytes_total: 9, complete: false, next_byte_offset: 5 }));
+  assert.equal(nodes.text.textContent, "first");
+  nodes.controls.children[3].onclick(); nodes.controls.children[3].onclick(); await flush();
+  assert.equal(calls().length, 2);
+  await view.reply(calls()[1], previewReply(calls()[1], "tail"));
+  assert.equal(nodes.text.textContent, "firsttail");
+  assert.equal(nodes.controls.children[3].disabled, false);
+});
+
+test("collapse clears active content DOM; re-expansion joins the original request without stale display", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  nodes.row.collapse();
+  await view.reply(request, previewReply(request, "cached content"));
+  assert.equal(nodes.text.textContent, "", "collapsed preview ignores late display");
+  nodes.row.children[0].onclick(); await flush();
+  assert.equal(nodes.text.textContent, "cached content");
+  assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 1);
+  nodes.row.collapse(); assert.equal(nodes.text.textContent, "");
+  const pending = await workspacePreview();
+  pending.nodes.row.collapse(); pending.nodes.row.children[0].onclick(); await flush();
+  await pending.view.reply(pending.request, previewReply(pending.request, "joined content"));
+  assert.equal(pending.nodes.text.textContent, "joined content");
+  assert.equal(pending.nodes.controls.children[3].disabled, false);
+  assert.equal(pending.view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 1);
+});
+
+test("malformed content pages cannot claim complete, skip bytes or exceed UTF-8 bounds", async () => {
+  for (const change of [
+    { content: "\ud800" }, { byte_offset: 1 }, { bytes_total: 0 },
+    { next_byte_offset: 100, complete: false }, { limited: true },
+    { content: "x".repeat(32 * 1024 + 1), bytes_total: 32 * 1024 + 1 },
+  ]) {
+    const { view, nodes, request } = await workspacePreview();
+    await view.reply(request, previewReply(request, "safe", change));
+    assert.equal(nodes.text.textContent, "");
+    assert.match(nodes.state.textContent, /Content unavailable/);
+    assert.equal(nodes.controls.children[2].disabled, true);
+  }
+});

@@ -283,7 +283,8 @@ describe("Project / Session / Window relationships", () => {
       onUnauthorized: vi.fn(),
     };
     const rendered = render(<WorkView {...props} />);
-    expect(await screen.findByText("/root/git/webcodex")).toBeTruthy();
+    const contextPanel = within(await screen.findByRole("tabpanel", { name: "Context" }));
+    expect(await contextPanel.findByText("/root/git/webcodex")).toBeTruthy();
     fireEvent.click(await screen.findByRole("tab", { name: "Evidence" }));
     const sessionContext = within(screen.getByRole("complementary", { name: "Session context" }));
     expect(sessionContext.getByText("1".repeat(64))).toBeTruthy();

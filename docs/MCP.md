@@ -138,7 +138,23 @@ An open panel retains its exact Project and explicit Session selection on refres
 Window-linked Session evidence never becomes refresh authority. Reopen the panel
 to select a newer successful presentation; missing Window identity or binding
 fails closed. Current authorization and snapshot fences still apply on every read.
-Full-file/Markdown previews and line/selection-to-chat interactions are deferred.
+Changed files and Final Changes offer lazy Full text previews only for advertised
+paths. Current files use the pinned working-tree snapshot; final files use the
+sealed final tree, even after later workspace edits. Content loads in explicit
+32 KiB pages up to 256 KiB per file; the card labels partial content and the cap.
+A deleted file has no final version. Binary, non-UTF-8, symlink and submodule
+contents are unavailable; failed or expired reads never fall back to a live path.
+Markdown is enabled for `.md`/`.markdown` only after the complete file is loaded.
+The bundled markdown-it parser supports standard Markdown, tables and
+strikethrough, without promising every GFM extension. Rendering uses DOM node and
+attribute allowlists: raw HTML remains text, unsafe URLs are rejected, links stay
+inert and external images show a placeholder instead of loading resources.
+Line/selection-to-chat interactions remain deferred.
+
+The Markdown bundle is checked into the single-script App resource, so Rust-only
+builds need no npm toolchain. After `npm ci --prefix frontend`, regenerate with
+`npm --prefix frontend run build:work-result`; `node frontend/scripts/build-work-result-markdown.mjs --check`
+checks deterministic output and also runs under `check:dist`.
 
 Rendering entrypoints retain the default model/App visibility. App-only bridge
 helpers return data without `ui.resourceUri`: ChatGPT rejects private tools that
@@ -157,7 +173,7 @@ and fetch their sanitized trace/timing details only when expanded. The inline ca
 shows the canonical hashed Window key used by the Window activity ledger; the
 thread panel puts the same identity under Diagnostics, making
 support traces attributable without exposing the Host's raw Window identifier.
-New cards use `ui://webcodex/work-result/v16` so Hosts with cached older templates
+New cards use `ui://webcodex/work-result/v17` so Hosts with cached older templates
 load the current thread-panel, lazy-detail and canonical tool-name contract.
 Retired resource URIs fail closed instead of serving a new template under an old cache key.
 

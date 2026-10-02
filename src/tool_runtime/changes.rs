@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -30,6 +31,8 @@ const MAX_CHANGES_PATH_CHARS: usize = 1024;
 const CHANGES_METADATA_SOURCE_BYTES: usize = 32 * 1024;
 const CHANGES_DIFF_MAX_BYTES: usize = 48 * 1024;
 const CHANGES_DIFF_MAX_LINES: usize = 1200;
+const CHANGES_CONTENT_PAGE_BYTES: usize = 32 * 1024;
+const CHANGES_CONTENT_MAX_BYTES: usize = 256 * 1024;
 const CHANGES_SESSION_SUMMARY_LIMIT: usize = 0;
 const SOURCE_BYTES_MARKER: &str = "WEBCODEX_CHANGES_SOURCE_BYTES=";
 const DIFF_BYTES_MARKER: &str = "WEBCODEX_CHANGES_DIFF_BYTES=";
@@ -472,6 +475,9 @@ exit 0
         auth: Option<&AuthContext>,
     ) -> ToolResult {
         if request.offset > MAX_STORED_CHANGES_FILES
+            || (request.view.is_some() && request.path.is_none())
+            || (request.view.is_none() && request.byte_offset != 0)
+            || request.byte_offset >= CHANGES_CONTENT_MAX_BYTES
             || request
                 .path
                 .as_deref()
@@ -577,6 +583,15 @@ exit 0
             let Some(file) = snapshot.files.iter().find(|file| file.path == path) else {
                 return changes_identity_error("changes_snapshot_path_not_allowed");
             };
+            if request.view.is_some() {
+                return match self
+                    .frozen_changes_file_content(&snapshot, file, request.byte_offset)
+                    .await
+                {
+                    Ok(content) => ToolResult::ok(json!({"work_result_files": content})),
+                    Err(result) => result,
+                };
+            }
             let diff = match self.frozen_changes_file_diff(&snapshot, file).await {
                 Ok(diff) => diff,
                 Err(result) => return result,
@@ -913,6 +928,126 @@ dd if="$tmp" bs=1 count={CHANGES_METADATA_SOURCE_BYTES} 2>/dev/null
             marker_u64(&output.stderr, SOURCE_BYTES_MARKER).unwrap_or(output.stdout.len() as u64);
         let truncated = output.stdout_truncated || source_bytes > output.stdout.len() as u64;
         Ok((output.stdout, truncated))
+    }
+
+    async fn frozen_changes_file_content(
+        &self,
+        snapshot: &ChangesSnapshot,
+        file: &ChangesFileMetadata,
+        byte_offset: usize,
+    ) -> Result<Value, ToolResult> {
+        let unavailable = |reason: &str| {
+            json!({
+                "project": snapshot.project, "session_id": snapshot.session_id,
+                "snapshot_id": snapshot.snapshot_id, "path": file.path,
+                "view": "content", "unavailable_reason": reason,
+            })
+        };
+        if file.kind == "deleted" {
+            return Ok(unavailable("deleted"));
+        }
+        if file.binary == Some(true) {
+            return Ok(unavailable("binary"));
+        }
+        // Resolve exactly one immutable entry; never read a live filesystem path
+        // or execute filters. Check the exact path before using its object id.
+        let script = format!(
+            "git --no-pager ls-tree -z {} -- {}",
+            snapshot.final_tree,
+            shell_single_quote(&format!(":(literal){}", file.path))
+        );
+        let entry = self
+            .run_project_internal_posix_script_capture(&snapshot.project, script, 30, None)
+            .await
+            .map_err(|error| changes_runtime_error("changes_file_content_failed", error))?;
+        if entry.exit_code != Some(0) || entry.stdout_truncated || entry.stderr_truncated {
+            return Err(changes_identity_error("changes_file_content_failed"));
+        }
+        let Some((header, path)) = entry.stdout.split_once('\t') else {
+            return Err(changes_identity_error("changes_file_content_failed"));
+        };
+        if path.strip_suffix('\0') != Some(file.path.as_str()) {
+            return Err(changes_identity_error("changes_file_content_failed"));
+        }
+        let fields = header.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 3 || !valid_git_object_id(fields[2]) {
+            return Err(changes_identity_error("changes_file_content_failed"));
+        }
+        match fields[0] {
+            "120000" => return Ok(unavailable("symlink")),
+            "160000" => return Ok(unavailable("submodule")),
+            "100644" | "100755" if fields[1] == "blob" => {}
+            _ => return Ok(unavailable("unsupported_file_type")),
+        }
+        // Base64 is internal Runner transport only, preserving bytes across
+        // shell charset normalization. Three lookahead bytes cover a UTF-8
+        // scalar at a page boundary; no whole-file temporary is created.
+        let count = (CHANGES_CONTENT_MAX_BYTES - byte_offset).min(CHANGES_CONTENT_PAGE_BYTES) + 3;
+        let script = format!(
+            r#"set -eu
+bytes=$(git cat-file -s {object})
+printf '%s\n' "$bytes"
+git cat-file blob {object} | dd bs=1 skip={byte_offset} count={count} 2>/dev/null | base64
+"#,
+            object = fields[2]
+        );
+        let output = self
+            .run_project_internal_posix_script_capture(&snapshot.project, script, 30, None)
+            .await
+            .map_err(|error| changes_runtime_error("changes_file_content_failed", error))?;
+        if output.exit_code != Some(0) || output.stdout_truncated || output.stderr_truncated {
+            return Err(changes_identity_error("changes_file_content_failed"));
+        }
+        let Some((size, encoded)) = output.stdout.split_once('\n') else {
+            return Err(changes_identity_error("changes_file_content_failed"));
+        };
+        let bytes_total = size
+            .parse::<usize>()
+            .map_err(|_| changes_identity_error("changes_file_content_failed"))?;
+        if byte_offset > bytes_total {
+            return Err(changes_identity_error("changes_page_invalid"));
+        }
+        let encoded = encoded
+            .chars()
+            .filter(|ch| !ch.is_ascii_whitespace())
+            .collect::<String>();
+        let raw = STANDARD
+            .decode(encoded)
+            .map_err(|_| changes_identity_error("changes_file_content_failed"))?;
+        if raw.len() != (bytes_total - byte_offset).min(count) {
+            return Err(changes_identity_error("changes_file_content_failed"));
+        }
+        if raw.contains(&0) {
+            return Ok(unavailable("binary"));
+        }
+        let text = match std::str::from_utf8(&raw) {
+            Ok(text) => text,
+            Err(error) if error.error_len().is_none() && byte_offset + raw.len() < bytes_total => {
+                std::str::from_utf8(&raw[..error.valid_up_to()]).expect("validated UTF-8 prefix")
+            }
+            Err(_) => return Ok(unavailable("non_utf8")),
+        };
+        let page_limit = (CHANGES_CONTENT_MAX_BYTES - byte_offset).min(CHANGES_CONTENT_PAGE_BYTES);
+        let mut end = text.len().min(page_limit);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let content = &text[..end];
+        let next = byte_offset + end;
+        let complete = next == bytes_total;
+        let limited = !complete
+            && next + text[end..].chars().next().map_or(1, char::len_utf8)
+                > CHANGES_CONTENT_MAX_BYTES;
+        if !complete && end == 0 && !limited {
+            return Err(changes_identity_error("changes_file_content_failed"));
+        }
+        Ok(json!({
+            "project": snapshot.project, "session_id": snapshot.session_id,
+            "snapshot_id": snapshot.snapshot_id, "path": file.path, "view": "content",
+            "byte_offset": byte_offset, "bytes_total": bytes_total, "content": content,
+            "next_byte_offset": (!complete && !limited).then_some(next),
+            "complete": complete, "limited": limited,
+        }))
     }
 
     async fn frozen_changes_file_diff(

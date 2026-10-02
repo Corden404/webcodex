@@ -108,7 +108,7 @@ pub fn work_result_app_tool_specs() -> Vec<ToolSpec> {
     vec![
         tool_spec(
             "get_work_result_state",
-            "App-only exact live Work Result refresh. Re-authorizes the exact Project and optional context session_id and never consumes message attention or records into a Session. It returns Window activity and read-only Window collaboration, optional Session evidence plus any retained immutable final-changes snapshot already sealed by a non-blocking finish_coding_task closeout; the refresh never creates or replaces that snapshot.",
+            "App-only exact Work Result refresh: reauthorizes Project and optional Session; never consumes attention or records a Session. Returns Window activity/collaboration, Session evidence and an existing final-changes snapshot sealed by finish_coding_task; never creates/replaces it. files reads advertised immutable paths as diff or UTF-8 content (view=content, byte_offset), at most 32 KiB/page and 256 KiB/file.",
         ),
         tool_spec(
             "read_work_result_activity_detail",

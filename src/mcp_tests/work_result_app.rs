@@ -11,7 +11,7 @@ fn tool<'a>(payload: &'a Value, name: &str) -> Option<&'a Value> {
 async fn work_result_descriptor_keeps_renderers_public_and_bridge_tools_app_only() {
     assert_eq!(
         MCP_WORK_RESULT_UI_RESOURCE_URI,
-        "ui://webcodex/work-result/v16"
+        "ui://webcodex/work-result/v17"
     );
     let runtime = test_runtime();
 

@@ -134,12 +134,25 @@ Session 标识收进默认折叠的 Diagnostics。inline card 继续采用 Activ
 
 已打开的侧边栏在刷新时保留原 Project 和显式 Session 选择；Window 关联的 Session
 证据不会成为刷新授权依据。重新打开才选择更新的成功展示记录。缺少稳定 Window
-或展示绑定时拒绝打开，每次读取仍校验当前授权和快照边界。完整文件 / Markdown
-预览、行或选区回传对话留待后续版本。
+或展示绑定时拒绝打开，每次读取仍校验当前授权和快照边界。
+
+Changed files 和 Final Changes 仅允许对已列出的路径按需查看 Full text。
+当前文件来自固定的工作树快照，最终文件来自 sealed final tree，后续修改不会漂移。
+每次显式加载最多 32 KiB，每文件累计最多 256 KiB；未完整或达到上限会明确标记。
+已删除文件没有最终版本；二进制、非 UTF-8、符号链接与 submodule 不提供文本预览。
+读取失败或快照过期不会转向实时路径。`.md` / `.markdown` 完整读取后才启用
+Markdown：内嵌 markdown-it 支持标准 Markdown、表格、删除线，不承诺完整 GFM。
+DOM 节点和属性采用允许列表，原生 HTML 作为文本，拒绝不安全 URL；链接不打开，
+外部图片仅显示未加载说明，不自动请求资源。行或选区回传对话留待后续版本。
+
+Markdown bundle 已提交在单 script App 资源内，纯 Rust 编译不需要 npm。
+`npm ci --prefix frontend` 后用 `npm --prefix frontend run build:work-result`
+重新生成；`node frontend/scripts/build-work-result-markdown.mjs --check` 比对确定性产物，
+该检查同时接入 `check:dist`。
 
 展示调用会保存这条窗口绑定，但不会启动 live Window activity；侧边栏入口和 App
 刷新调用也不会启动 live Window activity。当前界面资源是
-`ui://webcodex/work-result/v16`，旧版资源 URI 不再提供模板，避免缓存界面调用已退役的工具名。
+`ui://webcodex/work-result/v17`，旧版资源 URI 不再提供模板，避免缓存界面调用已退役的工具名。
 
 界面展示入口保留默认的 model/App 可见性；App-only 桥接工具只返回数据，不声明
 `ui.resourceUri`。ChatGPT 刷新工具时会拒绝声明界面资源的私有工具。更新 Server

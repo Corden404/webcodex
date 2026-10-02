@@ -201,7 +201,7 @@ pub enum ToolCall {
             pattern = "^(wc_sess_([A-Za-z0-9_-]{16}|[0-9a-f]{32})|~s[1-9][0-9]{0,18})$"
         ))]
         session_id: Option<String>,
-        /// Explicit file page or lazy diff; omission keeps lightweight card state.
+        /// Explicit file inventory, lazy diff, or bounded UTF-8 content page; omission keeps lightweight card state.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         files: Option<WorkResultFilesRequest>,
     },

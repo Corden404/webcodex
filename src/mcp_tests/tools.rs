@@ -2422,6 +2422,38 @@ fn report_discovery_costs(tools: &[Value]) {
     }
 }
 
+#[test]
+fn mcp_compact_work_result_files_preserves_content_constraints() {
+    let spec = crate::tool_runtime::work_result_app_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == "get_work_result_state")
+        .unwrap();
+    let full = json!({
+        "name": spec.name,
+        "description": spec.description,
+        "inputSchema": spec.input_schema,
+        "annotations": spec.annotations,
+    });
+    let mut compact = full.clone();
+    crate::mcp::discovery::compact_tool(&mut compact);
+    let files = &compact["inputSchema"]["properties"]["files"];
+    assert_eq!(description_chars(files), 0);
+    let mut schemas = [full["inputSchema"].clone(), compact["inputSchema"].clone()];
+    for schema in &mut schemas {
+        strip_description_text(schema);
+    }
+    assert_eq!(schemas[0], schemas[1]);
+    let description = compact["description"].as_str().unwrap();
+    for phrase in [
+        "reauthorizes",
+        "advertised immutable paths",
+        "32 KiB/page",
+        "256 KiB/file",
+    ] {
+        assert!(description.contains(phrase), "{description}");
+    }
+}
+
 #[tokio::test]
 async fn mcp_tools_list_stateless_serialized_size_budget() {
     let mut scoped = crate::auth::shared_key_context("surface-size-test");

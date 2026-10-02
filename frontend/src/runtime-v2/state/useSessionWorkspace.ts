@@ -59,7 +59,7 @@ export function useSessionWorkspace(
   const [messageRevision, setMessageRevision] = useState(0);
   const detailRequest = useObservationRequest();
   const messageRequest = useObservationRequest();
-  const loadedLocation = useRef("");
+  const loadedLocation = useRef({ identity: "", pending: false });
   const projectId = location?.projectId;
   const sessionId = location?.sessionId;
   const refresh = useCallback(() => {
@@ -69,8 +69,8 @@ export function useSessionWorkspace(
 
   useEffect(() => {
     const identity = enabled && projectId && sessionId ? `${projectId}\u0000${sessionId}` : "";
-    if (loadedLocation.current === identity) return;
-    loadedLocation.current = identity;
+    if (loadedLocation.current.identity === identity) return;
+    loadedLocation.current = { identity, pending: false };
     setDetail(null); setMessages(null); setMutationNotice(""); setMutationAllowed(null); setSending(false);
     setDetailAvailability(identity ? "loading" : "idle");
     setMessagesAvailability(identity && loadMessages ? "loading" : "idle");
@@ -122,8 +122,10 @@ export function useSessionWorkspace(
   }, 5_000);
 
   const send = useCallback(async (input: { message: string; kind?: string; priority?: string; requiresAck?: boolean; replyTo?: string }) => {
-    if (!location || !input.message.trim()) return false;
-    const requestLocation = sessionLocationIdentity(location);
+    if (!enabled || !location || !input.message.trim()) return false;
+    const requestScope = loadedLocation.current;
+    if (requestScope.identity !== sessionLocationIdentity(location) || requestScope.pending) return false;
+    requestScope.pending = true;
     setSending(true);
     try {
       const response = await postSessionMessage(client, {
@@ -139,7 +141,7 @@ export function useSessionWorkspace(
         onUnauthorized();
         return false;
       }
-      if (loadedLocation.current !== requestLocation) return false;
+      if (loadedLocation.current !== requestScope) return false;
       if (response?.status === 0) {
         setMutationNotice("Send outcome unknown. Refresh and review retained messages before retrying.");
         return false;
@@ -158,47 +160,61 @@ export function useSessionWorkspace(
       refresh();
       return true;
     } finally {
-      if (loadedLocation.current === requestLocation) setSending(false);
+      if (loadedLocation.current === requestScope) {
+        requestScope.pending = false;
+        setSending(false);
+      }
     }
-  }, [client, location, onUnauthorized, refresh]);
+  }, [client, enabled, location, onUnauthorized, refresh]);
 
   const replace = useCallback(async (messageId: string, message: string) => {
-    if (!location || !message.trim()) return false;
-    const requestLocation = sessionLocationIdentity(location);
-    const response = await replaceSessionMessage(client, location.projectId, location.sessionId, messageId, message.trim());
-    if (response?.status === 401) {
-      onUnauthorized();
-      return false;
+    if (!enabled || !location || !message.trim()) return false;
+    const requestScope = loadedLocation.current;
+    if (requestScope.identity !== sessionLocationIdentity(location) || requestScope.pending) return false;
+    requestScope.pending = true;
+    setSending(true);
+    try {
+      const response = await replaceSessionMessage(client, location.projectId, location.sessionId, messageId, message.trim());
+      if (response?.status === 401) {
+        onUnauthorized();
+        return false;
+      }
+      if (loadedLocation.current !== requestScope) return false;
+      if (response?.status === 0) {
+        setMutationNotice("Message mutation outcome unknown. Refresh retained messages before retrying.");
+        return false;
+      }
+      if (response?.status === 403) {
+        setMutationAllowed(false);
+        setMutationNotice("Session collaboration access required.");
+        return false;
+      }
+      if (!response?.ok) {
+        setMutationNotice("Message replacement failed.");
+        return false;
+      }
+      setMutationAllowed(true);
+      setMutationNotice("");
+      refresh();
+      return true;
+    } finally {
+      if (loadedLocation.current === requestScope) {
+        requestScope.pending = false;
+        setSending(false);
+      }
     }
-    if (loadedLocation.current !== requestLocation) return false;
-    if (response?.status === 0) {
-      setMutationNotice("Message mutation outcome unknown. Refresh retained messages before retrying.");
-      return false;
-    }
-    if (response?.status === 403) {
-      setMutationAllowed(false);
-      setMutationNotice("Session collaboration access required.");
-      return false;
-    }
-    if (!response?.ok) {
-      setMutationNotice("Message replacement failed.");
-      return false;
-    }
-    setMutationAllowed(true);
-    setMutationNotice("");
-    refresh();
-    return true;
-  }, [client, location, onUnauthorized, refresh]);
+  }, [client, enabled, location, onUnauthorized, refresh]);
 
   const withdraw = useCallback(async (messageId: string) => {
-    if (!location) return false;
-    const requestLocation = sessionLocationIdentity(location);
+    if (!enabled || !location) return false;
+    const requestScope = loadedLocation.current;
+    if (requestScope.identity !== sessionLocationIdentity(location)) return false;
     const response = await withdrawSessionMessage(client, location.projectId, location.sessionId, messageId);
     if (response?.status === 401) {
       onUnauthorized();
       return false;
     }
-    if (loadedLocation.current !== requestLocation) return false;
+    if (loadedLocation.current !== requestScope) return false;
     if (response?.status === 0) {
       setMutationNotice("Message mutation outcome unknown. Refresh retained messages before retrying.");
       return false;
@@ -216,7 +232,7 @@ export function useSessionWorkspace(
     setMutationNotice("");
     refresh();
     return true;
-  }, [client, location, onUnauthorized, refresh]);
+  }, [client, enabled, location, onUnauthorized, refresh]);
 
   return {
     detailAvailability,

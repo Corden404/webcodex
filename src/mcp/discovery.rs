@@ -17,6 +17,7 @@ pub(super) fn compact_tool(tool: &mut Value) {
             "work_on_project" if tool.pointer("/inputSchema/properties/_wc").is_none() => "Start file, data, diagnostic or coding work in a Project; Git optional. Omit session_id for a fresh Session; supply exact session_id to resume. Read applicable AGENTS.md/CLAUDE.md with read_files. Reuse workspace branch/HEAD/status and sufficient catalogs; refresh stale/incomplete facts before dependent work.",
             "work_on_project" => "Start file, data, diagnostic or coding work; Git optional. Omit session_id for fresh Session; exact session_id resumes. Read AGENTS.md/CLAUDE.md via _wc.context=[\"project.instructions\"]. Missing guidance: _wc.context=[\"webcodex.workflow\"]. Reuse complete instruction bodies, workspace branch/HEAD/status, semantic navigation and sufficient catalogs; refresh stale/incomplete facts.",
             "read_tool_manifest" => "Discover tools by intent/category, or pass tool_name for one exact canonical contract plus route.primary/route.fallback. Discovery never registers a new Host tool. If a direct callable is absent, follow the exact gateway fallback when it is allowed.",
+            "get_work_result_state" => "App-only Work Result read; reauthorizes exact Project/Session; no attention, Session recording or snapshot mutation. files: advertised immutable paths; diff or UTF-8 content; max 32 KiB/page, 256 KiB/file.",
             "call_runtime_tool" => "Call one admitted runtime tool with its exact arguments. Use read_tool_manifest to discover the contract. Prefer an available direct callable; ordinary direct tools may fall back here when unavailable, but MCP App presentation tools must use their direct callable while Apps are enabled. Target validation and authority checks still apply.",
             "edit_project_files" => "Read with read_files; send one change per file. Existing edit/delete/rename require expected_read_revision; create needs content. Exact edits fail closed on ambiguity; replace_range uses 1-based inclusive lines from that snapshot. Batches preflight transactionally; Runner rechecks source. Stale: read_files recovery. outcome_unknown: observe before another write. Review and use task-appropriate validation.",
             "run_process" => "Run one native executable with literal argv. Use run_shell for shell grammar/short related chains; run_script for program-like scripts. Pending keeps the same Job and returned continuation; never redispatch. Continue independent work first; when blocked use wait_for_job_readiness. Read logs/details with observe_jobs. Diagnose failures and use task-appropriate validation; outcome_unknown requires observation.",
@@ -38,6 +39,13 @@ pub(super) fn compact_tool(tool: &mut Value) {
         compact_invocation_envelope(schema);
         if name == "edit_project_files" {
             compact_primary_editor_schema(schema);
+        }
+        if name == "get_work_result_state" {
+            // The App consumes the canonical file contract. Discovery retains
+            // its exact inline fields and constraints without repeating prose.
+            if let Some(files) = schema.pointer_mut("/properties/files") {
+                strip_schema_descriptions(files);
+            }
         }
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
             for (field, property) in properties {

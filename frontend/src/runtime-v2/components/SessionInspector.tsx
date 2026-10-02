@@ -1,7 +1,7 @@
 import { CopyIdentity } from "./ui/CopyIdentity.js";
 import { displayProjectPath } from "../../ui/projectPresentation.js";
 import { AlertTriangle, CircleDot, GitBranch, Monitor } from "lucide-react";
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { absoluteTime, projectDisplayName, relativeTime } from "../model/format.js";
 import type { ProjectRow, SessionDetail } from "../model/types.js";
 import type { WorkItem } from "../model/work.js";
@@ -31,6 +31,9 @@ export function SessionInspector({
   language,
 }: Props) {
   const [tab, setTab] = useState<"context" | "evidence">("context");
+  const tabGroupId = useId();
+  const tabButtons = useRef<Array<HTMLButtonElement | null>>([]);
+  const tabs = ["context", "evidence"] as const;
   const t = (value: string) => translate(value, language);
   const validation = detail?.overview.validation || item.validation;
   const attention = detail?.overview.attention;
@@ -51,13 +54,35 @@ export function SessionInspector({
           <strong>{tab === "context" ? t("What matters now") : t("Raw evidence")}</strong>
         </div>
       </div>
-      <div className="segmented" role="tablist">
-        <button role="tab" aria-selected={tab === "context"} className={tab === "context" ? "active" : ""} onClick={() => setTab("context")}>{t("Context")}</button>
-        <button role="tab" aria-selected={tab === "evidence"} className={tab === "evidence" ? "active" : ""} onClick={() => setTab("evidence")}>{t("Evidence")}</button>
+      <div className="segmented" role="tablist" aria-label={t("Session context")}>
+        {tabs.map((value, index) => (
+          <button
+            key={value}
+            ref={(element) => { tabButtons.current[index] = element; }}
+            type="button"
+            role="tab"
+            id={`${tabGroupId}-${value}-tab`}
+            aria-controls={`${tabGroupId}-${value}-panel`}
+            aria-selected={tab === value}
+            tabIndex={tab === value ? 0 : -1}
+            className={tab === value ? "active" : ""}
+            onClick={() => setTab(value)}
+            onKeyDown={(event) => {
+              const next = event.key === "Home" ? 0
+                : event.key === "End" ? tabs.length - 1
+                : event.key === "ArrowRight" ? (index + 1) % tabs.length
+                : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+                : null;
+              if (next === null) return;
+              event.preventDefault();
+              setTab(tabs[next]);
+              tabButtons.current[next]?.focus();
+            }}
+          >{t(value === "context" ? "Context" : "Evidence")}</button>
+        ))}
       </div>
 
-      {tab === "context" ? (
-        <div className="inspector-content">
+        <div className="inspector-content" role="tabpanel" id={`${tabGroupId}-context-panel`} aria-labelledby={`${tabGroupId}-context-tab`} hidden={tab !== "context"} tabIndex={0}>
           <section className="context-hero">
             <span className="context-kicker"><CircleDot size={14} /> {running ? t("Running") : attentionTotal ? t("Needs attention") : item.lifecycle}</span>
             <strong>{item.title}</strong>
@@ -126,8 +151,7 @@ export function SessionInspector({
             </div>
           </section>
         </div>
-      ) : (
-        <div className="inspector-content evidence">
+        <div className="inspector-content evidence" role="tabpanel" id={`${tabGroupId}-evidence-panel`} aria-labelledby={`${tabGroupId}-evidence-tab`} hidden={tab !== "evidence"} tabIndex={0}>
           <section className="inspector-section">
             <h3>{t("Session identity")}</h3>
             <dl>
@@ -168,7 +192,6 @@ export function SessionInspector({
             )}
           </section>
         </div>
-      )}
     </aside>
   );
 }

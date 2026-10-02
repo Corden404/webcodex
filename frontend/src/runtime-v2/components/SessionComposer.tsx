@@ -27,23 +27,26 @@ export function SessionComposer({ location, session, language }: Props) {
   const [editingMessageId, setEditingMessageId] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [replyPreview, setReplyPreview] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const draftScope = useRef({ revision: 0, pending: false });
+  const reviseDraft = () => { draftScope.current.revision += 1; };
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
+    draftScope.current = { revision: 0, pending: false };
+    setSubmitting(false);
     setComposer(loadDraft(location.projectId, location.sessionId));
     setEditingMessageId("");
     setReplyTo("");
     setReplyPreview("");
+    return () => { draftScope.current = { revision: 0, pending: false }; };
   }, [location.projectId, location.sessionId]);
-
-  useEffect(() => {
-    if (!editingMessageId) saveDraft(location.projectId, location.sessionId, composer);
-  }, [composer, editingMessageId, location.projectId, location.sessionId]);
 
   useEffect(() => {
     const handler = (event: Event) => {
       const custom = event as CustomEvent<{ messageId?: string; message?: string }>;
       if (!custom.detail?.messageId) return;
+      reviseDraft();
       setEditingMessageId(custom.detail.messageId);
       setReplyTo("");
       setReplyPreview("");
@@ -57,13 +60,15 @@ export function SessionComposer({ location, session, language }: Props) {
     const handler = (event: Event) => {
       const custom = event as CustomEvent<{ messageId?: string; message?: string }>;
       if (!custom.detail?.messageId) return;
+      reviseDraft();
       setEditingMessageId("");
       setReplyTo(custom.detail.messageId);
       setReplyPreview(custom.detail.message || "");
+      saveDraft(location.projectId, location.sessionId, composer);
     };
     window.addEventListener("webcodex-runtime-reply-message", handler);
     return () => window.removeEventListener("webcodex-runtime-reply-message", handler);
-  }, []);
+  }, [composer, location.projectId, location.sessionId]);
 
 
   useEffect(() => {
@@ -71,33 +76,46 @@ export function SessionComposer({ location, session, language }: Props) {
       const custom = event as CustomEvent<{ kind?: string }>;
       const nextKind = custom.detail?.kind;
       if (nextKind && QUICK_MESSAGE_KINDS.some((item) => item.value === nextKind)) setKind(nextKind);
+      reviseDraft();
       setEditingMessageId("");
       setReplyTo("");
       setReplyPreview("");
+      saveDraft(location.projectId, location.sessionId, composer);
       window.setTimeout(() => textareaRef.current?.focus(), 0);
     };
     window.addEventListener("webcodex-runtime-compose-message", handler);
     return () => window.removeEventListener("webcodex-runtime-compose-message", handler);
-  }, []);
+  }, [composer, location.projectId, location.sessionId]);
   const submit = async () => {
-    if (!composer.trim()) return;
-    const ok = editingMessageId
-      ? await session.replace(editingMessageId, composer)
-      : await session.send({ message: composer, kind, priority, requiresAck, replyTo: replyTo || undefined });
-    if (!ok) return;
-    if (!editingMessageId) clearDraft(location.projectId, location.sessionId);
-    setComposer("");
-    setEditingMessageId("");
-    setReplyTo("");
-    setReplyPreview("");
+    const scope = draftScope.current;
+    if (!composer.trim() || session.sending || scope.pending) return;
+    const revision = scope.revision;
+    scope.pending = true;
+    setSubmitting(true);
+    try {
+      const ok = editingMessageId
+        ? await session.replace(editingMessageId, composer)
+        : await session.send({ message: composer, kind, priority, requiresAck, replyTo: replyTo || undefined });
+      if (!ok || draftScope.current !== scope || scope.revision !== revision) return;
+      if (!editingMessageId) clearDraft(location.projectId, location.sessionId);
+      setComposer("");
+      setEditingMessageId("");
+      setReplyTo("");
+      setReplyPreview("");
+    } finally {
+      scope.pending = false;
+      if (draftScope.current === scope) setSubmitting(false);
+    }
   };
 
   const cancelEdit = () => {
+    reviseDraft();
     setEditingMessageId("");
     setComposer(loadDraft(location.projectId, location.sessionId));
   };
 
   const cancelReply = () => {
+    reviseDraft();
     setReplyTo("");
     setReplyPreview("");
   };
@@ -130,7 +148,11 @@ export function SessionComposer({ location, session, language }: Props) {
           placeholder={t("Send a message to this work session…")}
           rows={1}
           value={composer}
-          onChange={(event) => setComposer(event.target.value)}
+          onChange={(event) => {
+            reviseDraft();
+            setComposer(event.target.value);
+            if (!editingMessageId) saveDraft(location.projectId, location.sessionId, event.target.value);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -146,7 +168,7 @@ export function SessionComposer({ location, session, language }: Props) {
                   key={item.value}
                   className={kind === item.value ? "active" : ""}
                   type="button"
-                  onClick={() => setKind(item.value)}
+                  onClick={() => { reviseDraft(); setKind(item.value); }}
                 >
                   {t(item.label)}
                 </button>
@@ -157,7 +179,7 @@ export function SessionComposer({ location, session, language }: Props) {
               <div className="composer-options-popover">
                 <label>
                   {t("Kind")}
-                  <select value={kind} onChange={(event) => setKind(event.target.value)}>
+                  <select value={kind} onChange={(event) => { reviseDraft(); setKind(event.target.value); }}>
                     <option value="note">{t("Note")}</option>
                     <option value="progress">{t("Progress")}</option>
                     <option value="guidance">{t("Guidance")}</option>
@@ -168,13 +190,13 @@ export function SessionComposer({ location, session, language }: Props) {
                 </label>
                 <label>
                   {t("Priority")}
-                  <select value={priority} onChange={(event) => setPriority(event.target.value)}>
+                  <select value={priority} onChange={(event) => { reviseDraft(); setPriority(event.target.value); }}>
                     <option value="normal">normal</option>
                     <option value="high">high</option>
                   </select>
                 </label>
                 <label className="checkbox-line">
-                  <input type="checkbox" checked={requiresAck} onChange={(event) => setRequiresAck(event.target.checked)} />
+                  <input type="checkbox" checked={requiresAck} onChange={(event) => { reviseDraft(); setRequiresAck(event.target.checked); }} />
                   {t("Requires acknowledgement")}
                 </label>
               </div>
@@ -184,10 +206,10 @@ export function SessionComposer({ location, session, language }: Props) {
             className="send-button"
             type="button"
             onClick={() => void submit()}
-            disabled={!composer.trim() || session.sending}
+            disabled={!composer.trim() || session.sending || submitting}
             aria-label={editingMessageId ? t("Save") : t("Send")}
           >
-            {session.sending ? <LoaderCircle size={16} /> : editingMessageId ? <Check size={16} /> : <ArrowUpRight size={16} />}
+            {session.sending || submitting ? <LoaderCircle size={16} /> : editingMessageId ? <Check size={16} /> : <ArrowUpRight size={16} />}
           </button>
         </div>
       </div>

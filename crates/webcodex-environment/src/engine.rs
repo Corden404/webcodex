@@ -48,8 +48,13 @@ impl<B: EnvironmentBackend> EnvironmentSetup<B> {
         mut progress: impl FnMut(SetupProgress),
     ) -> SetupResultValue<SetupResult> {
         let lock = store.lock()?;
-        self.configure_under_lock(store, &lock, request, secrets, &mut progress)
-            .await
+        let result = self
+            .configure_under_lock(store, &lock, request, secrets, &mut progress)
+            .await;
+        // Release setup ownership before the completed async call returns. Do not
+        // make the next configure/resume depend on when its caller drops this future.
+        drop(lock);
+        result
     }
 
     pub(crate) async fn configure_under_lock(

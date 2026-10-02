@@ -235,7 +235,7 @@ impl SearchPatternMode {
 }
 
 /// App-only inspection of a pinned Work Result file snapshot.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkResultFilesRequest {
     #[serde(default)]
@@ -244,6 +244,18 @@ pub struct WorkResultFilesRequest {
     pub offset: usize,
     #[serde(default)]
     pub path: Option<String>,
+    /// Omit for file inventory or diff; content reads require an advertised path and snapshot.
+    #[serde(default)]
+    pub view: Option<WorkResultFileView>,
+    /// UTF-8 byte position in the immutable final blob, independent of inventory offset.
+    #[serde(default)]
+    pub byte_offset: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkResultFileView {
+    Content,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
