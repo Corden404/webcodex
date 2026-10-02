@@ -46,14 +46,16 @@ Set the test-only executable path explicitly, then run just that ignored test:
 
 ```bash
 export WEBCODEX_TEST_PYTHON="$(python3 -c 'import sys; print(sys.executable)')"
-cargo test --locked -p webcodex-runner --features runner-real-process-tests runner_real_process_python_raw_plugin_admission_and_call -- --ignored --test-threads=1
+cargo test --locked -p webcodex-runner --features runner-real-process-tests webcodex_runner::plugin::tests::python_raw_plugin_admission_and_call -- --exact --ignored --test-threads=1
 ```
 
 In PowerShell, set the variable with
 `$env:WEBCODEX_TEST_PYTHON = python -c "import sys; print(sys.executable)"`, then
 run the same Cargo command. An absent or invalid interpreter fails explicitly.
-The dedicated Linux/Windows CI matrix runs both this smoke and the Python suite;
-ordinary Cargo tests do not require Python.
+This smoke is opt-in and is not run by ordinary CI. Its test name keeps it
+outside the general `runner_real_process` lifecycle filter. Ordinary Cargo
+tests and that lifecycle group do not require this example's Python interpreter
+configuration.
 
 ## Bounds and errors
 

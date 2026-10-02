@@ -216,10 +216,12 @@ fn runner_config(
     }
 }
 
+// Keep this example-specific smoke outside runner_real_process_ so the shared
+// lifecycle group does not require a Python interpreter.
 #[test]
 #[cfg(feature = "runner-real-process-tests")]
 #[ignore = "explicit Python raw example smoke: requires WEBCODEX_TEST_PYTHON absolute executable path"]
-fn runner_real_process_python_raw_plugin_admission_and_call() {
+fn python_raw_plugin_admission_and_call() {
     let python = PathBuf::from(
         env::var_os("WEBCODEX_TEST_PYTHON")
             .expect("set WEBCODEX_TEST_PYTHON to the absolute Python 3.12 executable path"),

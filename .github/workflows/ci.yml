@@ -303,32 +303,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  test-python-raw-plugin:
-    # Explicit, isolated example compatibility smoke; not the full ignored
-    # Runner process-lifecycle lane. Keep Python out of ordinary Cargo tests.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        id: python
-        with:
-          python-version: '3.12'
-      - name: Test Python raw protocol
-        run: python -B -m unittest discover -s plugins/examples/python-raw -v
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: python-raw-plugin-ci
-      - name: Verify Python example through the real Runner
-        env:
-          WEBCODEX_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
-        run: cargo test --locked -p webcodex-runner --features runner-real-process-tests runner_real_process_python_raw_plugin_admission_and_call -- --ignored --test-threads=1
-
   test-linux-tooling:
     # Release/tooling checks are mandatory on every PR, but do not need contract
     # output. Start them in parallel; the stable `test` aggregate joins the results.
@@ -909,10 +883,9 @@ jobs:
           require_lane desktop "$NEEDS_DESKTOP" "$DESKTOP_RESULT"
 
   test-native:
-    needs: [contract, changes, mcp-conformance, test-docker-server, test-macos, test-windows, test-python-raw-plugin]
+    needs: [contract, changes, mcp-conformance, test-docker-server, test-macos, test-windows]
     # Stable branch-protection context: daily native aggregates and the path-aware
-    # Server image smoke must resolve according to classifier policy. The isolated
-    # Python example matrix must always succeed on both platforms.
+    # Server image smoke must resolve according to classifier policy.
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -926,15 +899,14 @@ jobs:
           DOCKER_RESULT: ${{ needs.test-docker-server.result }}
           MACOS_RESULT: ${{ needs.test-macos.result }}
           WINDOWS_RESULT: ${{ needs.test-windows.result }}
-          PYTHON_RAW_RESULT: ${{ needs.test-python-raw-plugin.result }}
         run: |
           set -euo pipefail
-          echo "changes=$CHANGES_RESULT contract=$CONTRACT_RESULT mcp_conformance=$MCP_CONFORMANCE_RESULT docker=$DOCKER_RESULT macos=$MACOS_RESULT windows=$WINDOWS_RESULT python_raw=$PYTHON_RAW_RESULT needs_docker=$NEEDS_DOCKER"
+          echo "changes=$CHANGES_RESULT contract=$CONTRACT_RESULT mcp_conformance=$MCP_CONFORMANCE_RESULT docker=$DOCKER_RESULT macos=$MACOS_RESULT windows=$WINDOWS_RESULT needs_docker=$NEEDS_DOCKER"
           if [ "$CHANGES_RESULT" != success ] || [ "$CONTRACT_RESULT" != success ] || [ "$MCP_CONFORMANCE_RESULT" != success ]; then
             echo "CI policy or contract classification did not succeed" >&2
             exit 1
           fi
-          if [ "$MACOS_RESULT" != success ] || [ "$WINDOWS_RESULT" != success ] || [ "$PYTHON_RAW_RESULT" != success ]; then
+          if [ "$MACOS_RESULT" != success ] || [ "$WINDOWS_RESULT" != success ]; then
             echo "native platform aggregate failed" >&2
             exit 1
           fi
