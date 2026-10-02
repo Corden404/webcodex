@@ -117,6 +117,103 @@ pub struct CargoTestSummary {
     pub ignored: Option<u64>,
 }
 
+/// Extract only a complete final pytest terminal summary. Passing process status
+/// alone, progress lines and truncated output cannot prove an executed-test count.
+/// Skips, xfails/xpasses and collection errors never inflate the executed count.
+pub fn parse_pytest_diagnostics(stdout: &str, truncated: bool) -> ValidationDiagnostics {
+    let summary = if truncated {
+        None
+    } else {
+        pytest_final_summary(stdout)
+    };
+    ValidationDiagnostics {
+        available: summary.is_some(),
+        parser: PARSER_KIND,
+        reason: summary.is_none().then_some("no complete pytest summary"),
+        diagnostic_count: Some(0),
+        diagnostics: Vec::new(),
+        returned_diagnostic_count: 0,
+        diagnostics_truncated: false,
+        invalid_diagnostics_omitted: 0,
+        test_summary: summary,
+        failed_test_details: Vec::new(),
+        failed_test_details_truncated: false,
+        truncated: Some(truncated),
+    }
+}
+
+fn pytest_final_summary(stdout: &str) -> Option<CargoTestSummary> {
+    let mut lines = stdout.lines().rev().filter(|line| !line.trim().is_empty());
+    let summary = pytest_summary_line(lines.next()?)?;
+    // Multiple terminal summaries may represent nested runs or contradictory
+    // evidence. A bounded excerpt must not silently select one as authoritative.
+    if lines.any(|line| pytest_summary_line(line).is_some()) {
+        return None;
+    }
+    Some(summary)
+}
+
+fn pytest_summary_line(line: &str) -> Option<CargoTestSummary> {
+    let line = line.trim().trim_matches('=').trim();
+    let (counts, duration) = line.split_once(" in ")?;
+    let mut duration_parts = duration.split_whitespace();
+    let seconds = duration_parts.next()?.strip_suffix('s')?;
+    if let Some(clock) = duration_parts.next() {
+        let clock = clock.strip_prefix('(')?.strip_suffix(')')?;
+        let parts: Vec<_> = clock.split(':').collect();
+        if parts.len() != 3
+            || parts
+                .iter()
+                .any(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()))
+            || parts[1].len() != 2
+            || parts[2].len() != 2
+            || parts[1].parse::<u8>().ok()? >= 60
+            || parts[2].parse::<u8>().ok()? >= 60
+        {
+            return None;
+        }
+        if duration_parts.next().is_some() {
+            return None;
+        }
+    }
+    if !seconds.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        || !seconds
+            .parse::<f64>()
+            .ok()
+            .is_some_and(|value| value.is_finite() && value >= 0.0)
+    {
+        return None;
+    }
+    let mut passed = 0u64;
+    let mut failed = 0u64;
+    let mut ignored = 0u64;
+    let mut kinds = std::collections::HashSet::new();
+    if counts != "no tests ran" {
+        for part in counts.split(", ") {
+            let (count, kind) = part.split_once(' ')?;
+            let count = count.parse::<u64>().ok()?;
+            if !kinds.insert(kind) {
+                return None;
+            }
+            match kind {
+                "passed" => passed = count,
+                "failed" => failed = count,
+                "skipped" | "xfailed" | "xpassed" => ignored = ignored.checked_add(count)?,
+                "deselected" | "warning" | "warnings" => {}
+                "error" | "errors" if count == 0 => {}
+                "error" | "errors" => return None,
+                _ => return None,
+            }
+        }
+    }
+    passed.checked_add(failed)?;
+    Some(CargoTestSummary {
+        passed: Some(passed),
+        failed: Some(failed),
+        ignored: Some(ignored),
+    })
+}
+
 /// Parse Go vet's stable relative-file:line:column diagnostics. Compiler prose
 /// without a stable location is not invented into structured evidence.
 pub fn parse_go_vet_diagnostics(stderr: &str, truncated: bool) -> ValidationDiagnostics {

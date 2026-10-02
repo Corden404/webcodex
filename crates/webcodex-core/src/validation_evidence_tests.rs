@@ -759,3 +759,52 @@ fn go_vet_diagnostics_are_bounded_and_reject_absolute_locations() {
         .unwrap()
         .contains("/private/"));
 }
+
+#[test]
+fn pytest_summary_proves_only_complete_executed_results() {
+    use crate::validation_evidence::parse_pytest_diagnostics;
+    for (output, passed, failed, ignored) in [
+        ("==== 2 passed in 0.02s ====\n", 2, 0, 0),
+        (
+            "==== 1 failed, 2 passed, 3 skipped, 1 xfailed, 1 xpassed in 0.02s ====\n",
+            2,
+            1,
+            5,
+        ),
+        ("no tests ran in 0.01s\n", 0, 0, 0),
+        ("2 deselected in 0.01s\n", 0, 0, 0),
+        ("3 skipped in 0.01s\n", 0, 0, 3),
+        ("1 passed in 65.00s (0:01:05)\n", 1, 0, 0),
+    ] {
+        let parsed = parse_pytest_diagnostics(output, false);
+        let summary = parsed.test_summary.unwrap();
+        assert_eq!(
+            (summary.passed, summary.failed, summary.ignored),
+            (Some(passed), Some(failed), Some(ignored))
+        );
+        assert!(parse_pytest_diagnostics(output, true)
+            .test_summary
+            .is_none());
+    }
+    for output in [
+        "test_fake.py PASSED\n",
+        "3 passed",
+        "1 passed, 2 passed in 0.01s",
+        "1 bananas in 0.01s",
+        "18446744073709551615 passed, 1 failed in 0.01s",
+        "3 passed in invalids",
+        "3 passed in ...s",
+        "1 error in 0.01s",
+        "1 passed in 0.01s trailing text",
+        "1 passed in 61.00s (0:99:99)",
+        "1 passed in 0.01s\n2 passed in 0.02s",
+        "3 passed in 0.01s\npartial output",
+    ] {
+        assert!(
+            parse_pytest_diagnostics(output, false)
+                .test_summary
+                .is_none(),
+            "{output}"
+        );
+    }
+}

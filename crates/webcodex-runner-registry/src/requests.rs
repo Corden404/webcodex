@@ -2626,6 +2626,8 @@ impl RunnerRegistry {
         access: Option<&crate::RunnerAccess>,
     ) -> Result<(String, oneshot::Receiver<ShellRunResponse>), String> {
         payload.validate()?;
+        let requires_python =
+            payload.adapter == webcodex_core::project_validation::ProjectValidationAdapter::Python;
         let requires_package_scope = payload
             .scope
             .as_ref()
@@ -2655,6 +2657,13 @@ impl RunnerRegistry {
             return Err(
                 "capability_unavailable: upgrade target Runner for project_validation_v1".into(),
             );
+        }
+        if requires_python
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectValidationPythonPytest)
+        {
+            return Err("capability_unavailable: upgrade target Runner for project_validation_python_pytest_v1".into());
         }
         if requires_all_packages
             && !runner

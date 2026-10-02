@@ -118,13 +118,14 @@ impl JobManager {
         };
         if validation
             && steps.iter().any(|step| {
-                !validation_module_available(
-                    &shell,
-                    prepared_profile.as_deref(),
-                    &cwd_path,
-                    step,
-                    Some(self.shutting_down.as_ref()),
-                )
+                !step.is_structured_pytest()
+                    && !validation_module_available(
+                        &shell,
+                        prepared_profile.as_deref(),
+                        &cwd_path,
+                        step,
+                        Some(self.shutting_down.as_ref()),
+                    )
             })
         {
             self.fail_job(
@@ -141,7 +142,15 @@ impl JobManager {
         let step_count = if validation { steps.len() } else { 1 };
         let mut commands = VecDeque::with_capacity(step_count);
         for index in 0..step_count {
-            let configured = if validation {
+            let configured = if validation && steps[index].is_structured_pytest() {
+                crate::webcodex_runner::shell::configured_pytest_job_command(
+                    &shell,
+                    prepared_profile.as_deref(),
+                    &steps[index].args,
+                    &cwd_path,
+                    Some(self.shutting_down.as_ref()),
+                )
+            } else if validation {
                 configured_validation_job_command(
                     &shell,
                     prepared_profile.as_deref(),

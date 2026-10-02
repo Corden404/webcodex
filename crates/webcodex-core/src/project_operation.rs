@@ -36,6 +36,7 @@ pub struct ProjectOperationScope {
     pub all_packages: bool,
 }
 
+#[expect(dead_code, reason = "schema-only type; never instantiated at runtime")]
 #[derive(schemars::JsonSchema)]
 #[serde(untagged)]
 enum ProjectOperationScopeSchema {
@@ -43,6 +44,7 @@ enum ProjectOperationScopeSchema {
     AllPackages(ProjectOperationAllPackagesScopeSchema),
 }
 
+#[expect(dead_code, reason = "schema-only type; never instantiated at runtime")]
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ProjectOperationPackagesScopeSchema {
@@ -51,6 +53,7 @@ struct ProjectOperationPackagesScopeSchema {
     packages: Vec<String>,
 }
 
+#[expect(dead_code, reason = "schema-only type; never instantiated at runtime")]
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ProjectOperationAllPackagesScopeSchema {

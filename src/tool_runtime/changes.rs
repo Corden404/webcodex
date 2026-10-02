@@ -736,6 +736,9 @@ exit 0
         // read-authority observation path, not repository-configured execution.
         // `git add` may still write immutable blobs/trees to the object database;
         // the resulting tree is intentionally unreachable observation state.
+        // Scope GIT_INDEX_FILE to a subshell: macOS sh (Bash 3.2) retains inline
+        // assignments before function calls, which would make the subsequent
+        // review status read this temporary index instead of the real index.
         let script = format!(
             r#"set -eu
 LC_ALL=C; export LC_ALL
@@ -747,12 +750,18 @@ rm -f "$changes_git_tmp_index"
 head=""
 if changes_git rev-parse --verify HEAD >/dev/null 2>&1; then
   head=$(changes_git rev-parse --verify HEAD)
-  GIT_INDEX_FILE="$changes_git_tmp_index" changes_git read-tree "$head"
-else
-  GIT_INDEX_FILE="$changes_git_tmp_index" changes_git read-tree --empty
 fi
-GIT_INDEX_FILE="$changes_git_tmp_index" changes_git add -A -- .
-tree=$(GIT_INDEX_FILE="$changes_git_tmp_index" changes_git write-tree)
+tree=$(
+  set -e
+  GIT_INDEX_FILE="$changes_git_tmp_index"; export GIT_INDEX_FILE
+  if [ -n "$head" ]; then
+    changes_git read-tree "$head"
+  else
+    changes_git read-tree --empty
+  fi
+  changes_git add -A -- .
+  changes_git write-tree
+)
 printf 'WEBCODEX_WORKSPACE_HEAD=%s\nWEBCODEX_WORKSPACE_TREE=%s\n' "$head" "$tree"
 {review_status}
 "#,

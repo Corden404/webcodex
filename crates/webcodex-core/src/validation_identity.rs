@@ -22,6 +22,7 @@ pub enum ToolValidationIdentityKind {
     CargoTest,
     GoTest,
     GoVet,
+    PythonPytest,
     Project,
 }
 
@@ -34,6 +35,7 @@ impl ToolValidationIdentityKind {
             Self::CargoTest => Some("cargo_test"),
             Self::GoTest => Some("go_test"),
             Self::GoVet => Some("go_vet"),
+            Self::PythonPytest => Some("python:pytest:test"),
         }
     }
 }
@@ -203,6 +205,15 @@ pub fn structured_validation_target_identity(
                 semantic["filter"] = Value::String(filter);
             }
             semantic
+        }
+        ToolValidationIdentityKind::PythonPytest => {
+            let filter = match obj.get("filter") {
+                None | Some(Value::Null) => None,
+                Some(value) => {
+                    crate::runner_protocol::normalize_pytest_filter(value.as_str()?).ok()?
+                }
+            };
+            serde_json::json!({"tool":tool_name,"kind":"test","cwd":cwd,"filter":filter})
         }
         ToolValidationIdentityKind::GoVet => {
             if obj.get("packages_present").and_then(Value::as_bool) == Some(true)

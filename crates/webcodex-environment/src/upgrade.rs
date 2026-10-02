@@ -1,6 +1,8 @@
 //! Installer preflight and a recoverable program/data switch. No project
 //! directory is copied, rewritten or removed by an upgrade.
-use crate::service::{Component, Ownership, ServiceAccount, ServiceManager, ServiceSpec};
+#[cfg(unix)]
+use crate::service::ServiceAccount;
+use crate::service::{Component, Ownership, ServiceManager, ServiceSpec};
 use crate::storage::ensure_private_directory;
 use crate::*;
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Component as PathComponent, Path, PathBuf};
 use webcodex_core::desktop_runtime_contract::{MachineBuildInfo, DESKTOP_RUNTIME_CONTRACT};
+#[cfg(unix)]
 mod desktop_tree;
 mod observation;
 pub mod windows_legacy;
@@ -2300,6 +2303,8 @@ pub(crate) fn restore_programs_from_journal(
 }
 
 fn authorize_restore_destinations(root: &Path, journal: &UpgradeJournal) -> SetupResultValue<()> {
+    #[cfg(not(unix))]
+    let _ = root;
     #[cfg(unix)]
     {
         let system = crate::installer_authorization::system_directory()?;
@@ -2370,6 +2375,8 @@ fn restore_desktop(
     operation_id: &str,
     owner: &str,
 ) -> SetupResultValue<()> {
+    #[cfg(not(unix))]
+    let _ = operation_id;
     let parent = backup.target.parent().ok_or_else(SetupDiagnostic::io)?;
     for ancestor in parent.ancestors() {
         if std::fs::symlink_metadata(ancestor)

@@ -405,6 +405,8 @@ fn write_frame(stream: &mut impl Write, bytes: &[u8], max: usize) -> Result<(), 
 }
 
 fn validate_dir(dir: &Path, helper: bool) -> Result<(), String> {
+    #[cfg(not(unix))]
+    let _ = helper;
     let meta =
         std::fs::symlink_metadata(dir).map_err(|e| format!("computer session directory: {e}"))?;
     if !meta.is_dir() || meta.file_type().is_symlink() {

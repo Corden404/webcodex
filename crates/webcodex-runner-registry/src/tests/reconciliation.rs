@@ -3853,3 +3853,58 @@ async fn sweep_only_transitions_expired_jobs_and_leaves_recent_recovering() {
 
 #[path = "job_receipts.rs"]
 mod job_receipts;
+
+#[tokio::test]
+async fn project_validation_python_pytest_capability_rechecked_at_job_admission() {
+    use webcodex_core::project_validation::*;
+    for supported in [false, true] {
+        let registry = RunnerRegistry::default();
+        let mut registration = register_request(INSTANCE_A, empty_inventory());
+        registration.capabilities.project_validation_v1 = true;
+        registration
+            .capabilities
+            .project_validation_python_pytest_v1 = supported;
+        registry.register(registration).await.unwrap();
+        let mut metadata = cargo_validation_start_metadata(Some(true), None, Some(1));
+        let validation = metadata.validation.as_mut().unwrap();
+        validation.tool = "project_validate".into();
+        validation.adapter = "python:pytest:test".into();
+        validation.steps = vec![ShellJobValidationStep {
+            name: "test".into(),
+            program: "python".into(),
+            args: ["-m", "pytest", "--color=no", "-rA"]
+                .map(str::to_string)
+                .to_vec(),
+            env: vec![],
+        }];
+        validation.project_validation = Some(ProjectValidationProvenance {
+            request: ProjectValidationRequest {
+                project_id: "demo".into(),
+                cwd: None,
+                action: ProjectValidationAction::Test,
+                adapter: ProjectValidationAdapter::Auto,
+                scope: None,
+                dependency_policy: None,
+                test: None,
+            },
+            backend: "python".into(),
+            recipe_root: ".".into(),
+            root_digest: "a".repeat(64),
+            manifest_digest: "b".repeat(64),
+            invocation_digest: "c".repeat(64),
+        });
+        assert!(validation.is_valid());
+        metadata.validation_steps = validation.steps.clone();
+        let result = registry
+            .start_job_with_metadata(start_request("validation"), "tester".into(), metadata)
+            .await;
+        if supported {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            assert!(result
+                .unwrap_err()
+                .contains("project_validation_python_pytest_v1"));
+            assert!(registry.list_jobs(Some(10)).await.is_empty());
+        }
+    }
+}

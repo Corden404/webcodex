@@ -272,6 +272,7 @@ fn python_raw_plugin_admission_and_call() {
             name: "echo".into(),
             arguments,
             expected_schema: tools[0].schema_observation(),
+            project_target: None,
         })
     };
     for text in ["hello", "中文😀\n", &"😀".repeat(4096)] {

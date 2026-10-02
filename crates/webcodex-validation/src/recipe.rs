@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use webcodex_core::runner_protocol::{normalize_rust_test_filter, ShellJobValidationStep};
 use webcodex_workspace::project_recipe::{
     digest_project_cargo_all_packages_provenance, digest_project_recipe_files,
@@ -18,6 +18,16 @@ pub use webcodex_workspace::project_recipe::ProjectRecipeId as RecipeId;
 const RECIPE_VERSION: u32 = 1;
 const PYTHON_MANIFESTLESS_DIGEST_SEED: &[u8] = b"webcodex.python.manifestless.recipe.v1";
 const PYTHON_UNITTEST_ARGS: [&str; 5] = ["-B", "-m", "unittest", "discover", "-v"];
+const PYTEST_PROJECT_CONFIG_FILES: [&str; 8] = [
+    "pytest.toml",
+    ".pytest.toml",
+    "pytest.ini",
+    ".pytest.ini",
+    "pyproject.toml",
+    "tox.ini",
+    "setup.cfg",
+    "setup.py",
+];
 const NODE_LOCKFILES: [(&str, &str); 6] = [
     ("pnpm-lock.yaml", "pnpm"),
     ("yarn.lock", "yarn"),
@@ -149,6 +159,168 @@ pub fn resolve_validation_recipe_with_packages(
         false,
         None,
     )
+}
+
+/// Canonical project gateway planning. Ordinary recipe workflows retain their
+/// existing Python Ruff/mypy/unittest choices; this gateway supports pytest only.
+pub fn resolve_project_validation_recipe(
+    execution_root: &Path,
+    cwd: Option<&str>,
+    explicit_recipe: Option<RecipeId>,
+    checks: &[SemanticCheck],
+    test_filter: Option<&str>,
+    package_scope: Option<&[String]>,
+    all_packages: bool,
+    dependency_policy: Option<webcodex_core::project_validation::ProjectDependencyPolicy>,
+) -> Result<ResolvedValidationRecipe, RecipeError> {
+    let resolved = resolve_project_recipe_root(execution_root, cwd, explicit_recipe)
+        .map_err(map_project_recipe_error)?;
+    if resolved.recipe != RecipeId::Python {
+        return resolve_validation_recipe_with_project_policy(
+            execution_root,
+            cwd,
+            explicit_recipe,
+            checks,
+            test_filter,
+            package_scope,
+            all_packages,
+            dependency_policy,
+        );
+    }
+    let mut steps = Vec::with_capacity(checks.len());
+    for check in checks {
+        let operation = crate::project_validation_operation(
+            "python",
+            *check,
+            package_scope.map(<[String]>::to_vec),
+            all_packages,
+        )
+        .and_then(|operation| operation.with_dependency_policy(dependency_policy))
+        .and_then(|operation| operation.with_test_filter(test_filter))
+        .map_err(RecipeError::new)?;
+        steps.push(
+            operation
+                .build_readonly_plan()
+                .map_err(|_| check_unavailable())?
+                .structured_step,
+        );
+    }
+    let test_filter = test_filter
+        .map(webcodex_core::runner_protocol::normalize_pytest_filter)
+        .transpose()
+        .map_err(|_| filter_unsupported())?
+        .flatten();
+    // pytest searches configuration from the invocation directory through its
+    // ancestors. Bind every candidate inside the registered Project, and fail
+    // closed if that search could escape to an ambient parent configuration.
+    let manifest_digest = digest_project_recipe_files(
+        &resolved.execution_root,
+        pytest_project_provenance_files(&resolved.execution_root, &resolved.absolute_root)?,
+    )
+    .map_err(map_project_recipe_error)?;
+    let invocation_digest = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&steps).map_err(|_| manifest_invalid())?)
+    );
+    Ok(ResolvedValidationRecipe {
+        recipe_id: "python",
+        recipe_root_relative: resolved.relative_root,
+        steps,
+        manifest_digest,
+        invocation_digest,
+        test_filter,
+    })
+}
+
+fn pytest_project_provenance_files(
+    execution_root: &Path,
+    recipe_root: &Path,
+) -> Result<Vec<PathBuf>, RecipeError> {
+    let mut files = Vec::new();
+    let mut directory = recipe_root.to_path_buf();
+    let mut project_config_boundary = false;
+    loop {
+        files.extend(
+            PYTEST_PROJECT_CONFIG_FILES
+                .into_iter()
+                .map(|name| directory.join(name)),
+        );
+        project_config_boundary |= pytest_config_boundary_in_dir(execution_root, &directory)?;
+        if directory == execution_root {
+            break;
+        }
+        directory = directory
+            .parent()
+            .filter(|parent| parent.starts_with(execution_root))
+            .ok_or_else(manifest_invalid)?
+            .to_path_buf();
+    }
+
+    // Without a recognized Project-local config, pytest keeps searching above
+    // cwd before it falls back to setup.py/rootdir. Never let files outside the
+    // registered Project silently select config/rootdir for a structured Job.
+    if !project_config_boundary {
+        for parent in execution_root.ancestors().skip(1) {
+            for name in PYTEST_PROJECT_CONFIG_FILES {
+                match fs::symlink_metadata(parent.join(name)) {
+                    Ok(_) => return Err(manifest_invalid()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(manifest_invalid()),
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn pytest_config_boundary_in_dir(
+    execution_root: &Path,
+    directory: &Path,
+) -> Result<bool, RecipeError> {
+    for name in ["pytest.ini", ".pytest.ini"] {
+        match fs::symlink_metadata(directory.join(name)) {
+            Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {
+                return Ok(true)
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(manifest_invalid()),
+        }
+    }
+
+    let pyproject = directory.join("pyproject.toml");
+    if pyproject.exists() {
+        let bytes = read_project_recipe_file(execution_root, &pyproject)
+            .map_err(map_project_recipe_error)?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| manifest_invalid())?;
+        let value: toml::Value = toml::from_str(text).map_err(|_| manifest_invalid())?;
+        if value
+            .get("tool")
+            .and_then(toml::Value::as_table)
+            .and_then(|tool| tool.get("pytest"))
+            .and_then(toml::Value::as_table)
+            .is_some_and(|pytest| pytest.get("ini_options").is_some())
+        {
+            return Ok(true);
+        }
+    }
+
+    for (name, section) in [("tox.ini", "pytest"), ("setup.cfg", "tool:pytest")] {
+        let path = directory.join(name);
+        if !path.exists() {
+            continue;
+        }
+        let bytes =
+            read_project_recipe_file(execution_root, &path).map_err(map_project_recipe_error)?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| manifest_invalid())?;
+        if text
+            .lines()
+            .any(|line| line.trim() == format!("[{section}]"))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn resolve_validation_recipe_with_project_policy(

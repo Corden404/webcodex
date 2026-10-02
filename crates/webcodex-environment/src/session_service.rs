@@ -16,8 +16,10 @@ struct HelperPlan {
     marker: String,
     program: PathBuf,
     session_dir: PathBuf,
+    #[cfg(windows)]
     account_name: String,
     account_identity: String,
+    #[cfg(target_os = "macos")]
     home: Option<PathBuf>,
 }
 
@@ -34,6 +36,7 @@ fn plan(spec: &ServiceSpec, session_dir: &Path) -> Result<HelperPlan, ServiceErr
     let ServiceAccount::SystemUser {
         name,
         expected_identity,
+        #[cfg(target_os = "macos")]
         home,
         ..
     } = &spec.account
@@ -88,8 +91,10 @@ fn plan(spec: &ServiceSpec, session_dir: &Path) -> Result<HelperPlan, ServiceErr
         marker: format!("webcodex-computer-helper:v1:{}", &suffix[..32]),
         program: spec.program.clone(),
         session_dir: session_dir.to_path_buf(),
+        #[cfg(windows)]
         account_name: name.clone(),
         account_identity: expected_identity.clone(),
+        #[cfg(target_os = "macos")]
         home: home.clone(),
     })
 }
@@ -944,24 +949,30 @@ mod platform {
 mod tests {
     use super::*;
     fn spec(dir: &Path) -> ServiceSpec {
+        let program = dir.join(if cfg!(windows) {
+            "webcodex-runner.exe"
+        } else {
+            "webcodex-runner"
+        });
+        let config = dir.join("runner.toml").to_string_lossy().into_owned();
         ServiceSpec {
             scope: crate::service::ServiceScope::System,
             id: "WebCodexRunner-test".into(),
             component: Component::Runner,
-            program: PathBuf::from("/opt/webcodex/webcodex-runner"),
+            program,
             args: if cfg!(windows) {
                 vec![
                     "--windows-service".into(),
                     "WebCodexRunner-test".into(),
                     "--config".into(),
-                    "/opt/webcodex/runner.toml".into(),
+                    config.clone(),
                     "--computer-session-dir".into(),
                     dir.to_string_lossy().into_owned(),
                 ]
             } else {
                 vec![
                     "--config".into(),
-                    "/opt/webcodex/runner.toml".into(),
+                    config,
                     "--computer-session-dir".into(),
                     dir.to_string_lossy().into_owned(),
                 ]
@@ -971,7 +982,7 @@ mod tests {
                 name: "owner".into(),
                 group: None,
                 expected_identity: "501".into(),
-                home: Some(PathBuf::from("/Users/owner")),
+                home: Some(dir.to_path_buf()),
             },
             config_identity: "environment-id".into(),
             env_file: None,

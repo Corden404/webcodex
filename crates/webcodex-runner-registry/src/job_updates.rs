@@ -1394,6 +1394,19 @@ impl RunnerRegistry {
                 "capability_unavailable: upgrade target Runner for project_validation_v1".into(),
             );
         }
+        let python_pytest = validation
+            .as_ref()
+            .is_some_and(|v| v.adapter == "python:pytest:test")
+            || validation_steps
+                .iter()
+                .any(ShellJobValidationStep::is_structured_pytest);
+        if python_pytest
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectValidationPythonPytest)
+        {
+            return Err("capability_unavailable: upgrade target Runner for project_validation_python_pytest_v1".into());
+        }
         // Recheck at admission, not only during the earlier planning round trip:
         // a replacement/older Runner must never reinterpret new filters or counts.
         let project_test_options = validation

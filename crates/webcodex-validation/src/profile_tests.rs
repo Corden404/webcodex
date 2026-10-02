@@ -813,3 +813,80 @@ fn validation_profiles_reuse_existing_runtime_tool_schemas() {
     assert!(!is_known_tool_name("validation_profile"));
     assert!(!is_known_tool_name("validation_adapter"));
 }
+
+#[test]
+fn project_validation_python_pytest_owns_filter_plan_and_parser() {
+    let operation =
+        project_validation_operation("python", SemanticCheck::Test, None, false).unwrap();
+    let selected = operation
+        .clone()
+        .with_test_filter(Some("selected and not slow"))
+        .unwrap();
+    let plan = selected.build_readonly_plan().unwrap();
+    assert_eq!(
+        plan.structured_step.args,
+        [
+            "-m",
+            "pytest",
+            "--color=no",
+            "-rA",
+            "-k",
+            "selected and not slow"
+        ]
+    );
+    assert!(plan.structured_step.is_canonical());
+    assert_ne!(
+        selected.validation_target_id(Some(".")),
+        operation.validation_target_id(Some("."))
+    );
+    let adapter = selected.adapter();
+    assert_eq!(adapter.tool_identity(), "python:pytest:test");
+    assert!(adapter.reports_test_run_metadata());
+    assert_eq!(
+        adapter
+            .parse("1 passed in 0.01s\n", "", false)
+            .test_summary
+            .unwrap()
+            .passed,
+        Some(1)
+    );
+    assert!(adapter
+        .parse("1 passed in 0.01s\n", "", true)
+        .test_summary
+        .is_none());
+    for action in [SemanticCheck::Format, SemanticCheck::Check] {
+        assert_eq!(
+            project_validation_operation("python", action, None, false).unwrap_err(),
+            "validation_action_unsupported"
+        );
+    }
+    assert_eq!(
+        project_validation_operation(
+            "python",
+            SemanticCheck::Test,
+            Some(vec!["tests".into()]),
+            false
+        )
+        .unwrap_err(),
+        "validation_scope_unsupported"
+    );
+    assert!(operation
+        .with_dependency_policy(Some(
+            webcodex_core::project_validation::ProjectDependencyPolicy {
+                mode: webcodex_core::project_validation::ProjectDependencyMode::Locked
+            }
+        ))
+        .is_err());
+    assert!(adapter
+        .build_readonly_plan(ValidationCommandOptions {
+            all_packages: true,
+            ..Default::default()
+        })
+        .is_err());
+    assert_eq!(
+        project_validation_operation("python", SemanticCheck::Test, None, true).unwrap_err(),
+        "validation_scope_unsupported"
+    );
+    assert!(!is_known_tool_name("pytest"));
+    assert!(!is_known_tool_name("python:pytest:test"));
+}

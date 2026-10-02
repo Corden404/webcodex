@@ -79,6 +79,24 @@ pub(super) fn fake_server_path() -> &'static Path {
                     .output()
                     .expect("run rustc for fake LSP server");
                 if output.status.success() {
+                    // Finalize the local executable before concurrent tests can
+                    // launch it. On macOS the linker's signature alone can race
+                    // first-execution policy assessment and get a fresh helper
+                    // killed before main, masquerading as an LSP startup crash.
+                    #[cfg(target_os = "macos")]
+                    {
+                        let output = Command::new("/usr/bin/codesign")
+                            .args(["--force", "--sign", "-"])
+                            .arg(&path)
+                            .output()
+                            .expect("ad-hoc sign fake LSP server");
+                        assert!(
+                            output.status.success(),
+                            "fake LSP server signing failed ({}):\n{}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
                     return FakeServerBinary { _temp: temp, path };
                 }
                 if attempt == 2 {

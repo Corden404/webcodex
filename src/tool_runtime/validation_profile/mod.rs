@@ -17,6 +17,11 @@ pub(crate) struct ValidationRuntimeProfile {
 
 pub(crate) fn runtime_profile(operation: &ReadOnlyValidationOperation) -> ValidationRuntimeProfile {
     match operation {
+        ReadOnlyValidationOperation::Python(_) => ValidationRuntimeProfile {
+            default_timeout_secs: DEFAULT_CARGO_TEST_TIMEOUT_SECS,
+            force_agent_handoff: true,
+            invalid_argument_guidance: "use one bounded pytest -k expression, never flags.",
+        },
         ReadOnlyValidationOperation::Cargo(CargoReadOnlyValidationOperation::FormatCheck) => {
             ValidationRuntimeProfile {
                 default_timeout_secs: DEFAULT_CARGO_FMT_TIMEOUT_SECS,

@@ -441,6 +441,26 @@ pub(crate) fn structured_validation_evidence(
         errors_count: None,
     };
     match kind {
+        "test" if tool == "python:pytest:test" => {
+            let summary = evidence
+                .diagnostics
+                .as_ref()
+                .and_then(|d| d.test_summary.as_ref());
+            evidence.tests_detected = Some(summary.is_some());
+            evidence.test_count_evidence_reason = Some(if truncated {
+                "output_truncated"
+            } else if summary.is_some() {
+                "complete_summary"
+            } else {
+                "no_complete_summary"
+            });
+            if !truncated {
+                evidence.tests_passed = summary.and_then(|s| s.passed);
+                evidence.tests_failed = summary.and_then(|s| s.failed);
+                evidence.tests_run_count = summary.and_then(|s| s.passed?.checked_add(s.failed?));
+                evidence.zero_tests_run = evidence.tests_run_count.map(|count| count == 0);
+            }
+        }
         "test" if tool == "go_test" => {
             let test_summary = evidence
                 .diagnostics
@@ -527,7 +547,7 @@ pub(crate) fn validation_job_projection_with_policy(
 ) -> Option<Value> {
     let tool = tool?;
     let kind = kind.unwrap_or(match tool {
-        "cargo_test" | "go_test" => "test",
+        "cargo_test" | "go_test" | "python:pytest:test" => "test",
         "cargo_fmt" => "format",
         _ => "check",
     });
@@ -597,7 +617,38 @@ pub(crate) fn validation_job_projection_with_policy(
             evidence.test_count_evidence_reason = Some(authoritative.status.reason_code());
         }
     }
-    let mut passed = process_passed;
+    let pytest_contradictory = if tool == "python:pytest:test" {
+        match (
+            evidence.tests_run_count,
+            evidence.tests_failed,
+            exit_code,
+            lifecycle,
+        ) {
+            (None, _, _, _) => false,
+            (Some(_), Some(0), Some(0), Some(RunnerJobLifecycle::Completed)) => false,
+            (Some(_), Some(failed), Some(1), Some(RunnerJobLifecycle::Failed)) if failed > 0 => {
+                false
+            }
+            (Some(0), Some(0), Some(5), Some(RunnerJobLifecycle::Failed)) => false,
+            _ => true,
+        }
+    } else {
+        false
+    };
+    if pytest_contradictory {
+        evidence.tests_run_count = None;
+        evidence.tests_passed = None;
+        evidence.tests_failed = None;
+        evidence.zero_tests_run = None;
+        evidence.tests_detected = Some(false);
+        evidence.test_count_evidence_reason = Some("no_complete_summary");
+        if let Some(diagnostics) = evidence.diagnostics.as_mut() {
+            diagnostics.test_summary = None;
+            diagnostics.available = false;
+            diagnostics.reason = Some("pytest summary contradicts process outcome");
+        }
+    }
+    let mut passed = process_passed && !pytest_contradictory;
     let mut value = json!({
         "tool": tool,
         "kind": kind,
@@ -615,7 +666,7 @@ pub(crate) fn validation_job_projection_with_policy(
             value["tests_passed"] = json!(evidence.tests_passed);
             value["tests_failed"] = json!(evidence.tests_failed);
             value["zero_tests_run"] = json!(evidence.zero_tests_run);
-            if matches!(tool, "cargo_test" | "go_test") && process_passed {
+            if matches!(tool, "cargo_test" | "go_test" | "python:pytest:test") && process_passed {
                 if let Some(minimum_tests) = minimum_tests {
                     let (status, reason_code) = match evidence.tests_run_count {
                         Some(actual) if actual >= minimum_tests => ("passed", "minimum_satisfied"),
@@ -657,7 +708,7 @@ fn apply_cargo_test_execution_policy(
     require_tests: Option<bool>,
     no_run: Option<bool>,
 ) {
-    if tool != "cargo_test" {
+    if !matches!(tool, "cargo_test" | "python:pytest:test") {
         return;
     }
     if let Some(require_tests) = require_tests {
@@ -2583,6 +2634,58 @@ mod recovery_projection_tests {
             failing_tests.get("test_count_assertion").is_none(),
             "executed-test evidence must not overwrite Cargo process failure"
         );
+    }
+
+    #[test]
+    fn pytest_unknown_counts_preserve_native_opt_out_but_never_prove_minimum() {
+        for (stdout, truncated) in [
+            ("progress without summary", false),
+            ("1 passed in 0.01s", true),
+        ] {
+            for minimum in [None, Some(1)] {
+                let value = validation_job_projection_with_policy(
+                    Some("python:pytest:test"),
+                    Some("test"),
+                    "completed",
+                    Some(0),
+                    stdout,
+                    "",
+                    truncated,
+                    None,
+                    minimum,
+                    Some(false),
+                    None,
+                )
+                .unwrap();
+                assert_eq!(value["passed"], minimum.is_none(), "{value}");
+                assert!(value["tests_run_count"].is_null());
+                assert!(value["zero_tests_run"].is_null());
+                if minimum.is_some() {
+                    assert_eq!(
+                        value["test_count_assertion"]["reason_code"],
+                        "test_count_unproven"
+                    );
+                }
+            }
+        }
+        for (status, exit) in [("failed", Some(2)), ("timed_out", None)] {
+            let value = validation_job_projection_with_policy(
+                Some("python:pytest:test"),
+                Some("test"),
+                status,
+                exit,
+                "1 passed in 0.01s",
+                "",
+                false,
+                None,
+                None,
+                Some(false),
+                None,
+            )
+            .unwrap();
+            assert!(value["tests_run_count"].is_null(), "{value}");
+            assert_ne!(value["passed"], true);
+        }
     }
 
     #[test]

@@ -17,7 +17,9 @@ async fn review_snapshot_identity_fences_index_only_changes() {
     );
     assert_eq!(unstaged, observe_review_source(&runtime, &project).await);
     git_test_command_ok(tmp.path(), "git add a.txt");
+    let staged_index = fs::read(tmp.path().join(".git/index")).unwrap();
     let staged = observe_review_source(&runtime, &project).await;
+    assert_eq!(staged_index, fs::read(tmp.path().join(".git/index")).unwrap());
     assert_eq!(unstaged["head_commit"], staged["head_commit"]);
     assert_eq!(unstaged["frozen_tree"], staged["frozen_tree"]);
     assert_ne!(

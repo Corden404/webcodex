@@ -2408,3 +2408,78 @@ fn default_shell_preserves_non_unicode_environment_without_panicking() {
     .unwrap();
     });
 }
+
+#[cfg(unix)]
+#[test]
+fn project_validation_pytest_probe_uses_profile_python3_and_pins_spawn_program() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = crate::tests::executable_tempdir();
+    let python = temp.path().join("python3");
+    let capture = temp.path().join("probe");
+    std::fs::write(&python,"#!/bin/sh\nif [ \"$1\" = '-c' ]; then printf 'probe' > \"$CAPTURE\"; exit 0; fi\nif [ -n \"${PYTEST_ADDOPTS+x}\" ]; then printf 'leaked' >> \"$CAPTURE\"; else printf 'spawn' >> \"$CAPTURE\"; fi\n").unwrap();
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let profile = PreparedShellProfile {
+        profile_name: "python-profile".into(),
+        program: "bash".into(),
+        args: vec![],
+        dialect: ShellDialect::Posix,
+        env_snapshot: std::collections::HashMap::from([
+            ("PATH".into(), temp.path().to_string_lossy().into_owned()),
+            ("CAPTURE".into(), capture.to_string_lossy().into_owned()),
+            (
+                "PYTEST_ADDOPTS".into(),
+                "-c ../../outside/pytest.ini".into(),
+            ),
+        ]),
+    };
+    let mut command = configured_pytest_job_command(
+        &ShellConfig::default(),
+        Some(&profile),
+        &["-m", "pytest", "--color=no", "-rA"].map(str::to_string),
+        temp.path(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(command.get_program(), python.as_os_str());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = ManagedChild::spawn(&mut command).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert_eq!(std::fs::read_to_string(capture).unwrap(), "probespawn");
+}
+
+#[cfg(unix)]
+#[test]
+fn project_validation_pytest_missing_module_never_falls_back_or_spawns_tests() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = crate::tests::executable_tempdir();
+    let python = temp.path().join("python3");
+    let capture = temp.path().join("probe");
+    std::fs::write(
+        &python,
+        "#!/bin/sh\nprintf 'probe' > \"$CAPTURE\"\nexit 42\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut shell = ShellConfig::default();
+    shell
+        .env
+        .insert("PATH".into(), temp.path().to_string_lossy().into_owned());
+    shell
+        .env
+        .insert("CAPTURE".into(), capture.to_string_lossy().into_owned());
+    let result = configured_pytest_job_command(
+        &shell,
+        None,
+        &["-m", "pytest", "--color=no", "-rA"].map(str::to_string),
+        temp.path(),
+        None,
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        webcodex_core::runner_protocol::VALIDATION_TOOL_UNAVAILABLE_CODE
+    );
+    assert_eq!(std::fs::read_to_string(capture).unwrap(), "probe");
+}
