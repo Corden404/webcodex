@@ -39,6 +39,22 @@ tests exercise both complete transcripts and an interactive subprocess, includin
 invalid input followed by a successful call. They need no Runner, credentials,
 network, or third-party test packages.
 
+For contributors with the repository Rust toolchain, the separate Runner smoke
+starts this script through the real PluginManager in an isolated temporary
+directory. It does not connect to a running Server or reload any provider.
+Set the test-only executable path explicitly, then run just that ignored test:
+
+```bash
+export WEBCODEX_TEST_PYTHON="$(python3 -c 'import sys; print(sys.executable)')"
+cargo test --locked -p webcodex-runner --features runner-real-process-tests runner_real_process_python_raw_plugin_admission_and_call -- --ignored --test-threads=1
+```
+
+In PowerShell, set the variable with
+`$env:WEBCODEX_TEST_PYTHON = python -c "import sys; print(sys.executable)"`, then
+run the same Cargo command. An absent or invalid interpreter fails explicitly.
+The dedicated Linux/Windows CI matrix runs both this smoke and the Python suite;
+ordinary Cargo tests do not require Python.
+
 ## Bounds and errors
 
 The example limits each input JSON frame to **64 KiB** and each serialized output

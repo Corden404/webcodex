@@ -126,7 +126,14 @@ The lanes above define test semantics; workflows decide when to run them.
   needed; an unavailable merge-group diff fails closed to the complete native matrix.
   Pushes to `main`, external-contributor PRs, and owner PRs carrying `run-ci` also
   force the complete deterministic native matrix.
-  Real-process and timing-sensitive ignored tests are deliberately outside ordinary
+  The dedicated `test-python-raw-plugin` Linux/Windows matrix explicitly runs the
+  standard-library Python protocol suite and the single ignored
+  `runner_real_process_python_raw_plugin_admission_and_call` compatibility smoke.
+  That smoke requires an absolute `WEBCODEX_TEST_PYTHON` executable path and uses
+  an isolated PluginManager, without a Server, live configuration, or reload.
+  Its result is required by `test-native`; it does not select the general ignored
+  lifecycle suite. See the [example instructions](../plugins/examples/python-raw/README.md).
+  Other real-process and timing-sensitive ignored tests are deliberately outside ordinary
   CI, including full-native overrides: run them explicitly when changing their
   lifecycle boundary or investigating platform behavior. Computer, platform-specific,
   Desktop, npm, packaging, signing, and release surfaces retain their existing
