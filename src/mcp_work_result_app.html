@@ -233,6 +233,7 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
 .thread-review #workspaceFiles, .thread-review #frozenFiles { min-width: 0; }
 .thread-review .frozen-file { min-width: 0; scroll-margin-top: 64px; }
 .thread-review .diff { max-height: none; overflow-x: auto; }
+.thread-review .diff, .thread-review .file-toggle { font-size: 12px; line-height: 1.6; }
 .thread-review .markdown-preview { max-height: none; overflow: visible; padding: 0 10px; }
 .thread-review .markdown-preview table { display: block; max-width: 100%; overflow-x: auto; }
 .thread-review .file-views { margin: 0; padding: 8px 10px; border-top: 1px solid var(--divider); }
@@ -245,10 +246,16 @@ h2 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .01em; color:
 .thread-review .diff-code { grid-column: 3; grid-row: 1; min-width: 0; }
 .thread-review .no-wrap .diff-line { grid-template-columns: 4ch 4ch max-content; }
 .thread-review .no-wrap .diff-code, .thread-review .full-text.no-wrap { white-space: pre; overflow-wrap: normal; }
-.file-navigator { position: sticky; top: 0; z-index: 2; display: flex; gap: 6px; min-width: 0; padding: 8px 0; background: Canvas; border-bottom: 1px solid var(--divider); }
+.file-navigator { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 8px 0; background: Canvas; border-bottom: 1px solid var(--divider); }
 .file-navigator select { min-width: 0; width: 0; flex: 1; min-height: 36px; padding: 6px 8px; border: 1px solid var(--card-border); border-radius: 9px; color: CanvasText; background: var(--surface); font: inherit; text-overflow: ellipsis; }
-.file-navigator select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.file-navigator select:focus-visible, .file-navigator input:focus-visible, .file-path > summary:focus-visible, .file-path textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .file-navigator .refresh { min-width: 36px; }
+.file-filter { order: -1; display: flex; flex-basis: 100%; min-width: 0; gap: 6px; }
+.file-filter input { width: 0; flex: 1; min-width: 0; min-height: 36px; padding: 6px 8px; border: 1px solid var(--card-border); border-radius: 9px; color: CanvasText; background: var(--surface); font: inherit; }
+.file-filter-status, .file-path { flex-basis: 100%; min-width: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.file-path > summary { width: fit-content; padding: 3px 0; cursor: pointer; }
+.file-path textarea { display: block; width: 100%; min-height: 54px; max-height: 120px; resize: vertical; margin: 6px 0; padding: 6px 8px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--surface); color: CanvasText; font: 12px/1.5 var(--font-mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+@media (max-width: 360px) { .file-navigator select { flex-basis: 100%; width: 100%; } }
 .review-sections { display: flex; flex-wrap: wrap; gap: 6px; }
 .check-summary, .check-summary > div { display: grid; min-width: 0; gap: 7px; }
 .preview-help { flex-basis: 100%; margin: 0; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
@@ -1029,6 +1036,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   }
 
   const fileNavigators = new Map();
+  const fileQuery = final => String(fileNavigators.get(final)?.filter.value || "").trim().toLowerCase();
+  const fileSource = final => final ? snapshot : workspaceSnapshot || workspaceSeed;
   function visibleFileRows(final) {
     return Array.from(el(final ? "frozenFiles" : "workspaceFiles").children).filter(row => !row.hidden);
   }
@@ -1036,7 +1045,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   function renderFileNavigator(final) {
     const nav = el(final ? "frozenNavigator" : "workspaceNavigator");
     const rows = visibleFileRows(final);
-    nav.hidden = threadSession === undefined || rows.length === 0;
+    const source = fileSource(final);
+    nav.hidden = threadSession === undefined || !source?.files.length;
     if (nav.hidden) return;
     let view = fileNavigators.get(final);
     if (!view) {
@@ -1047,12 +1057,45 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         button.type = "button"; button.className = "refresh"; button.textContent = text;
         button.setAttribute("aria-label", label); button.title = label;
       }
-      view = { select, previous, next, paths: "" }; fileNavigators.set(final, view);
+      const filterRow = document.createElement("div"); filterRow.className = "file-filter";
+      const filter = document.createElement("input"); filter.type = "search"; filter.maxLength = 200;
+      filter.placeholder = "Filter loaded paths…";
+      filter.setAttribute("aria-label", final ? "Filter final changed files by path" : "Filter changed files by path");
+      const clear = document.createElement("button"); clear.type = "button"; clear.className = "refresh"; clear.textContent = "Clear";
+      const status = document.createElement("div"); status.className = "file-filter-status"; status.setAttribute("role", "status");
+      const details = document.createElement("details"); details.className = "file-path";
+      const summary = document.createElement("summary"); summary.textContent = "Full path";
+      const path = document.createElement("textarea"); path.readOnly = true; path.rows = 2; path.setAttribute("aria-label", "Full file path");
+      const copy = document.createElement("button"); copy.type = "button"; copy.className = "refresh"; copy.textContent = "Copy path";
+      const copyState = document.createElement("span"); copyState.setAttribute("role", "status");
+      details.append(summary, path, copy, copyState); filterRow.append(filter, clear);
+      view = { select, previous, next, filter, clear, status, details, path, copy, copyState, paths: "" }; fileNavigators.set(final, view);
+      const apply = () => {
+        if (tornDown || !hostInitialized) return;
+        if (final) appendFrozenFiles(visibleCount); else renderWorkspaceRows();
+      };
+      filter.oninput = apply;
+      clear.onclick = () => { filter.value = ""; apply(); filter.focus?.(); };
+      filter.onkeydown = event => { if (event.key === "Escape") { event.preventDefault(); clear.onclick(); } };
+      copy.onclick = async () => {
+        if (tornDown || !hostInitialized || !path.value) return;
+        const value = path.value;
+        try {
+          if (!globalThis.navigator?.clipboard?.writeText) throw new Error("Clipboard unavailable");
+          await globalThis.navigator.clipboard.writeText(value);
+          if (!tornDown && path.value === value) copyState.textContent = " Path copied";
+        } catch (_) {
+          if (tornDown || path.value !== value) return;
+          copyState.textContent = " Select the path and copy it manually."; path.focus?.(); path.select?.();
+        }
+      };
       const navigate = index => {
         const row = visibleFileRows(final)[index];
         if (!row || tornDown || !hostInitialized) return;
         select.value = row.filePath; updateFileNavigator(final);
         row.expand(); row.scrollIntoView?.({ block: "start", behavior: "instant" });
+        const bottom = nav.getBoundingClientRect?.().bottom, top = row.getBoundingClientRect?.().top;
+        if (Number.isFinite(bottom) && Number.isFinite(top) && top < bottom + 8) globalThis.scrollBy?.({ top: top - bottom - 8, behavior: "instant" });
         row.children[0].focus?.({ preventScroll: true });
       };
       select.onchange = () => navigate(visibleFileRows(final).findIndex(row => row.filePath === select.value));
@@ -1061,7 +1104,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       const checks = document.createElement("button"); checks.type = "button"; checks.className = "refresh";
       checks.textContent = "Checks"; checks.setAttribute("aria-label", "Back to checks and review");
       checks.onclick = () => jumpToReviewSection("resultChecks");
-      nav.append(select, previous, next, checks);
+      nav.append(select, previous, next, checks, filterRow, status, details);
     }
     const paths = JSON.stringify(rows.map(row => row.filePath));
     if (view.paths !== paths) {
@@ -1070,9 +1113,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         const option = document.createElement("option"); option.value = row.filePath;
         option.textContent = `${index + 1} / ${rows.length} · ${row.filePath}`; return option;
       }));
-      view.select.value = rows.some(row => row.filePath === selected) ? selected : rows[0].filePath;
+      view.select.value = rows.some(row => row.filePath === selected) ? selected : rows[0]?.filePath || "";
       view.paths = paths;
     }
+    view.select.disabled = rows.length === 0;
+    view.clear.disabled = !view.filter.value;
+    view.status.textContent = `${rows.length} shown · ${source.files.length} loaded · ${source.files_total} total${fileQuery(final) ? " · filtering loaded paths only" : ""}${rows.length ? "" : " · no matching loaded files"}`;
+    if (source.source_truncated || source.truncated) view.status.textContent += " · source list is partial";
     updateFileNavigator(final);
   }
 
@@ -1082,6 +1129,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     if (path !== undefined) view.select.value = path;
     const rows = visibleFileRows(final), index = rows.findIndex(row => row.filePath === view.select.value);
     view.select.title = view.select.value;
+    if (view.path.value !== view.select.value) { view.path.value = view.select.value; view.copyState.textContent = ""; }
+    view.details.hidden = index < 0; view.copy.disabled = index < 0;
     view.previous.disabled = index <= 0; view.next.disabled = index < 0 || index >= rows.length - 1;
   }
 
@@ -1397,16 +1446,16 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   function appendFrozenFiles(limit) {
     if (tornDown || !snapshot) return;
     // Append only: refresh/Show more cannot detach an in-flight diff's nodes.
-    const end = Math.min(limit, snapshot.files.length);
+    const end = Math.min(limit, snapshot.files.length), query = fileQuery(true);
     const root = el("frozenFiles");
-    while (root.children.length < end) root.appendChild(frozenFileNode(snapshot.files[root.children.length]));
+    while (root.children.length < (query ? snapshot.files.length : end)) root.appendChild(frozenFileNode(snapshot.files[root.children.length]));
     visibleCount = end;
-    Array.from(root.children).forEach((row, index) => { row.hidden = index >= end; });
+    Array.from(root.children).forEach((row, index) => { row.hidden = query ? !row.filePath.toLowerCase().includes(query) : index >= end; });
     renderFileNavigator(true);
-    el("frozenMore").hidden = visibleCount >= snapshot.files.length && snapshot.next_offset === null;
+    el("frozenMore").hidden = (query || visibleCount >= snapshot.files.length) && snapshot.next_offset === null;
     el("frozenMore").textContent = "Show more files";
-    el("frozenLess").hidden = visibleCount <= INITIAL_FROZEN_FILES;
-    el("frozenFooter").textContent = `Final result · showing ${visibleCount} of ${snapshot.files_total} files${snapshot.source_truncated ? " · limited by source bounds or path policy" : ""}`;
+    el("frozenLess").hidden = !!query || visibleCount <= INITIAL_FROZEN_FILES;
+    el("frozenFooter").textContent = `Final result · showing ${visibleFileRows(true).length} of ${snapshot.files_total} files${snapshot.source_truncated ? " · limited by source bounds or path policy" : ""}`;
   }
 
   function changeCode(file) {
@@ -1540,8 +1589,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     const source = workspaceSnapshot || workspaceSeed;
     const root = el("workspaceFiles");
     if (!source) return;
-    const end = Math.min(workspaceVisible, source.files.length);
-    const rows = source.files.slice(0, Math.max(end, root.children.length)).map(file => {
+    const end = Math.min(workspaceVisible, source.files.length), query = fileQuery(false);
+    const rows = source.files.slice(0, query ? source.files.length : Math.max(end, root.children.length)).map(file => {
       if (!workspaceNodes.has(file.path)) workspaceNodes.set(file.path, collapsibleFileNode(file, loadWorkspaceDiff));
       return workspaceNodes.get(file.path);
     });
@@ -1549,13 +1598,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     // position belong to this snapshot, including temporarily hidden rows.
     rows.forEach((row, index) => {
       if (root.children[index] !== row) root.insertBefore(row, root.children[index] || null);
-      row.hidden = index >= end;
+      row.hidden = query ? !row.filePath.toLowerCase().includes(query) : index >= end;
     });
     for (const row of Array.from(root.children)) if (!rows.includes(row)) row.remove();
     renderFileNavigator(false);
-    el("workspaceMore").hidden = end >= source.files.length && (workspaceSnapshot ? source.next_offset === null : !source.truncated);
-    el("workspaceLess").hidden = end <= INITIAL_FROZEN_FILES;
-    el("workspaceMeta").textContent = `Showing ${end} of ${source.files_total} files${workspaceSnapshot
+    el("workspaceMore").hidden = (query || end >= source.files.length) && (workspaceSnapshot ? source.next_offset === null : !source.truncated);
+    el("workspaceLess").hidden = !!query || end <= INITIAL_FROZEN_FILES;
+    el("workspaceMeta").textContent = `Showing ${visibleFileRows(false).length} of ${source.files_total} files${workspaceSnapshot
       ? " · pinned net working-tree snapshot; refresh files for newer edits" : ""}${source.source_truncated ? " · limited by source bounds or path policy" : ""}`;
   }
 
@@ -1568,7 +1617,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     try {
       let source = final ? snapshot : await ensureWorkspaceSnapshot();
       if (!source) return;
-      const shown = final ? visibleCount : workspaceVisible;
+      const shown = fileQuery(final) ? source.files.length : final ? visibleCount : workspaceVisible;
       if (shown >= source.files.length && source.next_offset !== null) {
         const page = await readFilesPage(source, final ? source.session_id : null, source.next_offset);
         if (tornDown || (!final && epoch !== workspaceEpoch)) return;

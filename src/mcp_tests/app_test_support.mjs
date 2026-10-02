@@ -5,7 +5,7 @@ import { webcrypto } from "node:crypto";
 export const flush = () => new Promise(resolve => setImmediate(resolve));
 
 // Execute the shipped App script with deterministic Host messages and timers.
-export function app(filename, { deliverToolMeta = true, deliverToolStructuredContent = true, crypto = webcrypto } = {}) {
+export function app(filename, { deliverToolMeta = true, deliverToolStructuredContent = true, crypto = webcrypto, navigator = {} } = {}) {
   const html = readFileSync(new URL(`../${filename}`, import.meta.url), "utf8");
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   const nodes = {};
@@ -65,7 +65,7 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
     return id;
   }
   runInNewContext(script, {
-    document, parent, addEventListener, TextEncoder, crypto, btoa, Date: HostDate,
+    document, parent, addEventListener, TextEncoder, crypto, navigator, btoa, Date: HostDate,
     get scrollY() { return viewport.scrollY; },
     get innerHeight() { return viewport.innerHeight; },
     scrollBy({ top }) { viewport.moves.push(top); viewport.scrollY += top; },

@@ -1788,6 +1788,76 @@ test("thread file navigation is scoped to visible loaded files and preserves mou
   assert.equal(view.calls("read_changed_file_diff").length, 0);
 });
 
+test("path filtering covers loaded metadata without fetching, detaching rows or losing reading state", async () => {
+  const state = structuredClone(frozenWork());
+  state.workspace.files = Array.from({ length: 8 }, (_, i) => ({ path: `docs/文件_[${i}].md`, status: "modified", content: "+saved", content_kind: "diff" }));
+  state.workspace.files_total = 30; state.workspace.truncated = true;
+  const view = await readingView(state), first = readingFile(view);
+  first.button("Wrap lines").onclick();
+  const nav = view.nodes.workspaceNavigator, filter = nav.children[4].children[0];
+  const requests = view.sent.length;
+  filter.value = "[7]"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 1);
+  assert.equal(nav.children[0].value, "docs/文件_[7].md");
+  assert.match(nav.children[5].textContent, /1 shown · 8 loaded · 30 total · filtering loaded paths only/);
+  assert.equal(view.sent.length, requests);
+  assert.equal(view.nodes.workspaceFiles.children[0], first.row);
+  filter.value = "missing"; filter.oninput();
+  assert.equal(nav.hidden, false, "empty results leave the filter usable");
+  assert.equal(nav.children[0].disabled, true);
+  assert.equal(nav.children[1].disabled, true);
+  assert.equal(nav.children[2].disabled, true);
+  assert.match(nav.children[5].textContent, /no matching loaded files/);
+  filter.onkeydown({ key: "Escape", preventDefault() {} });
+  assert.equal(nav.children[0].children.length, 5);
+  assert.equal(first.row.hidden, false);
+  assert.equal(first.pre.className, "diff no-wrap");
+  assert.equal(first.row.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.nodes.frozenNavigator.children[0].children.length, 5, "final filter is independent");
+  await view.teardown(); filter.value = "[7]"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 5);
+});
+
+test("filtered final files page only on explicit request and extend the same literal filter", async () => {
+  const state = structuredClone(frozenWork());
+  state.final_changes.files_total = 8; state.final_changes.files_changed = 8; state.final_changes.files_truncated = true;
+  const view = await readingView(state), nav = view.nodes.frozenNavigator;
+  const filter = nav.children[4].children[0];
+  filter.value = "file_7"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 0);
+  assert.equal(view.nodes.frozenMore.hidden, false);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+  view.nodes.frozenMore.onclick(); await flush();
+  const request = view.calls("get_work_result_state")[0];
+  assert.equal(request.params.arguments.files.offset, 7);
+  await view.reply(request, toolResult({ work_result_files: {
+    project, session_id, snapshot_id, offset: 7, next_offset: null, files_total: 8, source_truncated: false,
+    files: [frozenFile(7)],
+  } }));
+  assert.equal(nav.children[0].children.length, 1);
+  assert.equal(view.nodes.frozenMore.hidden, true);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+});
+
+test("complete file paths copy explicitly with a manual fallback when clipboard access fails", async () => {
+  for (const denied of [false, true]) {
+    const copied = [];
+    const view = app("mcp_work_result_app.html", { navigator: { clipboard: { async writeText(text) { if (denied) throw new Error("denied"); copied.push(text); } } } });
+    const state = structuredClone(baseState);
+    const path = "docs/很长的目录/".repeat(10) + "name with spaces.md";
+    state.workspace.files[0].path = path;
+    view.notification("ui/notifications/tool-result", threadResult(state, session_id)); await view.initialize();
+    const [summary, field, copy, status] = view.nodes.workspaceNavigator.children[6].children;
+    assert.equal(field.value, path); assert.equal(copied.length, 0);
+    let selected = false; field.select = () => { selected = true; };
+    await copy.onclick();
+    assert.equal(selected, denied);
+    assert.equal(denied ? status.textContent.includes("manually") : copied[0] === path, true);
+    await view.teardown(); await copy.onclick();
+    assert.equal(copied.length, denied ? 0 : 1);
+  }
+});
+
 test("thread Diff numbers follow hunk ranges, zero-length sides and literal plus/minus content", async () => {
   const diff = ["diff --git a/demo b/demo", "--- a/demo", "+++ b/demo", "@@ -10,3 +20,4 @@ title", " same", "---literal", "+++literal", " after", "+extra", "\\ No newline at end of file", "@@ -0,0 +1 @@", "+new", "@@ -6 +0,0 @@", "-gone", "@@ malformed", "+unknown"].join("\n");
   const state = structuredClone(baseState);
