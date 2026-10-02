@@ -783,6 +783,13 @@ pub(super) fn attach_app_metadata(value: &mut Value, resource_uri: &str) {
 }
 
 fn attach_openai_thread_entrypoint(value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "title".to_string(),
+        Value::String("WebCodex review".to_string()),
+    );
     let Some(meta) = tool_meta_object(value) else {
         return;
     };
@@ -795,7 +802,6 @@ fn attach_openai_thread_entrypoint(value: &mut Value) {
         }),
     );
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkResultThreadBinding {
     project: String,
