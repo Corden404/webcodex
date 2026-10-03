@@ -2095,68 +2095,126 @@ impl RunnerRegistry {
         terminal_limit: usize,
     ) -> Vec<JobAttentionSnapshot> {
         let inner = self.inner.lock().await;
-        let mut active = Vec::new();
-        let mut terminal = Vec::new();
-        for job in inner
-            .jobs_by_id
-            .values()
-            .filter(|job| job.visibility == ShellJobVisibility::Public)
-            .filter(|job| shell_job_visible_to_auth(auth, &inner, job))
-            .filter(|job| job.project_id.as_deref() == Some(project_id))
-            .filter(|job| job.session_id.as_deref() == Some(session_id))
-        {
-            if job.lifecycle.is_terminal() {
-                terminal.push(job);
-            } else {
-                active.push(job);
-            }
-        }
-        // Passive attention needs both sides of a transition. Reserve a bounded
-        // page for active baselines and a separate bounded page for recent
-        // terminals so a long-running Job cannot disappear at the instant it
-        // completes merely because newer terminal history filled the page.
-        active.sort_by_key(|job| std::cmp::Reverse(job.created_at));
-        terminal.sort_by(|a, b| {
-            let observed = |job: &&ShellJobRecord| {
-                job.observation
-                    .terminal_observed_at
-                    .or(job.ended_at)
-                    .unwrap_or(job.created_at)
-            };
-            observed(b)
-                .cmp(&observed(a))
-                .then_with(|| b.created_at.cmp(&a.created_at))
-        });
-        active
-            .into_iter()
-            .take(active_limit.min(webcodex_core::runner_protocol::JOB_INVENTORY_MAX_ACTIVE_JOBS))
-            .chain(terminal.into_iter().take(terminal_limit.min(32)))
-            .map(|job| {
-                let validation_output = (job.lifecycle.is_terminal()
-                    && (job.validation.is_some()
-                        || job
-                            .structured_execution
-                            .as_ref()
-                            .and_then(|metadata| metadata.validation_identity.as_ref())
-                            .is_some()))
-                .then(|| JobValidationOutput {
-                    stdout: job.stdout.tail.clone(),
-                    stderr: job.stderr.tail.clone(),
-                    truncated: job.stdout.truncated
-                        || job.stderr.truncated
-                        || job.stdout.first_retained_line > 1
-                        || job.stderr.first_retained_line > 1,
-                });
-                JobAttentionSnapshot {
-                    job: job_view(job),
-                    validation_output,
-                    recovery: job.recovery.phase.map(|phase| (phase, job.recovery.reason)),
-                }
-            })
-            .collect()
+        Self::job_attention_snapshot_locked(
+            &inner,
+            auth,
+            project_id,
+            session_id,
+            active_limit,
+            terminal_limit,
+            None,
+        )
+        .expect("unbudgeted snapshot")
     }
 
-    /// Best-effort telemetry must not wait on the registry or refresh lifecycle.
+    /// Optional post-result observation never queues behind the registry. Work
+    /// checks the shared deadline and retains only the two bounded top-K pages.
+    pub fn try_snapshot_jobs_for_auth_filtered(
+        &self,
+        auth: Option<&crate::RunnerAccess>,
+        project_id: &str,
+        session_id: &str,
+        active_limit: usize,
+        terminal_limit: usize,
+        deadline: std::time::Instant,
+    ) -> Option<Vec<JobAttentionSnapshot>> {
+        self.inner
+            .try_read(|inner| {
+                Self::job_attention_snapshot_locked(
+                    inner,
+                    auth,
+                    project_id,
+                    session_id,
+                    active_limit,
+                    terminal_limit,
+                    Some(deadline),
+                )
+            })
+            .flatten()
+    }
+
+    fn job_attention_snapshot_locked(
+        inner: &crate::state::RunnerRegistryInner,
+        auth: Option<&crate::RunnerAccess>,
+        project_id: &str,
+        session_id: &str,
+        active_limit: usize,
+        terminal_limit: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Option<Vec<JobAttentionSnapshot>> {
+        let expired = || deadline.is_some_and(|d| std::time::Instant::now() >= d);
+        if expired() {
+            return None;
+        }
+        let active_limit =
+            active_limit.min(webcodex_core::runner_protocol::JOB_INVENTORY_MAX_ACTIVE_JOBS);
+        let terminal_limit = terminal_limit.min(32);
+        let mut active = std::collections::BTreeMap::new();
+        let mut terminal = std::collections::BTreeMap::new();
+        for (index, job) in inner.jobs_by_id.values().enumerate() {
+            if index % 64 == 0 && expired() {
+                return None;
+            }
+            if job.visibility != ShellJobVisibility::Public
+                || !shell_job_visible_to_auth(auth, inner, job)
+                || job.project_id.as_deref() != Some(project_id)
+                || job.session_id.as_deref() != Some(session_id)
+            {
+                continue;
+            }
+            if job.lifecycle.is_terminal() {
+                let observed = job
+                    .observation
+                    .terminal_observed_at
+                    .or(job.ended_at)
+                    .unwrap_or(job.created_at);
+                terminal.insert((observed, job.created_at, &job.job_id), job);
+                if terminal.len() > terminal_limit {
+                    terminal.pop_first();
+                }
+            } else {
+                active.insert((job.created_at, &job.job_id), job);
+                if active.len() > active_limit {
+                    active.pop_first();
+                }
+            }
+        }
+        let mut snapshots = Vec::with_capacity(active.len() + terminal.len());
+        for job in active
+            .into_values()
+            .rev()
+            .chain(terminal.into_values().rev())
+        {
+            if expired() {
+                return None;
+            }
+            let validation_output = (job.lifecycle.is_terminal()
+                && (job.validation.is_some()
+                    || job
+                        .structured_execution
+                        .as_ref()
+                        .and_then(|metadata| metadata.validation_identity.as_ref())
+                        .is_some()))
+            .then(|| JobValidationOutput {
+                stdout: job.stdout.tail.clone(),
+                stderr: job.stderr.tail.clone(),
+                truncated: job.stdout.truncated
+                    || job.stderr.truncated
+                    || job.stdout.first_retained_line > 1
+                    || job.stderr.first_retained_line > 1,
+            });
+            snapshots.push(JobAttentionSnapshot {
+                job: job_view(job),
+                validation_output,
+                recovery: job.recovery.phase.map(|phase| (phase, job.recovery.reason)),
+            });
+        }
+        if expired() {
+            None
+        } else {
+            Some(snapshots)
+        }
+    }
     /// Exact ids are selected only from successful canonical result projections.
     pub fn try_job_telemetry_snapshots_for_auth(
         &self,
@@ -2189,6 +2247,9 @@ impl RunnerRegistry {
         &self,
         auth: Option<&crate::RunnerAccess>,
     ) -> Vec<ShellJobRecord> {
+        #[cfg(any(test, feature = "root-test-support"))]
+        self.full_job_history_scan_count
+            .fetch_add(1, Ordering::Relaxed);
         let mut inner = self.inner.lock().await;
         let job_ids = inner.jobs_by_id.keys().cloned().collect::<Vec<_>>();
         for job_id in job_ids {
@@ -2205,10 +2266,10 @@ impl RunnerRegistry {
         jobs
     }
 
-    /// Count caller-visible active Jobs for the requested exact Projects in one
-    /// registry snapshot. Refresh lifecycle once, then aggregate once: O(P + J),
-    /// with output bounded by requested Projects, not the complete Job inventory.
-    /// Private, projectless, terminal and unauthorized Jobs never contribute.
+    /// Count caller-visible active Jobs for exact Projects in O(P + A), where A
+    /// is current active Jobs, independent of retained terminal history. Only
+    /// authorized matching candidates are refreshed. Canonical records, not the
+    /// derived active index, decide lifecycle, Project identity and visibility.
     pub async fn count_active_jobs_for_projects(
         &self,
         auth: Option<&crate::RunnerAccess>,
@@ -2224,17 +2285,79 @@ impl RunnerRegistry {
         let mut inner = self.inner.lock().await;
         #[cfg(any(test, feature = "root-test-support"))]
         self.project_job_scan_count.fetch_add(1, Ordering::Relaxed);
-        let job_ids = inner.jobs_by_id.keys().cloned().collect::<Vec<_>>();
+        let job_ids = inner.jobs_by_id.active_ids();
         for job_id in job_ids {
+            let eligible = inner.jobs_by_id.get(&job_id).is_some_and(|job| {
+                job.visibility == ShellJobVisibility::Public
+                    && job
+                        .project_id
+                        .as_ref()
+                        .is_some_and(|id| counts.contains_key(id))
+                    && shell_job_visible_to_auth(auth, &inner, job)
+            });
+            if !eligible {
+                continue;
+            }
+            #[cfg(any(test, feature = "root-test-support"))]
+            self.project_job_candidate_refresh_count
+                .fetch_add(1, Ordering::Relaxed);
             refresh_job_status_locked(&mut inner, &job_id);
+            if let Some(job) = inner
+                .jobs_by_id
+                .get(&job_id)
+                .filter(|job| job.lifecycle.is_active())
+            {
+                if let Some(count) = job.project_id.as_ref().and_then(|id| counts.get_mut(id)) {
+                    *count += 1;
+                }
+            }
         }
-        for job in inner.jobs_by_id.values().filter(|job| {
-            job.visibility == ShellJobVisibility::Public
-                && job.lifecycle.is_active()
-                && shell_job_visible_to_auth(auth, &inner, job)
-        }) {
-            if let Some(count) = job.project_id.as_deref().and_then(|id| counts.get_mut(id)) {
-                *count += 1;
+        counts
+    }
+
+    /// Lightweight operator aggregate. No historical record/stream projection,
+    /// sorting, or lifecycle refresh of terminal Jobs is performed.
+    pub async fn active_job_counts_by_runner_for_auth(
+        &self,
+        auth: Option<&crate::RunnerAccess>,
+    ) -> HashMap<String, usize> {
+        self.active_job_summary_by_runner_for_auth(auth)
+            .await
+            .into_iter()
+            .map(|(id, counts)| (id, counts.active))
+            .collect()
+    }
+
+    pub async fn active_job_summary_by_runner_for_auth(
+        &self,
+        auth: Option<&crate::RunnerAccess>,
+    ) -> HashMap<String, crate::ActiveJobAggregate> {
+        let mut inner = self.inner.lock().await;
+        let ids = inner.jobs_by_id.active_ids();
+        let mut counts: HashMap<String, crate::ActiveJobAggregate> = HashMap::new();
+        for id in ids {
+            if !inner.jobs_by_id.get(&id).is_some_and(|job| {
+                job.visibility == ShellJobVisibility::Public
+                    && shell_job_visible_to_auth(auth, &inner, job)
+            }) {
+                continue;
+            }
+            refresh_job_status_locked(&mut inner, &id);
+            if let Some(job) = inner
+                .jobs_by_id
+                .get(&id)
+                .filter(|job| job.lifecycle.is_active())
+            {
+                let count = counts.entry(job.client_id.clone()).or_default();
+                count.active += 1;
+                count.running += usize::from(matches!(
+                    job.lifecycle,
+                    JobLifecycleState::Running | JobLifecycleState::StartedLegacy
+                ));
+                count.queued += usize::from(matches!(
+                    job.lifecycle,
+                    JobLifecycleState::Queued | JobLifecycleState::RunnerQueued
+                ));
             }
         }
         counts
@@ -2261,17 +2384,24 @@ impl RunnerRegistry {
         runtime_project_id: &str,
     ) -> Result<usize, String> {
         let mut inner = self.inner.lock().await;
-        let job_ids = inner.jobs_by_id.keys().cloned().collect::<Vec<_>>();
+        let job_ids = inner.jobs_by_id.active_ids();
+        let mut active = 0;
         for job_id in job_ids {
+            let eligible = inner.jobs_by_id.get(&job_id).is_some_and(|job| {
+                job.project_id.as_deref() == Some(runtime_project_id)
+                    && shell_job_visible_to_auth(auth, &inner, job)
+            });
+            if !eligible {
+                continue;
+            }
             refresh_job_status_locked(&mut inner, &job_id);
+            active += usize::from(
+                inner
+                    .jobs_by_id
+                    .get(&job_id)
+                    .is_some_and(|job| job.lifecycle.is_active()),
+            );
         }
-        let active = inner
-            .jobs_by_id
-            .values()
-            .filter(|job| shell_job_visible_to_auth(auth, &inner, job))
-            .filter(|job| job.project_id.as_deref() == Some(runtime_project_id))
-            .filter(|job| job.lifecycle.is_active())
-            .count();
         if active == 0 {
             *inner
                 .unregistering_projects

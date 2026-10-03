@@ -23,14 +23,17 @@ use crate::tool_runtime::{ToolCall, ToolRuntime};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use webcodex_core::runner_job_lifecycle::RunnerJobLifecycle;
 
 mod communication;
 mod goals;
 mod job_projection;
+mod overview_primary;
+mod store_read;
 mod trace;
+mod window_inventory;
 mod window_queries;
 use window_queries::*;
 mod window_collaboration;
@@ -239,6 +242,8 @@ struct WorkflowSessionInput {
 struct OverviewInput {
     #[serde(default)]
     include_sessions: Option<bool>,
+    #[serde(default)]
+    include_projects: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,13 +254,31 @@ struct RunnerInput {
     project_limit: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WindowsInput {
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
     project: Option<String>,
+    #[serde(default)]
+    projects: Option<Vec<String>>,
+    #[serde(default)]
+    projection: WindowInventoryProjection,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    client_window_key: Option<String>,
+    #[serde(default)]
+    query: String,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum WindowInventoryProjection {
+    #[default]
+    Inventory,
+    Liveness,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -335,6 +358,8 @@ struct WorkflowSessionReplaceMessageInput {
 #[derive(Debug, Serialize)]
 struct RuntimeConsoleOverview {
     detail_level: &'static str,
+    projects_included: bool,
+    visible_project_families: usize,
     authenticated_user: Option<String>,
     effective_config: Value,
     service: Option<String>,
@@ -372,6 +397,8 @@ pub(crate) struct RuntimeConsoleWindowVisibility {
 
 #[derive(Debug, Serialize)]
 struct RuntimeConsoleWindows {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
     windows: Vec<RuntimeConsoleWindowSummary>,
     returned: usize,
     total: usize,
@@ -1622,9 +1649,7 @@ async fn workflow_session_detail_with_windows(
     let (workspace_activity_available, workspace_last_activity) =
         workspace_activity_for_auth(runtime, auth, &project_row)?;
     let (jobs, jobs_truncated) = session_jobs_for_auth(runtime, auth, project, session_id).await?;
-    let links = db
-        .list_session_linked_windows(session_id, principal_ref, 32)
-        .map_err(|_| RuntimeConsoleError::Internal)?;
+    let links = store_read::linked_windows(db, session_id, principal_ref, 32).await?;
     let mut visibility_cache = HashMap::new();
     let mut linked_windows = Vec::with_capacity(links.len());
     for link in &links {
@@ -1668,19 +1693,14 @@ async fn workflow_session_detail_with_windows(
     let mut gap_activity = Vec::new();
     let mut window_activity_source_truncated = false;
     for link in &links {
-        #[cfg(feature = "experimental-code-mode")]
-        let events = db.list_window_activity_events_with_code_mode_composition(
+        let events = store_read::events(
+            db,
             &link.client_window_key,
             principal_ref,
             MAX_WINDOW_ACTIVITY_LIMIT,
-        );
-        #[cfg(not(feature = "experimental-code-mode"))]
-        let events = db.list_window_activity_events(
-            &link.client_window_key,
-            principal_ref,
-            MAX_WINDOW_ACTIVITY_LIMIT,
-        );
-        let events = events.map_err(|_| RuntimeConsoleError::Internal)?;
+            cfg!(feature = "experimental-code-mode"),
+        )
+        .await?;
         if events.len() == MAX_WINDOW_ACTIVITY_LIMIT {
             // The durable Window event scan is itself bounded. Hitting the cap
             // means older same-Project activity may exist even when the filtered
@@ -1867,6 +1887,8 @@ async fn overview_for_auth_detail(
     let active_windows = active_window_count_for_auth(runtime, auth).await?;
     Ok(RuntimeConsoleOverview {
         detail_level: if include_sessions { "full" } else { "primary" },
+        projects_included: true,
+        visible_project_families: overview_primary::family_count(&home.projects),
         authenticated_user: auth.username.clone(),
         effective_config: runtime.effective_config_status(),
         service: safe_string(status.get("service"), 80),
@@ -2255,7 +2277,15 @@ async fn overview(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         Ok(input) => input,
         Err(_) => return render_error(res, RuntimeConsoleError::Invalid),
     };
-    match overview_for_auth_detail(&runtime, &auth, input.include_sessions.unwrap_or(true)).await {
+    let output = if input.include_projects == Some(false) {
+        if input.include_sessions == Some(true) {
+            return render_error(res, RuntimeConsoleError::Invalid);
+        }
+        overview_primary::primary_for_auth(&runtime, &auth).await
+    } else {
+        overview_for_auth_detail(&runtime, &auth, input.include_sessions.unwrap_or(true)).await
+    };
+    match output {
         Ok(output) => res.render(Json(output)),
         Err(error) => render_error(res, error),
     }
@@ -2287,7 +2317,7 @@ async fn windows(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         Ok(input) => input,
         Err(_) => return render_error(res, RuntimeConsoleError::Invalid),
     };
-    match windows_for_auth(&runtime, &auth, input.limit, input.project.as_deref()).await {
+    match window_inventory::query_for_auth(&runtime, &auth, input).await {
         Ok(output) => res.render(Json(output)),
         Err(error) => render_error(res, error),
     }

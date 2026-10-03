@@ -25,6 +25,8 @@ impl Database {
         let now = chrono::Utc::now().timestamp();
         db.purge_stale_auth_rows(now)?;
         db.prune_job_receipts(now)?;
+        // All schema/backfill/startup writes complete on the sole writer first.
+        db.open_history_reader()?;
         Ok(db)
     }
 
@@ -414,6 +416,7 @@ impl Database {
         // the current columns above; existing databases receive the same shape
         // through this additive, idempotent migration.
         Self::ensure_action_event_window_schema(&mut conn)?;
+        crate::window_inventory::ensure_schema(&mut conn)?;
         Self::ensure_action_event_observability_views(&mut conn)?;
 
         // Durable Agent identity and Conversation state are an independent
@@ -508,6 +511,11 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_action_events_window_meaningful_completed
                 ON action_events(client_window_key, window_ended_at_ms DESC, event_id DESC)
                 WHERE window_meaningful = 1 AND window_started_at_ms IS NOT NULL AND window_ended_at_ms IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS idx_action_events_recent_peer
+                ON action_events(principal_correlation_kind, principal_correlation_id,
+                    project, window_ended_at_ms DESC, client_window_key, client_window_source)
+                WHERE window_meaningful = 1 AND client_window_key IS NOT NULL;
 
             CREATE TABLE IF NOT EXISTS window_operator_messages (
                 message_id TEXT PRIMARY KEY,
