@@ -3136,12 +3136,14 @@ pub(super) async fn handle_call(
         // results retain the compact text fallback.
         attach_app_tool_content_fallback(&mut result);
     }
-    if app_enabled && (params.name == "present_work_result" || work_result_thread_panel) {
+    if (app_enabled && params.name == "present_work_result") || work_result_thread_panel {
         // Initial model-originated presentation keeps normal model content compact.
         // The private MCP App result channel lets the mounted View recover the exact
         // bounded Work Result when a Host omits structuredContent from tool-result.
         attach_work_result_app_private_result(&mut result);
         if let Some(context) = work_result_thread_context {
+            // The admitted native entrypoint can omit discovery's UI capability
+            // on this call. Its exact authorized binding must still reach the View.
             // Only the exact explicit presentation selection becomes refresh
             // context. A Session merely linked to Window activity is not authority.
             result["_meta"][WORK_RESULT_THREAD_CONTEXT_META_KEY] = context;

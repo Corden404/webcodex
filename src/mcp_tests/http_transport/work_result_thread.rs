@@ -23,7 +23,20 @@ async fn call(
     arguments: Value,
     window: &str,
 ) -> (StatusCode, Value) {
+    call_with_ui_capabilities(service, name, arguments, window, true).await
+}
+
+async fn call_with_ui_capabilities(
+    service: &Service,
+    name: &str,
+    arguments: Value,
+    window: &str,
+    ui_capabilities: bool,
+) -> (StatusCode, Value) {
     let mut params = mcp_2026_ui_params(json!({"name": name, "arguments": arguments}));
+    if !ui_capabilities {
+        params["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json!({});
+    }
     params["_meta"]["openai/session"] = json!(window);
     stateless_2026_jsonrpc(
         service,
@@ -71,29 +84,41 @@ async fn exercise() {
         assert_eq!(status, StatusCode::OK, "{presented}");
         assert_eq!(presented["result"]["structuredContent"]["success"], true);
 
-        let (status, opened) = call(&service, "work_result_thread_panel", json!({}), window).await;
-        assert_eq!(status, StatusCode::OK, "{opened}");
-        assert_eq!(opened["result"]["structuredContent"]["success"], true);
-        assert!(
-            !opened["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .trim_start()
-                .starts_with('{'),
-            "Public thread rendering must keep model text compact"
-        );
-        let output = &stateless_tool_output(&opened)["work_result"];
-        assert_eq!(output["project"], project);
-        assert_eq!(output["session_id"].as_str(), session_id);
-        assert_eq!(
-            opened["result"]["_meta"][super::super::super::tools::WORK_RESULT_APP_RESULT_META_KEY],
-            opened["result"]["structuredContent"]
-        );
-        assert_eq!(
-            opened["result"]["_meta"]
-                [super::super::super::tools::WORK_RESULT_THREAD_CONTEXT_META_KEY],
-            json!({"session_id": session_id})
-        );
+        // ChatGPT can omit the capabilities advertised during discovery when
+        // invoking the already admitted native thread entrypoint.
+        for ui_capabilities in [true, false] {
+            let (status, opened) = call_with_ui_capabilities(
+                &service,
+                "work_result_thread_panel",
+                json!({}),
+                window,
+                ui_capabilities,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{opened}");
+            assert_eq!(opened["result"]["structuredContent"]["success"], true);
+            assert!(
+                !opened["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .trim_start()
+                    .starts_with('{'),
+                "Public thread rendering must keep model text compact"
+            );
+            let output = &stateless_tool_output(&opened)["work_result"];
+            assert_eq!(output["project"], project);
+            assert_eq!(output["session_id"].as_str(), session_id);
+            assert_eq!(
+                opened["result"]["_meta"]
+                    [super::super::super::tools::WORK_RESULT_APP_RESULT_META_KEY],
+                opened["result"]["structuredContent"]
+            );
+            assert_eq!(
+                opened["result"]["_meta"]
+                    [super::super::super::tools::WORK_RESULT_THREAD_CONTEXT_META_KEY],
+                json!({"session_id": session_id})
+            );
+        }
     }
 
     let (status, failed) = call(

@@ -118,7 +118,7 @@ test("a mounted thread cannot be retargeted by a later presentation", async () =
   assert.equal(view.nodes.badge.textContent, "Unavailable");
 });
 
-test("thread review prioritizes files and checks while keeping diagnostics folded", async () => {
+test("thread review puts checks before long file lists while keeping diagnostics folded", async () => {
   const view = app("mcp_work_result_app.html");
   view.notification("ui/notifications/tool-result", threadResult(baseState, session_id));
   await view.initialize();
@@ -127,7 +127,8 @@ test("thread review prioritizes files and checks while keeping diagnostics folde
   assert.equal(view.nodes.tabResults.textContent, "Review");
   assert.equal(view.nodes.workspaceHeading.textContent, "Changed files");
   assert.deepEqual(view.nodes.viewTabs.children, [view.nodes.tabResults, view.nodes.tabActivity, view.nodes.tabCollaboration]);
-  assert.deepEqual(view.nodes.panelResults.children.slice(0, 3), [view.nodes.workspaceChangesSection, view.nodes.resultChecks, view.nodes.finalChanges]);
+  assert.deepEqual(view.nodes.panelResults.children.slice(0, 4), [view.nodes.resultChecks, view.nodes.quotePanel, view.nodes.workspaceChangesSection, view.nodes.finalChanges]);
+  assert.equal(view.nodes.quotePanel.hidden, true);
   assert.equal(view.nodes.diagnostics.open, false);
   assert.deepEqual(view.nodes.diagnosticContent.children, [view.nodes.taskContext]);
   view.nodes.tabResults.onkeydown({ key: "ArrowRight", preventDefault() {} });
@@ -983,7 +984,8 @@ test("live rows share one snapshot acquisition, load one diff, and keep collapse
   view.nodes.workspaceMore.onclick(); await flush();
   assert.equal(view.nodes.workspaceFiles.children.length, 10);
   view.nodes.workspaceLess.onclick();
-  assert.equal(view.nodes.workspaceFiles.children.length, 5);
+  assert.equal(view.nodes.workspaceFiles.children.filter(row => !row.hidden).length, 5);
+  assert.equal(view.nodes.workspaceFiles.children.length, 10, "hidden rows retain their reading state");
   assert.equal(view.nodes.workspaceFiles.children[0], first);
   view.nodes.workspaceCollapse.onclick();
   assert.equal(first.children[1].hidden, true);
@@ -1671,7 +1673,8 @@ function filePreview(view, final = false, index = 0) {
   const row = view.nodes[final ? "frozenFiles" : "workspaceFiles"].children[index];
   row.children[0].onclick();
   const wrap = row.children[1], controls = wrap.children[2], preview = wrap.children[3];
-  return { row, wrap, controls, state: preview.children[0], text: preview.children[1], markdown: preview.children[2] };
+  return { row, wrap, controls, state: preview.children[0], text: preview.children[1], markdown: preview.children[2],
+    retry: controls.children.find(node => node.textContent === "Retry preview"), hint: controls.children.at(-1) };
 }
 function previewReply(request, text, extra = {}) {
   const args = request.params.arguments;
@@ -1684,6 +1687,466 @@ function previewReply(request, text, extra = {}) {
   } });
 }
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
+
+async function readingView(state = baseState) {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({});
+  view.notification("ui/notifications/tool-result", threadResult(state, session_id));
+  await view.initialize();
+  return view;
+}
+
+function readingFile(view, final = false, index = 0) {
+  const row = view.nodes[final ? "frozenFiles" : "workspaceFiles"].children[index];
+  row.expand();
+  const controls = row.children[1].children[0], pre = row.children[1].children[2], preview = row.children[1].children[3];
+  return { row, controls, pre, text: preview.children[1], markdown: preview.children[2], button: label => controls.children.find(node => node.textContent === label) };
+}
+
+test("thread section navigation moves focus without reading files or resetting an expanded row", async () => {
+  const view = await readingView(frozenWork());
+  assert.equal(view.nodes.reviewSections.hidden, false);
+  assert.equal(view.nodes.jumpWorkspace.hidden, false);
+  assert.equal(view.nodes.jumpFinal.hidden, false);
+  assert.equal(view.nodes.jumpOutputs.hidden, true);
+  const moves = [];
+  for (const id of ["workspaceChangesSection", "finalChanges", "resultChecks"]) {
+    view.nodes[id].scrollIntoView = () => moves.push(id);
+    view.nodes[id].focus = options => assert.equal(options.preventScroll, true);
+  }
+  view.nodes.jumpWorkspace.onclick();
+  view.nodes.jumpFinal.onclick();
+  view.nodes.workspaceNavigator.children[3].onclick();
+  view.nodes.frozenNavigator.children[3].onclick();
+  assert.deepEqual(moves, ["workspaceChangesSection", "finalChanges", "resultChecks", "resultChecks"]);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+  const file = readingFile(view, true);
+  const requests = view.sent.length;
+  view.nodes.frozenNavigator.children[3].onclick();
+  assert.equal(file.row.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.sent.length, requests);
+  await view.teardown();
+  const before = moves.length;
+  view.nodes.jumpWorkspace.onclick();
+  assert.equal(moves.length, before, "teardown stops section actions");
+});
+
+test("thread overview preserves failed, stale, missing and unrun evidence", async () => {
+  for (const [status, label] of [["passed", "Checks passed"], ["failed", "Checks need attention"],
+    ["stale", "Checks are out of date"], ["not_run", "Checks not run"], ["inconclusive", "Checks inconclusive"]]) {
+    const state = structuredClone(baseState);
+    state.validation.current_status = status;
+    state.workspace = structuredClone(nextState.workspace);
+    const view = await readingView(state);
+    assert.equal(view.nodes.validationStatus.textContent, label);
+    assert.equal(view.nodes.resultChecks.hidden, false);
+    assert.equal(view.nodes.jumpFinal.hidden, true);
+  }
+  const state = structuredClone(baseState);
+  for (const key of ["session_id", "session", "validation", "review"]) delete state[key];
+  const view = app("mcp_work_result_app.html");
+  view.notification("ui/notifications/tool-result", threadResult(state, null));
+  await view.initialize();
+  assert.equal(view.nodes.resultChecks.hidden, false);
+  assert.equal(view.nodes.validationStatus.textContent, "Check status unavailable");
+  assert.equal(view.nodes.reviewStatus.textContent, "Review status unavailable");
+  assert.match(view.nodes.checksScope.textContent, /No Session is linked/);
+  view.toolInput({ project: "other-project" });
+  assert.equal(view.nodes.resultChecks.hidden, true, "invalid binding clears the overview");
+});
+
+test("thread file navigation is scoped to visible loaded files and preserves mounted rows", async () => {
+  const state = structuredClone(frozenWork());
+  state.workspace.files = Array.from({ length: 8 }, (_, i) => ({ path: `src/file_${i}.rs`, status: "modified" }));
+  state.workspace.files_total = 30; state.workspace.truncated = true;
+  const view = await readingView(state);
+  const [select, previous, next] = view.nodes.workspaceNavigator.children;
+  assert.equal(select.children.length, 5);
+  assert.equal(previous.disabled, true); assert.equal(next.disabled, false);
+  assert.equal(view.calls("get_work_result_state").length, 0, "navigation does not eagerly read files");
+  const first = view.nodes.workspaceFiles.children[0];
+  let navigation = 0;
+  view.nodes.workspaceFiles.children[1].scrollIntoView = () => navigation++;
+  next.onclick(); await flush();
+  assert.equal(select.value, "src/file_1.rs"); assert.equal(navigation, 1);
+  const read = view.calls("get_work_result_state")[0];
+  await view.reply(read, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: 24, files_total: 30, source_truncated: false,
+    files: Array.from({ length: 24 }, (_, i) => frozenFile(i)),
+  } }));
+  const second = view.nodes.workspaceFiles.children[1];
+  first.remove = second.remove = () => { throw new Error("Reading row detached during paging"); };
+  view.nodes.workspaceMore.onclick(); await flush();
+  assert.equal(select.children.length, 10);
+  assert.equal(select.value, "src/file_1.rs");
+  view.nodes.workspaceLess.onclick();
+  assert.equal(select.children.length, 5);
+  assert.equal(second.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.nodes.frozenNavigator.children[0].value, finalChanges.files[0].path, "final navigation is independent");
+  view.nodes.frozenMore.onclick(); await flush();
+  assert.equal(view.nodes.frozenNavigator.children[0].children.length, 7);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+});
+
+test("path filtering covers loaded metadata without fetching, detaching rows or losing reading state", async () => {
+  const state = structuredClone(frozenWork());
+  state.workspace.files = Array.from({ length: 8 }, (_, i) => ({ path: `docs/文件_[${i}].md`, status: "modified", content: "+saved", content_kind: "diff" }));
+  state.workspace.files_total = 30; state.workspace.truncated = true;
+  const view = await readingView(state), first = readingFile(view);
+  first.button("Wrap lines").onclick();
+  const nav = view.nodes.workspaceNavigator, filter = nav.children[4].children[0];
+  const requests = view.sent.length;
+  filter.value = "[7]"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 1);
+  assert.equal(nav.children[0].value, "docs/文件_[7].md");
+  assert.match(nav.children[5].textContent, /1 shown · 8 loaded · 30 total · filtering loaded paths only/);
+  assert.equal(view.sent.length, requests);
+  assert.equal(view.nodes.workspaceFiles.children[0], first.row);
+  filter.value = "missing"; filter.oninput();
+  assert.equal(nav.hidden, false, "empty results leave the filter usable");
+  assert.equal(nav.children[0].disabled, true);
+  assert.equal(nav.children[1].disabled, true);
+  assert.equal(nav.children[2].disabled, true);
+  assert.match(nav.children[5].textContent, /no matching loaded files/);
+  filter.onkeydown({ key: "Escape", preventDefault() {} });
+  assert.equal(nav.children[0].children.length, 5);
+  assert.equal(first.row.hidden, false);
+  assert.equal(first.pre.className, "diff no-wrap");
+  assert.equal(first.row.children[0].getAttribute("aria-expanded"), "true");
+  assert.equal(view.nodes.frozenNavigator.children[0].children.length, 5, "final filter is independent");
+  await view.teardown(); filter.value = "[7]"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 5);
+});
+
+test("filtered final files page only on explicit request and extend the same literal filter", async () => {
+  const state = structuredClone(frozenWork());
+  state.final_changes.files_total = 8; state.final_changes.files_changed = 8; state.final_changes.files_truncated = true;
+  const view = await readingView(state), nav = view.nodes.frozenNavigator;
+  const filter = nav.children[4].children[0];
+  filter.value = "file_7"; filter.oninput();
+  assert.equal(nav.children[0].children.length, 0);
+  assert.equal(view.nodes.frozenMore.hidden, false);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+  view.nodes.frozenMore.onclick(); await flush();
+  const request = view.calls("get_work_result_state")[0];
+  assert.equal(request.params.arguments.files.offset, 7);
+  await view.reply(request, toolResult({ work_result_files: {
+    project, session_id, snapshot_id, offset: 7, next_offset: null, files_total: 8, source_truncated: false,
+    files: [frozenFile(7)],
+  } }));
+  assert.equal(nav.children[0].children.length, 1);
+  assert.equal(view.nodes.frozenMore.hidden, true);
+  assert.equal(view.calls("read_changed_file_diff").length, 0);
+});
+
+test("complete file paths copy explicitly with a manual fallback when clipboard access fails", async () => {
+  for (const denied of [false, true]) {
+    const copied = [];
+    const view = app("mcp_work_result_app.html", { navigator: { clipboard: { async writeText(text) { if (denied) throw new Error("denied"); copied.push(text); } } } });
+    const state = structuredClone(baseState);
+    const path = "docs/很长的目录/".repeat(10) + "name with spaces.md";
+    state.workspace.files[0].path = path;
+    view.notification("ui/notifications/tool-result", threadResult(state, session_id)); await view.initialize();
+    const [summary, field, copy, status] = view.nodes.workspaceNavigator.children[6].children;
+    assert.equal(field.value, path); assert.equal(copied.length, 0);
+    let selected = false; field.select = () => { selected = true; };
+    await copy.onclick();
+    assert.equal(selected, denied);
+    assert.equal(denied ? status.textContent.includes("manually") : copied[0] === path, true);
+    await view.teardown(); await copy.onclick();
+    assert.equal(copied.length, denied ? 0 : 1);
+  }
+});
+
+async function quoteView({ capabilities = { updateModelContext: { text: {} } }, hostContext, navigator, state = baseState } = {}) {
+  const copy = structuredClone(state);
+  Object.assign(copy.workspace.files[0], { content: "@@ -1 +1 @@\n-before\n+after", content_kind: "diff" });
+  const view = app("mcp_work_result_app.html", { navigator });
+  view.notification("ui/notifications/tool-result", threadResult(copy, session_id));
+  await view.reply(view.sent[0], { protocolVersion: "2026-01-26", hostCapabilities: capabilities, hostContext });
+  return view;
+}
+function selectExcerpt(view, file, text = "+after", node = file.pre.children.at(-1)) {
+  view.selection.value = { rangeCount: 1, isCollapsed: false, toString: () => text,
+    getRangeAt: () => ({ startContainer: node, endContainer: node, toString: () => text.replaceAll("\n", "") }) };
+  file.button("Quote selection").onclick();
+}
+const contextUpdates = view => view.sent.filter(request => request.method === "ui/update-model-context");
+
+test("quoting previews exact text and provenance without reads or sending, then adds only on confirmation", async () => {
+  const view = await quoteView(), file = readingFile(view), before = view.sent.length;
+  selectExcerpt(view, file, "-before\n+after <script>literal</script> 😀");
+  assert.equal(view.sent.length, before);
+  assert.equal(view.nodes.quotePanel.hidden, false);
+  assert.equal(view.nodes.quoteText.textContent, "-before\n+after <script>literal</script> 😀", "rendered line breaks are preserved");
+  assert.equal(view.nodes.quoteText.children.length, 0);
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Observation: ${baseState.state_version}`));
+  assert.match(view.nodes.quoteCopy.value, /not a pinned file snapshot/);
+  const adding = view.nodes.quoteAdd.onclick();
+  view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view).length, 1);
+  const request = contextUpdates(view)[0];
+  assert.equal(request.params.content.length, 1);
+  assert.equal(request.params.content[0].text, view.nodes.quoteCopy.value);
+  assert.match(request.params.content[0].text, /File: "src\/a.rs"/);
+  await view.reply(request, {}); await adding;
+  assert.equal(view.nodes.quoteDraft.hidden, true);
+  assert.equal(view.nodes.quoteReferences.children.length, 1);
+  assert.match(view.nodes.quoteReferences.children[0].children[0].textContent, /-before\n\+after/);
+  selectExcerpt(view, file, "-before\n+after <script>literal</script> 😀");
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view).length, 1, "duplicate quote does not replace context again");
+  assert.equal(view.sent.filter(request => request.method === "ui/message").length, 0);
+  assert.equal(view.calls("send_work_result_message").length, 0);
+});
+
+test("quotes reject cross-file and oversized selections, cancel locally and discard stale draft sources", async () => {
+  const view = await quoteView(), file = readingFile(view);
+  selectExcerpt(view, file, "outside", view.nodes.resultChecks);
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  selectExcerpt(view, file, "😀".repeat(4001));
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  view.selection.value = { rangeCount: 0, isCollapsed: true };
+  file.button("Quote selection").onclick();
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  selectExcerpt(view, file, "😀".repeat(4000));
+  assert.equal(Array.from(view.nodes.quoteText.textContent).length, 4000);
+  view.nodes.quoteCancel.onclick();
+  assert.equal(view.nodes.quotePanel.hidden, true);
+  view.viewport.scrollY = 300;
+  let returned = false; file.button("Quote selection").focus = () => { returned = true; };
+  selectExcerpt(view, file); view.viewport.scrollY = 0;
+  view.nodes.quoteCancel.onclick();
+  assert.equal(view.viewport.scrollY, 300);
+  assert.equal(returned, true);
+  selectExcerpt(view, file);
+  view.nodes.workspaceReload.onclick();
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(view.nodes.quoteDraft.hidden, true);
+  assert.match(view.nodes.quoteStatus.textContent, /file view changed/);
+  assert.equal(contextUpdates(view).length, 0);
+});
+
+test("full text and Markdown quotes retain the exact working-tree snapshot without promoting Session scope", async () => {
+  const state = structuredClone(baseState); state.workspace.files[0].path = "README.md";
+  const view = await quoteView({ state }), file = readingFile(view);
+  file.button("Full text").onclick(); await flush();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [frozenFile(0, { path: "README.md" })],
+  } }));
+  const read = view.calls("get_work_result_state")[1];
+  await view.reply(read, previewReply(read, "# Snapshot text\n\nQuoted paragraph."));
+  const requests = view.sent.length;
+  selectExcerpt(view, file, "Quoted paragraph.", file.text);
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Snapshot: ${snapshot_id}`));
+  assert.doesNotMatch(view.nodes.quoteCopy.value, /Session:/);
+  assert.match(view.nodes.quoteCopy.value, /View: Full text/);
+  view.nodes.quoteCancel.onclick();
+  file.button("Markdown").onclick();
+  selectExcerpt(view, file, "Snapshot text", file.markdown.children[0]);
+  assert.match(view.nodes.quoteCopy.value, /View: Markdown/);
+  assert.equal(view.sent.length, requests);
+});
+
+test("final Diff quotes carry the frozen snapshot and explicit Session", async () => {
+  const view = await quoteView({ state: frozenWork() }), file = readingFile(view, true);
+  await view.reply(view.calls("read_changed_file_diff")[0], frozenDiff());
+  selectExcerpt(view, file, "+new");
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Snapshot: ${snapshot_id}`));
+  assert.match(view.nodes.quoteCopy.value, new RegExp(`Session: ${session_id}`));
+  assert.match(view.nodes.quoteCopy.value, /Source: Final changes/);
+});
+
+test("Hosts without text context get a copyable quote and never receive a fabricated resource or message", async () => {
+  for (const capabilities of [{}, { updateModelContext: { resource: {}, resourceLink: {} } }]) {
+    const view = await quoteView({ capabilities }), file = readingFile(view);
+    selectExcerpt(view, file);
+    assert.equal(view.nodes.quoteAdd.textContent, "Copy quote");
+    assert.equal(view.nodes.quoteCopy.hidden, false);
+    let selected = false; view.nodes.quoteCopy.select = () => { selected = true; };
+    await view.nodes.quoteAdd.onclick();
+    assert.equal(selected, true);
+    assert.equal(contextUpdates(view).length, 0);
+    assert.equal(view.sent.filter(request => request.method === "ui/message").length, 0);
+  }
+  const copied = [], view = await quoteView({ capabilities: {}, navigator: { clipboard: { async writeText(text) { copied.push(text); } } } });
+  selectExcerpt(view, readingFile(view));
+  assert.equal(copied.length, 0);
+  await view.nodes.quoteAdd.onclick();
+  assert.equal(copied[0], view.nodes.quoteCopy.value);
+});
+
+test("context update uncertainty retries only the exact set and teardown stops all quote actions", async () => {
+  const view = await quoteView(), file = readingFile(view);
+  selectExcerpt(view, file);
+  const first = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  await view.reject(request); await first;
+  assert.equal(view.nodes.quoteRetry.hidden, false);
+  assert.equal(view.nodes.quoteAdd.disabled, true);
+  selectExcerpt(view, file, "different");
+  assert.equal(view.nodes.quoteText.textContent, "+after");
+  view.nodes.quoteRetry.onclick();
+  assert.deepEqual(contextUpdates(view)[1].params, request.params);
+  await view.reply(contextUpdates(view)[1], {});
+  assert.equal(view.nodes.quoteReferences.children.length, 1);
+  await view.teardown();
+  const requests = view.sent.length;
+  file.button("Quote selection").onclick();
+  await view.nodes.quoteAdd.onclick(); view.nodes.quoteRetry.onclick();
+  assert.equal(view.sent.length, requests);
+  assert.equal(view.nodes.quoteText.textContent, "");
+});
+
+test("advertised Host context restores other references and canonical removal wins over a delayed acknowledgment", async () => {
+  const original = { type: "resource_link", uri: "webcodex-resource://file/example", name: "Existing file" };
+  const capabilities = { updateModelContext: { text: {} }, experimental: { "openai/modelContext": {} } };
+  const view = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "initial", content: [original] } } });
+  const file = readingFile(view); selectExcerpt(view, file);
+  const adding = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  assert.deepEqual(JSON.parse(JSON.stringify(request.params.content[0])), original);
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": null });
+  await view.reply(request, { _meta: { "openai/modelContext": { updateId: "late" } } }); await adding;
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  assert.match(view.nodes.quoteStatus.textContent, /cleared in the chat/);
+  const second = view.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(view)[1].params.content.length, 1, "cleared resource is not resurrected");
+  await view.reply(contextUpdates(view)[1], { _meta: { "openai/modelContext": { updateId: "accepted" } } });
+  await second;
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "accepted" } });
+  assert.equal(view.nodes.quoteReferences.children.length, 1, "matching acknowledgment does not clear content");
+  const reference = view.nodes.quoteReferences.children[0];
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "same-content", content: JSON.parse(JSON.stringify(contextUpdates(view)[1].params.content)) } });
+  assert.equal(view.nodes.quoteReferences.children[0], reference, "unchanged context preserves keyboard focus");
+  view.nodes.quoteReferences.children[0].children[1].onclick();
+  assert.equal(contextUpdates(view)[2].params.content.length, 0);
+  await view.reply(contextUpdates(view)[2], {});
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+});
+
+test("unadvertised synchronization and oversized Host context cannot overwrite references", async () => {
+  const view = await quoteView();
+  view.notification("ui/notifications/host-context-changed", { "openai/modelContext": { updateId: "ignored", content: [{ type: "text", text: "ignored" }] } });
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  const capabilities = { updateModelContext: { text: {} }, experimental: { "openai/modelContext": {} } };
+  for (const content of [Array.from({ length: 13 }, () => ({ type: "text", text: "old" })), [{ type: "text", text: "x".repeat(65536) }]]) {
+    const blocked = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "large", content } } });
+    selectExcerpt(blocked, readingFile(blocked));
+    await blocked.nodes.quoteAdd.onclick();
+    assert.equal(blocked.nodes.quoteAdd.disabled, true);
+    assert.equal(contextUpdates(blocked).length, 0);
+  }
+  const full = await quoteView({ capabilities, hostContext: { "openai/modelContext": { updateId: "full", content: Array.from({ length: 12 }, () => ({ type: "text", text: "old" })) } } });
+  selectExcerpt(full, readingFile(full)); await full.nodes.quoteAdd.onclick();
+  assert.equal(contextUpdates(full).length, 0);
+  assert.match(full.nodes.quoteStatus.textContent, /Context is full/);
+});
+
+test("a late context acknowledgment cannot restore a torn-down quote", async () => {
+  const view = await quoteView(); selectExcerpt(view, readingFile(view));
+  const adding = view.nodes.quoteAdd.onclick(), request = contextUpdates(view)[0];
+  await view.teardown(); await adding;
+  await view.reply(request, {});
+  assert.equal(view.nodes.quoteText.textContent, "");
+  assert.equal(view.nodes.quoteReferences.children.length, 0);
+  assert.equal(view.nodes.quoteAdd.disabled, true);
+  assert.equal(contextUpdates(view).length, 1);
+});
+
+test("context acknowledgment restores disabled-button focus without stealing it after the user moves away", async () => {
+  for (const movedAway of [false, true]) {
+    const view = await quoteView(), file = readingFile(view);
+    view.nodes.quotePanel.append(view.nodes.quoteAdd);
+    selectExcerpt(view, file); view.nodes.quoteAdd.focus();
+    const adding = view.nodes.quoteAdd.onclick();
+    // Browsers blur a focused button as soon as the pending action disables it.
+    view.document.activeElement = view.document.body;
+    if (movedAway) file.button("Quote selection").focus();
+    await view.reply(contextUpdates(view)[0], {}); await adding;
+    assert.equal(view.document.activeElement, movedAway ? file.button("Quote selection") : view.nodes.quotePanel);
+  }
+});
+
+test("thread Diff numbers follow hunk ranges, zero-length sides and literal plus/minus content", async () => {
+  const diff = ["diff --git a/demo b/demo", "--- a/demo", "+++ b/demo", "@@ -10,3 +20,4 @@ title", " same", "---literal", "+++literal", " after", "+extra", "\\ No newline at end of file", "@@ -0,0 +1 @@", "+new", "@@ -6 +0,0 @@", "-gone", "@@ malformed", "+unknown"].join("\n");
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { content: diff, content_kind: "diff" });
+  const view = await readingView(state), { pre, button } = readingFile(view);
+  const rows = pre.children.map(line => [line.getAttribute("data-old-line"), line.getAttribute("data-new-line"), line.children[0].textContent]);
+  assert.deepEqual(rows.slice(4, 9), [["10", "20", " same"], ["11", "", "---literal"], ["", "21", "+++literal"], ["12", "22", " after"], ["", "23", "+extra"]]);
+  assert.deepEqual(rows[11], ["", "1", "+new"]);
+  assert.deepEqual(rows[13], ["6", "", "-gone"]);
+  assert.deepEqual(rows[15], ["", "", "+unknown"]);
+  assert.equal(pre.children[5].className, "diff-line deleted");
+  assert.equal(pre.children[6].className, "diff-line added");
+  button("Wrap lines").onclick();
+  assert.equal(pre.className, "diff no-wrap");
+  assert.equal(button("Wrap lines").getAttribute("aria-pressed"), "false");
+  assert.equal(view.calls("get_work_result_state").length, 0);
+});
+
+test("thread keeps Diff DOM and wrap state through refresh and collapse", async () => {
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { content: "@@ -1 +1 @@\n-old\n+new", content_kind: "diff" });
+  const view = await readingView(state), file = readingFile(view);
+  const firstLine = file.pre.children[0];
+  file.button("Wrap lines").onclick();
+  file.row.collapse(); file.row.expand();
+  assert.equal(file.pre.children[0], firstLine);
+  assert.equal(file.pre.className, "diff no-wrap");
+  view.nodes.refresh.onclick();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result: { ...state, state_version: nextState.state_version } }));
+  assert.equal(view.nodes.workspaceFiles.children[0], file.row);
+  assert.equal(file.pre.children[0], firstLine);
+  assert.equal(file.row.children[0].getAttribute("aria-expanded"), "true");
+});
+
+test("thread restores each reading mode and fences asynchronous previews after snapshot reset", async () => {
+  const state = structuredClone(baseState);
+  Object.assign(state.workspace.files[0], { path: "README.md", content: "@@ -1 +1 @@\n-old\n+new", content_kind: "diff" });
+  const view = await readingView(state), file = readingFile(view);
+  const bounds = () => ({ top: 100 - view.viewport.scrollY, bottom: 1100 - view.viewport.scrollY, height: 1000 });
+  file.pre.getBoundingClientRect = file.text.getBoundingClientRect = bounds;
+  view.viewport.scrollY = 300;
+  file.button("Full text").onclick(); await flush();
+  await view.reply(view.calls("get_work_result_state")[0], toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "README.md", kind: "modified", additions: 4, deletions: 1 }],
+  } }));
+  const read = view.calls("get_work_result_state")[1];
+  await view.reply(read, previewReply(read, "# Safe preview\n"));
+  view.viewport.scrollY = 450;
+  file.button("Changes").onclick();
+  assert.equal(view.viewport.scrollY, 300, "Diff restores its own offset");
+  file.button("Full text").onclick();
+  assert.equal(view.viewport.scrollY, 450, "Full text restores its separate offset");
+  assert.equal(view.calls("get_work_result_state").length, 2, "cached modes do not refetch");
+  view.nodes.workspaceReload.onclick();
+  assert.equal(view.nodes.workspaceNavigator.children[0].value, "README.md", "a new snapshot starts with a valid file selection");
+  const replacement = readingFile(view);
+  assert.notEqual(replacement.row, file.row);
+  assert.equal(replacement.pre.className, "diff");
+  replacement.button("Full text").onclick(); await flush();
+  const pending = view.calls("get_work_result_state").at(-1);
+  view.nodes.workspaceReload.onclick();
+  const currentRow = view.nodes.workspaceFiles.children[0];
+  await view.reply(pending, toolResult({ work_result_files: {
+    project, session_id: null, snapshot_id, offset: 0, next_offset: null, files_total: 1, source_truncated: false,
+    files: [{ path: "README.md", kind: "modified", additions: 4, deletions: 1 }],
+  } }));
+  assert.equal(view.nodes.workspaceFiles.children[0], currentRow);
+  assert.equal(currentRow.children[0].getAttribute("aria-expanded"), "false");
+  assert.equal(view.calls("get_work_result_state").at(-1), pending, "late snapshot cannot start another content read");
+});
+
+test("thread failure removes navigation together with file content", async () => {
+  const view = await readingView(frozenWork());
+  view.toolInput({ project: "other-project" });
+  assert.equal(view.nodes.badge.textContent, "Unavailable");
+  assert.equal(view.nodes.workspaceNavigator.hidden, true);
+  assert.equal(view.nodes.frozenNavigator.hidden, true);
+});
 
 async function workspacePreview() {
   const view = app("mcp_work_result_app.html");
@@ -1707,12 +2170,15 @@ test("workspace full text uses exact pinned snapshot, explicit pages and complet
   assert.deepEqual(JSON.parse(JSON.stringify(request.params.arguments)), { project,
     files: { snapshot_id, path: "README.md", view: "content", byte_offset: 0 } });
   assert.equal(nodes.controls.children[2].disabled, true);
+  assert.equal(nodes.controls.children[2].getAttribute("aria-describedby"), nodes.hint.id);
+  assert.equal(nodes.hint.hidden, false);
   const first = "# title\n\n" + "a".repeat(32 * 1024 - 10);
   const tail = '\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n~~gone~~ **bold**\n\n<script>alert(1)</script>\n\n![alt](https://example.com/track.png)\n\n[link](https://example.com/) [bad](javascript:alert(1))\n\n```js\n<script>literal</script>\n```';
   const total = new TextEncoder().encode(first + tail).length;
   const bytes = new TextEncoder().encode(first).length;
   await view.reply(request, previewReply(request, first, { bytes_total: total, complete: false, next_byte_offset: bytes }));
   assert.match(nodes.state.textContent, /Partial content/);
+  assert.match(nodes.hint.textContent, /remaining file content/);
   assert.equal(nodes.controls.children[2].disabled, true);
   assert.equal(view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content").length, 1, "no automatic page loop");
   nodes.controls.children[3].onclick(); await flush();
@@ -1721,6 +2187,7 @@ test("workspace full text uses exact pinned snapshot, explicit pages and complet
   await view.reply(next, previewReply(next, tail));
   assert.equal(nodes.text.textContent, first + tail);
   assert.match(nodes.state.textContent, /Complete file/);
+  assert.equal(nodes.hint.hidden, true);
   assert.equal(nodes.controls.children[2].disabled, false);
   nodes.controls.children[2].onclick();
   const dom = descendants(nodes.markdown);
@@ -1762,6 +2229,8 @@ test("preview marks the byte cap and unsupported encoding without enabling Markd
     await view.reply(request, previewReply(request, "", { unavailable_reason: reason }));
     assert.match(nodes.state.textContent, /preview unavailable/);
     assert.equal(nodes.controls.children[2].disabled, true);
+    assert.match(nodes.hint.textContent, /preview unavailable/);
+    assert.equal(nodes.retry.hidden, true, "an unsupported file is not a transient read failure");
   }
   const { view, nodes, request } = await workspacePreview();
   const chunk = "x".repeat(32 * 1024);
@@ -1775,6 +2244,44 @@ test("preview marks the byte cap and unsupported encoding without enabling Markd
   assert.equal(nodes.text.textContent.length, 256 * 1024);
   assert.equal(nodes.controls.children[3].hidden, true);
   assert.equal(nodes.controls.children[2].disabled, true);
+  assert.match(nodes.hint.textContent, /exceeds the 256 KiB preview limit/);
+});
+
+test("preview retry retains content and retries only the failed page of the same snapshot", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  await view.reply(request, previewReply(request, "first", { bytes_total: 9, complete: false, next_byte_offset: 5 }));
+  nodes.controls.children[3].onclick(); await flush();
+  const failed = view.calls("get_work_result_state").at(-1);
+  await view.reject(failed);
+  assert.equal(nodes.text.textContent, "first");
+  assert.match(nodes.state.textContent, /5 bytes retained/);
+  assert.equal(nodes.retry.hidden, false);
+  assert.equal(nodes.retry.disabled, false);
+  assert.equal(nodes.controls.children[2].disabled, true);
+  assert.match(nodes.hint.textContent, /Retry preview/);
+  nodes.retry.onclick(); nodes.retry.onclick(); await flush();
+  const retries = view.calls("get_work_result_state").filter(call => call.params.arguments.files?.view === "content");
+  assert.equal(retries.length, 3, "rapid retries share one owning request");
+  assert.deepEqual(retries.at(-1).params.arguments, failed.params.arguments);
+  assert.equal(nodes.retry.disabled, true);
+  await view.reply(retries.at(-1), previewReply(retries.at(-1), "tail"));
+  assert.equal(nodes.text.textContent, "firsttail");
+  assert.equal(nodes.retry.hidden, true);
+  assert.equal(nodes.controls.children[2].disabled, false);
+  assert.equal(nodes.hint.hidden, true);
+});
+
+test("initial preview retry stays pinned and a replaced snapshot cannot receive its late error", async () => {
+  const { view, nodes, request } = await workspacePreview();
+  await view.reject(request);
+  assert.equal(nodes.retry.hidden, false);
+  nodes.retry.onclick(); await flush();
+  const retried = view.calls("get_work_result_state").at(-1);
+  assert.deepEqual(retried.params.arguments, request.params.arguments);
+  view.nodes.workspaceReload.onclick();
+  await view.reject(retried);
+  assert.equal(nodes.retry.hidden, true, "an obsolete retry does not revive its action");
+  assert.equal(nodes.text.textContent, "");
 });
 
 test("rapid Full text and next-page clicks share their owning request and settle together", async () => {

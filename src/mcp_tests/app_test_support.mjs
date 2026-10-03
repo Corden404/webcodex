@@ -5,13 +5,15 @@ import { webcrypto } from "node:crypto";
 export const flush = () => new Promise(resolve => setImmediate(resolve));
 
 // Execute the shipped App script with deterministic Host messages and timers.
-export function app(filename, { deliverToolMeta = true, deliverToolStructuredContent = true, crypto = webcrypto } = {}) {
+export function app(filename, { deliverToolMeta = true, deliverToolStructuredContent = true, crypto = webcrypto, navigator = {} } = {}) {
   const html = readFileSync(new URL(`../${filename}`, import.meta.url), "utf8");
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   const nodes = {};
   const listeners = new Map();
   const timers = new Map();
   const sent = [];
+  const viewport = { scrollY: 0, innerHeight: 800, moves: [] };
+  const selection = { value: null };
   let nextTimer = 1;
   let nowMs = 2_000_000_000_000;
   const HostDate = class extends Date {
@@ -23,18 +25,38 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
     return {
       tagName: String(tagName).toUpperCase(),
       textContent: "", hidden: false, open: false, children: [], className: "", type: "", onclick: null, ontoggle: null,
-      append(...children) { this.children.push(...children); },
-      appendChild(child) { this.children.push(child); return child; },
-      replaceChildren(...children) { this.children = [...children]; this.textContent = ""; },
+      parentNode: null,
+      get isConnected() { return !!this.documentNode || !!this.parentNode?.isConnected; },
+      contains(node) { return node === this || this.children.some(child => child.contains(node)); },
+      focus() { document.activeElement = this; },
+      append(...children) { for (const child of children) this.appendChild(child); },
+      appendChild(child) { return this.insertBefore(child, null); },
+      insertBefore(child, before) {
+        if (child === before) return child;
+        child.remove();
+        const index = before === null ? this.children.length : this.children.indexOf(before);
+        if (index < 0) throw new Error("Reference node is not a child");
+        this.children.splice(index, 0, child); child.parentNode = this; return child;
+      },
+      remove() {
+        if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
+        this.parentNode = null;
+      },
+      replaceChildren(...children) {
+        for (const child of [...this.children]) child.remove();
+        this.append(...children); this.textContent = "";
+      },
       setAttribute(name, value) { attributes.set(name, String(value)); },
       getAttribute(name) { return attributes.get(name); },
     };
   }
   const document = {
     hidden: false,
-    getElementById: id => nodes[id] ||= element(),
+    body: element("body"),
+    getElementById: id => nodes[id] ||= Object.assign(element(), { documentNode: true }),
     createElement: tagName => element(tagName),
   };
+  document.activeElement = document.body;
   function addEventListener(name, listener) {
     if (!listeners.has(name)) listeners.set(name, []);
     listeners.get(name).push(listener);
@@ -48,7 +70,12 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
     return id;
   }
   runInNewContext(script, {
-    document, parent, addEventListener, TextEncoder, crypto, btoa, Date: HostDate,
+    document, parent, addEventListener, TextEncoder, crypto, navigator, btoa, Date: HostDate,
+    getSelection: () => selection.value,
+    get scrollY() { return viewport.scrollY; },
+    get innerHeight() { return viewport.innerHeight; },
+    scrollBy({ top }) { viewport.moves.push(top); viewport.scrollY += top; },
+    requestAnimationFrame: callback => setTimer(callback, 16),
     setTimeout: setTimer,
     clearTimeout: id => timers.delete(id),
     setInterval: (callback, delay) => setTimer(callback, delay, true),
@@ -58,7 +85,7 @@ export function app(filename, { deliverToolMeta = true, deliverToolStructuredCon
     emit("message", { source, data: { jsonrpc: "2.0", ...message } });
   }
   return {
-    nodes, timers, sent,
+    nodes, timers, sent, viewport, selection, document,
     calls(name) { return sent.filter(message => message.method === "tools/call" && message.params.name === name); },
     notification(method, params, source) {
       deliver({ method, params }, source);
