@@ -84,6 +84,7 @@ impl ToolRuntime {
                         tail_lines,
                     );
                 }
+                self.capture_job_audit_trace(correlation, "observe_jobs", &result, auth);
                 result
             }
             ToolCall::WaitForJobReadiness {
@@ -97,8 +98,11 @@ impl ToolRuntime {
                 {
                     self.bind_job_activity_project(correlation, project);
                 }
-                self.wait_for_job_readiness(job_ids, mode, wait_secs, auth)
-                    .await
+                let result = self
+                    .wait_for_job_readiness(job_ids, mode, wait_secs, auth)
+                    .await;
+                self.capture_job_audit_trace(correlation, "wait_for_job_readiness", &result, auth);
+                result
             }
             ToolCall::WaitForJobTerminal {
                 job_id,
