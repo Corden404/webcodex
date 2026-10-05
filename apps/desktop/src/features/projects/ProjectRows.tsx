@@ -6,6 +6,7 @@ import { useLocale } from "../../i18n/locale";
 import { useProduct } from "../../i18n/product";
 import type { GitSummary, WorkspaceProject } from "../../models/workspace";
 import { displayProjectPath, projectName, useWorkspace, workspaceQuery } from "../workspace/WorkspaceContext";
+import { projectRunnerId } from "./project-device";
 import { observationTime } from "../workspace/WorkspaceStatus";
 
 export function ProjectRows({ projects, onUnregister, busy = false }: { projects: WorkspaceProject[]; onUnregister?: (project: WorkspaceProject) => void; busy?: boolean }) {
@@ -49,7 +50,7 @@ function ProjectRow({ project, compact = false, onUnregister, busy }: { project:
   const activity = project.sessions ? `${project.sessions.active_sessions}${project.sessions.sessions_truncated ? "+" : ""} ${p("activeSessions")}` : p(project.id ? "unknown" : "setup");
   const activityValue = project.sessions ? `${project.sessions.active_sessions}${project.sessions.sessions_truncated ? "+" : ""}` : "—";
   const path = displayProjectPath(project.path);
-  const runner = project.client_id || (project.id?.startsWith("agent:") ? project.id.split(":")[1] : undefined);
+  const runner = projectRunnerId(project);
   const origin = runner ? <span className="project-table-meta">{p("executionDevice")} · {runner === state.workspace_runner?.client_id ? p("thisComputer") : runner}</span> : null;
   const updated = observationTime(project.sessions?.latest_updated_at ? project.sessions.latest_updated_at * 1000 : null, locale);
   const remove = onUnregister && runner === state.workspace_runner?.client_id && <Button variant="subtle" color="red" size="compact-sm" disabled={busy || !project.id || !project.connected}
