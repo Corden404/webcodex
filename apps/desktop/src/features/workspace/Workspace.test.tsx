@@ -1,7 +1,7 @@
 import { useLayoutEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceProject, ServerRunnerSummary } from "../../models/workspace";
+import type { GitSummary, WorkspaceProject, ServerRunnerSummary } from "../../models/workspace";
 import type { DesktopState } from "../../models/topology";
 import { LocaleProvider } from "../../i18n/locale";
 import { PRODUCT_LOCALES, PRODUCT_MESSAGES, productText } from "../../i18n/product";
@@ -641,6 +641,118 @@ it("keeps Runner overview when only the default display Project disappears", asy
   expect(native.invoke.mock.calls.filter(([, value]) => value.request.kind === "overview")).toHaveLength(calls);
 });
 
+
+describe("project Git overview", () => {
+  const dirty: GitSummary = { branch: "feat/overview", clean: false, git_available: true, non_git_project: false,
+    files: [{ path: "src/export.ts", status: " M" }], files_total: 1, files_truncated: false };
+  const observe = (git: GitSummary) => {
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => value.request.kind === "project_git" && value.request.project === alpha.id
+      ? Promise.resolve(git) : normal(command, value));
+  };
+  it("shows exact change counts and expands returned files without another query", async () => {
+    observe({ ...dirty, files_total: 205, files_truncated: true });
+    render(wrap(<ProjectsPanel />));
+    const row = await screen.findByRole("row", { name: "alpha" });
+    const summary = await within(row).findByText("Changed files: 205", { selector: "summary" });
+    expect(row).toHaveTextContent("feat/overview");
+    expect(row).toHaveTextContent("Showing part of the changed file list");
+    const reads = native.invoke.mock.calls.length;
+    fireEvent.click(summary);
+    expect(summary.parentElement).toHaveAttribute("open");
+    expect(within(row).getByText("src/export.ts")).toBeInTheDocument();
+    expect(within(row).getByText("M")).toBeInTheDocument();
+    expect(native.invoke).toHaveBeenCalledTimes(reads);
+    fireEvent.click(summary);
+    expect(summary.parentElement).not.toHaveAttribute("open");
+  });
+
+  it.each([
+    ["clean", { ...dirty, clean: true, files: [], files_total: 0 }, "clean"],
+    ["non-Git", { ...dirty, branch: null, non_git_project: true, clean: null, files: [], files_total: null }, "notGit"],
+    ["unavailable Git", { ...dirty, branch: null, git_available: false, clean: null, files: [], files_total: null }, "projectStatusUnconfirmed"],
+    ["unknown cleanliness", { ...dirty, clean: null, files: [], files_total: null }, "projectStatusUnconfirmed"],
+    ["unknown count", { ...dirty, files_total: null }, "projectGitHasChanges"],
+  ] as const)("distinguishes %s from zero changes", async (_scenario, git, key) => {
+    observe({ ...git, files: git.files ? [...git.files] : git.files }); render(wrap(<ProjectsPanel />));
+    const row = await screen.findByRole("row", { name: "alpha" });
+    expect(await within(row).findByText(productText("en-US", key))).toBeInTheDocument();
+    expect(within(row).queryByText("Changed files: 0")).not.toBeInTheDocument();
+    if (key !== "clean") expect(within(row).queryByText(productText("en-US", "clean"))).not.toBeInTheDocument();
+  });
+
+  it("keeps dirty state with no returned files and marks a truncated list", async () => {
+    observe({ ...dirty, files: [], files_total: 20, files_truncated: true });
+    render(wrap(<ProjectsPanel />));
+    const row = await screen.findByRole("row", { name: "alpha" });
+    expect(await within(row).findByText("Changed files: 20")).toBeInTheDocument();
+    expect(within(row).getByText("Showing part of the changed file list")).toBeInTheDocument();
+    expect(within(row).queryByText(productText("en-US", "clean"))).not.toBeInTheDocument();
+  });
+
+  it("clears stale changes when refreshing fails", async () => {
+    observe(dirty); render(wrap(<ProjectsPanel />));
+    const row = await screen.findByRole("row", { name: "alpha" });
+    await within(row).findByText("Changed files: 1");
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => value.request.kind === "project_git" && value.request.project === alpha.id
+      ? Promise.reject(new Error("private probe failure")) : normal(command, value));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await within(row).findByText(productText("en-US", "projectStatusUnconfirmed"));
+    expect(row).not.toHaveTextContent("Changed files: 1");
+    expect(row).not.toHaveTextContent("src/export.ts");
+    expect(row).not.toHaveTextContent("private probe failure");
+  });
+
+  it("shows loading without declaring the workspace clean", async () => {
+    let resolve!: (value: GitSummary) => void;
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => value.request.kind === "project_git" && value.request.project === alpha.id
+      ? new Promise<GitSummary>(done => { resolve = done; }) : normal(command, value));
+    render(wrap(<ProjectsPanel />));
+    const row = await screen.findByRole("row", { name: "alpha" });
+    await within(row).findByText(productText("en-US", "loading"));
+    expect(row).not.toHaveTextContent(productText("en-US", "clean"));
+    await act(async () => resolve(dirty));
+    expect(row).toHaveTextContent("Changed files: 1");
+  });
+
+  it("does not probe disconnected projects or call them clean", async () => {
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => {
+      const projects = [{ ...alpha, connected: false }, beta];
+      if (value.request.kind === "overview") return Promise.resolve({ ...overview, projects });
+      if (value.request.kind === "projects") return Promise.resolve({ projects, total: 2, truncated: false });
+      return normal(command, value);
+    });
+    render(wrap(<ProjectsPanel />));
+    await screen.findAllByText("feat/export");
+    const row = screen.getByRole("row", { name: "alpha" });
+    expect(row).toHaveTextContent(productText("en-US", "projectStatusUnconfirmed"));
+    expect(native.invoke.mock.calls.some(([, args]) => args.request.kind === "project_git" && args.request.project === alpha.id)).toBe(false);
+  });
+
+  it("renders the same Git overview in narrow-screen project cards", async () => {
+    const original = window.matchMedia;
+    const media = vi.spyOn(window, "matchMedia").mockImplementation(query => ({ ...original(query), matches: query === "(max-width: 600px)" }));
+    try {
+      observe(dirty); render(wrap(<ProjectsPanel />));
+      const card = await screen.findByRole("article", { name: "alpha" });
+      const summary = await within(card).findByText("Changed files: 1", { selector: "summary" });
+      fireEvent.click(summary);
+      expect(within(card).getByText("src/export.ts")).toBeInTheDocument();
+      expect(summary.parentElement).toHaveAttribute("open");
+    } finally { media.mockRestore(); }
+  });
+
+  it.each(PRODUCT_LOCALES)("localizes Git changes in %s", async locale => {
+    localStorage.setItem("webcodex.desktop.locale", locale);
+    observe({ ...dirty, files_total: 205, files_truncated: true }); render(wrap(<ProjectsPanel />));
+    const row = await screen.findByRole("row", { name: "alpha" });
+    expect(await within(row).findByText(productText(locale, "projectGitChangeCount").replace("{count}", "205"))).toBeInTheDocument();
+    expect(within(row).getByText(productText(locale, "projectGitPartialFiles"))).toBeInTheDocument();
+  });
+});
 
 describe("project device filters", () => {
   const sharedLocal = { ...alpha, id: "agent:mini:shared", path: "/work/shared", name: "shared", client_id: "mini" };
