@@ -151,16 +151,71 @@ describe("product workspace task flows", () => {
     expect(screen.getByRole("button", { name: "Remove project alpha" })).toBeInTheDocument();
   });
 
-  it("shows no local Runner on a viewer while retaining raw stopped readiness", () => {
+  it.each([
+    ["http://127.0.0.1:18080", null],
+    ["http://192.0.2.10:18080", null],
+    ["https://central.example", null],
+    ["http://127.0.0.1:18080", "viewer-environment"],
+    ["http://192.0.2.10:18080", "viewer-environment"],
+    ["https://central.example", "viewer-environment"],
+  ])("scopes viewer status without inferring ownership from %s (%s)", (url, persistent_environment) => {
     const viewer = { ...state, readiness: { ...state.readiness, runner: "stopped" as const },
-      topology: { ...state.topology!, server: { kind: "remote" as const, url: "https://central.example" }, runner: { kind: "none" as const } } } as DesktopState;
+      persistent_environment, connections: connectionSnapshot(),
+      topology: { ...state.topology!, server: { kind: "remote" as const, url }, runner: { kind: "none" as const } } } as DesktopState;
     render(wrap(<><WorkspaceStatus state={viewer} /><Sidebar state={viewer} navigation="home" setNavigation={vi.fn()} /></>, viewer));
     expect(screen.getByRole("status")).toHaveTextContent("Server ConnectionRunning");
-    expect(screen.getByRole("status")).toHaveTextContent("Local task serviceNot configured");
-    expect(screen.getByRole("status")).not.toHaveTextContent("Local task serviceStopped");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Local task service");
+    expect(screen.getByRole("status")).toHaveTextContent("Desktop Tunnel connectionsNo Tunnel connections saved in Desktop");
     expect(screen.getByRole("complementary")).toHaveTextContent("Server Connection · Running");
-    expect(screen.getByRole("complementary")).not.toHaveTextContent("Local task service · Stopped");
+    expect(screen.getByRole("complementary")).toHaveTextContent("No Tunnel connections saved in Desktop");
+    expect(screen.getByRole("complementary")).not.toHaveTextContent("Local task service");
+    expect(screen.queryByText("ChatGPT connected")).not.toBeInTheDocument();
+    expect(native.invoke.mock.calls.every(([command]) => command === "workspace_query")).toBe(true);
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
     expect(viewer.readiness.runner).toBe("stopped");
+  });
+
+  it.each([null, "server-environment"])("hides an absent Runner on a Server-only environment (%s)", persistent_environment => {
+    const serverOnly = { ...state, persistent_environment, topology: { ...state.topology!, runner: { kind: "none" as const } },
+      connections: connectionSnapshot(connectionFixture({ pid: null })) };
+    render(wrap(<><WorkspaceStatus state={serverOnly} /><Sidebar state={serverOnly} navigation="home" setNavigation={vi.fn()} /></>, serverOnly));
+    expect(screen.getByRole("status")).toHaveTextContent("Server ConnectionRunning");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Local task service");
+    expect(screen.getByRole("status")).toHaveTextContent("1 of 1 Desktop tunnels locally ready");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Server Connection · Running");
+  });
+
+  it("does not invent a configured Runner before topology is available", () => {
+    const unknown = { ...state, topology: null };
+    render(wrap(<><WorkspaceStatus state={unknown} /><Sidebar state={unknown} navigation="home" setNavigation={vi.fn()} /></>, unknown));
+    expect(screen.getByRole("status")).not.toHaveTextContent("Local task service");
+    expect(screen.getByRole("complementary")).not.toHaveTextContent("Local task service");
+  });
+
+  it.each([null, "full-environment"])("keeps configured local Runner readiness in a Full Runtime (%s)", persistent_environment => {
+    const full = { ...state, persistent_environment, readiness: { ...state.readiness, runner: "error" as const, runtime_ready: false } };
+    render(wrap(<><WorkspaceStatus state={full} /><Sidebar state={full} navigation="home" setNavigation={vi.fn()} /></>, full));
+    expect(screen.getByRole("status")).toHaveTextContent("Local task serviceUnavailable");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Local task service · Unavailable");
+  });
+
+  it("shows the configured Runner when joining an independently managed Server", () => {
+    const joined = { ...state, persistent_environment: "joined-environment",
+      topology: { ...state.topology!, server: { kind: "remote" as const, url: "https://central.example" } }, connections: connectionSnapshot() };
+    render(wrap(<><WorkspaceStatus state={joined} /><Sidebar state={joined} navigation="home" setNavigation={vi.fn()} /></>, joined));
+    expect(screen.getByRole("status")).toHaveTextContent("Local task serviceRunning");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Local task service · Running");
+    expect(screen.getByRole("status")).toHaveTextContent("No Tunnel connections saved in Desktop");
+  });
+
+  it("keeps Quick Share exposure separate from saved Tunnel connections", () => {
+    const quickShare = { ...state, topology: { ...state.topology!, experience: "quick_share" as const },
+      readiness: { ...state.readiness, exposure: "remote_ready" as const }, connections: connectionSnapshot() };
+    render(wrap(<><WorkspaceStatus state={quickShare} /><Sidebar state={quickShare} navigation="home" setNavigation={vi.fn()} /></>, quickShare));
+    expect(screen.getByRole("status")).toHaveTextContent("Quick ShareRunning");
+    expect(screen.getByRole("complementary")).toHaveTextContent("Quick Share · Running");
+    expect(screen.queryByText("Desktop Tunnel connections")).not.toBeInTheDocument();
+    expect(screen.queryByText("No Tunnel connections saved in Desktop")).not.toBeInTheDocument();
   });
 
   it("keeps a viewer read-only without offering a local project picker", () => {
@@ -173,19 +228,27 @@ describe("product workspace task flows", () => {
   it("describes locally ready tunnels without counting a live but unhealthy process as ready", () => {
     const selected = { ...state, connections: connectionSnapshot(connectionFixture({ ready: false, process_started: true, lifecycle: "running" })) };
     render(wrap(<><WorkspaceStatus state={selected} /><Sidebar state={selected} navigation="home" setNavigation={vi.fn()} /></>, selected));
-    expect(screen.getByRole("status")).toHaveTextContent("0 of 1 tunnels locally ready");
-    expect(screen.getByRole("complementary")).toHaveTextContent("0 of 1 tunnels locally ready");
+    expect(screen.getByRole("status")).toHaveTextContent("0 of 1 Desktop tunnels locally ready");
+    expect(screen.getByRole("complementary")).toHaveTextContent("0 of 1 Desktop tunnels locally ready");
     expect(screen.queryByText("ChatGPT connected")).not.toBeInTheDocument();
   });
   it.each([
-    [connectionSnapshot(), "No tunnels configured"],
-    [{ ...connectionSnapshot(), config_error: true }, "Tunnel status unconfirmed"],
-    [undefined, "Tunnel status unconfirmed"],
+    [connectionSnapshot(), "No Tunnel connections saved in Desktop"],
+    [{ ...connectionSnapshot(), config_error: true }, "Desktop Tunnel status unconfirmed"],
+    [undefined, "Desktop Tunnel status unconfirmed"],
   ])("distinguishes missing configuration from unavailable tunnel observations", (connections, label) => {
     const selected = { ...state, connections };
     render(wrap(<WorkspaceStatus state={selected} />, selected));
     expect(screen.getByRole("status")).toHaveTextContent(label);
     expect(screen.getByRole("status")).not.toHaveTextContent("0 / 0");
+  });
+
+  it("does not show cached readiness as healthy when Tunnel configuration is unreadable", () => {
+    const selected = { ...state, connections: { ...connectionSnapshot(connectionFixture()), config_error: true } };
+    render(wrap(<WorkspaceStatus state={selected} />, selected));
+    expect(screen.getByRole("status")).toHaveTextContent("Desktop Tunnel status unconfirmed");
+    const row = screen.getByText("Desktop Tunnel connections").closest("div")!;
+    expect(row.querySelector(".status-dot.ready")).toBeNull();
   });
   it.each([
     ["workspace_authentication_required", "User authentication is missing or expired. Restore your Server credential."],

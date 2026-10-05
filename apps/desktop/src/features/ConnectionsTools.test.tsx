@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../i18n/locale";
 import { CONNECTIONS_TOOLS_MESSAGES, connectionsToolsText } from "../i18n/connections-tools";
-import { PRODUCT_LOCALES } from "../i18n/product";
+import { PRODUCT_LOCALES, productText } from "../i18n/product";
 import type { DesktopState, RunnerSettings } from "../models/topology";
 import { EMPTY_MCP_PROVIDERS, type McpProviderRequest, type TunnelProfileRequest } from "../models/connections-tools";
 import { connectionFixture, connectionSnapshot } from "../test/connections-fixtures";
@@ -41,9 +41,116 @@ beforeEach(() => {
 });
 
 describe("Connections + Tools control surfaces", () => {
+  it.each([
+    ["http://127.0.0.1:18080", null],
+    ["http://192.0.2.10:18080", null],
+    ["https://central.example", "viewer-environment"],
+  ])("explains unobserved external connectivity for a viewer at %s (%s)", (url, persistent_environment) => {
+    const initial = state();
+    initial.persistent_environment = persistent_environment;
+    initial.topology = { ...initial.topology!, server: { kind: "remote", url }, runner: { kind: "none" } };
+    initial.connections = connectionSnapshot();
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getAllByText("No Tunnel connections saved in Desktop")).toHaveLength(2);
+    expect(screen.getByText(/External connections to this Server are not observed here/)).toBeInTheDocument();
+    expect(screen.queryByText("Use a local Server connection to manage tunnels.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Runtime" })).not.toBeInTheDocument();
+    expect(screen.queryByText("ChatGPT connected")).not.toBeInTheDocument();
+    expect(onSettings).not.toHaveBeenCalled();
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+    expect(api.saveTunnelProfile).not.toHaveBeenCalled();
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, { ...connectionSnapshot(), config_error: true }])("keeps unavailable configuration distinct from an empty saved set", connections => {
+    const initial = state();
+    initial.connections = connections;
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText("Desktop Tunnel status unconfirmed")).toBeInTheDocument();
+    expect(screen.queryByText("No Tunnel connections saved in Desktop")).not.toBeInTheDocument();
+  });
+
+  it("retains saved profile editing without enabling viewer start controls", () => {
+    const initial = state();
+    initial.topology = { ...initial.topology!, server: { kind: "remote", url: "http://127.0.0.1:18080" }, runner: { kind: "none" } };
+    initial.connections = connectionSnapshot(connectionFixture({ lifecycle: "stopped", pid: null, enabled: false, ready: false }));
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText("0 of 1 Desktop tunnels locally ready")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start ChatGPT" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit ChatGPT" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete ChatGPT" })).toBeEnabled();
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+  });
+
+  it("keeps a joined local Runner separate from external connection observations", () => {
+    const initial = state();
+    initial.topology = { ...initial.topology!, server: { kind: "remote", url: "https://central.example" } };
+    initial.connections = connectionSnapshot();
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText(/External connections to this Server are not observed here/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Runtime" })).not.toBeInTheDocument();
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([null, "full-environment"])("preserves local recovery and requires an explicit action (%s)", persistent_environment => {
+    const initial = state();
+    initial.persistent_environment = persistent_environment;
+    initial.readiness = { ...initial.readiness, server: "stopped", runner: "stopped", runtime_ready: false };
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText("Start the local runtime to connect. Your settings remain saved.")).toBeInTheDocument();
+    expect(screen.queryByText(/External connections to this Server are not observed here/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restart ChatGPT Personal" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Runtime" }));
+    expect(onSettings).toHaveBeenCalledExactlyOnceWith("runtime");
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it("keeps service-host Tunnel controls without requiring a local Runner", async () => {
+    const initial = state();
+    initial.persistent_environment = "server-environment";
+    initial.topology = { ...initial.topology!, runner: { kind: "none" } };
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.queryByText(/External connections to this Server are not observed here/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Restart ChatGPT Personal" }));
+    await waitFor(() => expect(api.tunnelProfileAction).toHaveBeenCalledExactlyOnceWith("personal", "restart"));
+    expect(api.restartOwnedRunner).not.toHaveBeenCalled();
+  });
+
+  it("shows Quick Share independently and keeps its explicit stop action", async () => {
+    const initial = state();
+    initial.topology = { ...initial.topology!, experience: "quick_share" };
+    initial.readiness = { ...initial.readiness, exposure: "remote_ready" };
+    initial.connections = connectionSnapshot();
+    initial.quick_share = { provider: "openai", project: "/fixture", clipboard_state: "copied", clipboard_contains: "mcp_url", ready_for_chatgpt: true };
+    api.stopQuickShare.mockResolvedValue(state());
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText("Quick Share · Running")).toBeInTheDocument();
+    expect(screen.queryByText("No Tunnel connections saved in Desktop")).not.toBeInTheDocument();
+    expect(screen.queryByText(/External connections to this Server are not observed here/)).not.toBeInTheDocument();
+    expect(api.stopQuickShare).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop Quick Share" }));
+    await waitFor(() => expect(api.stopQuickShare).toHaveBeenCalledExactlyOnceWith());
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+  });
+
+  it.each(PRODUCT_LOCALES)("scopes viewer connections in %s", locale => {
+    localStorage.setItem("webcodex.desktop.locale", locale);
+    const initial = state();
+    initial.topology = { ...initial.topology!, server: { kind: "remote", url: "http://127.0.0.1:18080" }, runner: { kind: "none" } };
+    initial.connections = connectionSnapshot();
+    render(<Harness mode="connections" initial={initial} />);
+    expect(screen.getByText(connectionsToolsText(locale, "externalConnectionUnobserved"))).toBeInTheDocument();
+    expect(screen.getAllByText(productText(locale, "noTunnels"))).toHaveLength(2);
+    for (const key of ["tunnels", "tunnelsReadyCount", "noTunnels", "tunnelStatusUnavailable"] as const) {
+      expect(productText(locale, key)).toContain("Desktop");
+    }
+    expect(api.tunnelProfileAction).not.toHaveBeenCalled();
+  });
+
   it("shows 2/3 connections without degrading runtime and routes each action by identity", async () => {
     render(<Harness mode="connections" />);
-    expect(screen.getByText("2 of 3 tunnels locally ready")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3 Desktop tunnels locally ready")).toBeInTheDocument();
     expect(within(screen.getByRole("article", { name: "ChatGPT Work" })).getByText("Connection unavailable")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Restart ChatGPT Personal" }));
     await waitFor(() => expect(api.tunnelProfileAction).toHaveBeenLastCalledWith("personal", "restart"));
@@ -71,7 +178,7 @@ describe("Connections + Tools control surfaces", () => {
     await waitFor(() => expect(within(work).getByRole("button", { name: "Start ChatGPT Work" })).toBeEnabled());
     expect(within(work).queryByRole("button", { name: "Stop ChatGPT Work" })).not.toBeInTheDocument();
     expect(within(screen.getByRole("article", { name: "ChatGPT Personal" })).getByText("Running")).toBeInTheDocument();
-    expect(screen.getByText("2 of 3 tunnels locally ready")).toBeInTheDocument();
+    expect(screen.getByText("2 of 3 Desktop tunnels locally ready")).toBeInTheDocument();
     fireEvent.click(within(work).getByRole("button", { name: "Start ChatGPT Work" }));
     await waitFor(() => expect(api.tunnelProfileAction).toHaveBeenLastCalledWith("work", "start"));
     expect(api.tunnelProfileAction.mock.calls.every(([id]) => id === "work")).toBe(true);
