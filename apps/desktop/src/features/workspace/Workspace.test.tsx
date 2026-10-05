@@ -63,6 +63,47 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("product workspace task flows", () => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])(
+    "reports partial Session history for return truncation=%s and scan truncation=%s",
+    async (truncated, scan_truncated) => {
+      const normal = native.invoke.getMockImplementation()!;
+      native.invoke.mockImplementation((command, value) => value.request.kind === "overview"
+        ? Promise.resolve({ ...overview, recent_sessions: { sessions: [session], truncated, scan_truncated } })
+        : normal(command, value));
+      render(wrap(<ActivityPanel activity={[]} />));
+      fireEvent.click(screen.getByRole("tab", { name: "Workflow Sessions" }));
+      await screen.findByText(session.title);
+      expect(Boolean(screen.queryByText("History is partial"))).toBe(truncated || scan_truncated);
+    },
+  );
+
+  it.each([[true, false], [false, true], [true, true]])(
+    "does not claim empty history is complete when truncation=%s and scan truncation=%s",
+    async (truncated, scan_truncated) => {
+      const normal = native.invoke.getMockImplementation()!;
+      native.invoke.mockImplementation((command, value) => value.request.kind === "overview"
+        ? Promise.resolve({ ...overview, recent_sessions: { sessions: [], truncated, scan_truncated } })
+        : normal(command, value));
+      render(wrap(<ActivityPanel activity={[]} />));
+      fireEvent.click(screen.getByRole("tab", { name: "Workflow Sessions" }));
+      expect(await screen.findByText("History is partial")).toBeInTheDocument();
+      expect(screen.getByText("No sessions observed in this partial history")).toBeInTheDocument();
+      expect(screen.queryByText("No Workflow Sessions yet")).not.toBeInTheDocument();
+    },
+  );
+
+  it("retains the complete empty Session history message", async () => {
+    const normal = native.invoke.getMockImplementation()!;
+    native.invoke.mockImplementation((command, value) => value.request.kind === "overview"
+      ? Promise.resolve({ ...overview, recent_sessions: { sessions: [], truncated: false, scan_truncated: false } })
+      : normal(command, value));
+    render(wrap(<ActivityPanel activity={[]} />));
+    await screen.findByRole("button", { name: /Fix export workflow/ });
+    fireEvent.click(screen.getByRole("tab", { name: "Workflow Sessions" }));
+    expect(screen.getByText("No Workflow Sessions yet")).toBeInTheDocument();
+    expect(screen.queryByText("History is partial")).not.toBeInTheDocument();
+  });
+
   it("ignores failures from pre-refresh observations and resumes overview and Git reads", async () => {
     const pending = new Map<string, (error: Error) => void>();
     const normal = native.invoke.getMockImplementation()!;

@@ -253,6 +253,7 @@ export const PRODUCT_MESSAGES = {
   noActivity: ["No activity observed yet", "尚未观察到活动", "Noch keine Aktivität beobachtet", "Aucune activité observée", "まだアクティビティはありません", "아직 관찰된 활동 없음", "尚未觀察到活動"],
   noChatgpt: ["No ChatGPT activity observed yet", "尚未观察到 ChatGPT 活动", "Noch keine ChatGPT-Aktivität beobachtet", "Aucune activité ChatGPT observée", "ChatGPT のアクティビティはまだ観測されていません", "아직 관찰된 ChatGPT 활동 없음", "尚未觀察到 ChatGPT 活動"],
   lastChatgpt: ["Last ChatGPT activity", "最近 ChatGPT 活动", "Letzte ChatGPT-Aktivität", "Dernière activité ChatGPT", "最新の ChatGPT アクティビティ", "최근 ChatGPT 활동", "最近 ChatGPT 活動"],
+  noObservedSessions: ["No sessions observed in this partial history", "当前不完整的历史中未观察到会话", "Im unvollständigen Verlauf wurden keine Sitzungen beobachtet", "Aucune session observée dans cet historique incomplet", "この不完全な履歴ではセッションが確認されていません", "불완전한 기록에서 확인된 세션 없음", "目前不完整的歷史中未觀察到會話"],
   noProjects: ["No project folders to show", "当前没有可显示的项目目录", "Keine Projektordner anzuzeigen", "Aucun dossier de projet à afficher", "表示できるプロジェクトフォルダーはありません", "표시할 프로젝트 폴더 없음", "目前沒有可顯示的專案目錄"],  noSessions: ["No Workflow Sessions yet", "尚无工作会话", "Noch keine Workflow-Sitzungen", "Aucune session de travail", "ワークフローセッションはまだありません", "아직 워크플로 세션 없음", "尚無工作會話"],
   noWindows: ["No tool calls recorded yet", "尚无工具调用记录", "Noch keine Werkzeugaufrufe aufgezeichnet", "Aucun appel d’outil enregistré", "ツール呼び出しの記録はまだありません", "아직 기록된 도구 호출 없음", "尚無工具呼叫記錄"],
   lastUsed: ["Last used", "最近使用", "Zuletzt verwendet", "Dernière utilisation", "最終使用", "최근 사용", "最近使用"],

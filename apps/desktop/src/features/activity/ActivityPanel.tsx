@@ -47,6 +47,7 @@ export function ActivityPanel({ activity }: { activity: ActivityEntry[] }) {
   const [tab, setTab] = useState<Tab>("windows"); const [project, setProject] = useState(""); const [page, setPage] = useState(0);
   const windows = useMemo(() => workspace.windows.filter(row => !project || row.last_project === project)
     .slice().sort((a, b) => (b.active_count > 0 ? 1 : 0) - (a.active_count > 0 ? 1 : 0) || (b.last_meaningful_activity_at_ms ?? b.last_seen_at_ms) - (a.last_meaningful_activity_at_ms ?? a.last_seen_at_ms)), [workspace.windows, project]);
+  const historyPartial = Boolean(workspace.runner?.recent_sessions?.truncated || workspace.runner?.recent_sessions?.scan_truncated);
   const sessions = workspace.sessions.filter(row => !project || row.project_id === project);
   const visible = windows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const previews = useWindowPreviews(visible, tab === "windows" && !workspace.state.current_operation, workspace.revision);
@@ -108,8 +109,8 @@ export function ActivityPanel({ activity }: { activity: ActivityEntry[] }) {
           </span>
         </button>;
       })}
-      {!sessions.length && !workspace.loading && <WorkspaceEmptyState kind="activity" message={p("noSessions")} action={<button type="button" className="secondary-button" onClick={workspace.refresh}>{p("refresh")}</button>} />}
-      {workspace.runner?.recent_sessions?.truncated && <p className="field-help">{s("History is partial")}</p>}
+      {!sessions.length && !workspace.loading && <WorkspaceEmptyState kind="activity" message={p(historyPartial ? "noObservedSessions" : "noSessions")} action={<button type="button" className="secondary-button" onClick={workspace.refresh}>{p("refresh")}</button>} />}
+      {historyPartial && <p className="field-help">{s("History is partial")}</p>}
     </>}
     {tab === "system" && <SystemActivity activity={activity} />}
     </section>
