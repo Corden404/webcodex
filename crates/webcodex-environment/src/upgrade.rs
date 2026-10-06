@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Component as PathComponent, Path, PathBuf};
 use webcodex_core::desktop_runtime_contract::{MachineBuildInfo, DESKTOP_RUNTIME_CONTRACT};
+#[cfg(test)]
+mod candidate_relocation_tests;
 #[cfg(unix)]
 mod desktop_tree;
 mod observation;
@@ -458,14 +460,7 @@ pub async fn verify_prepared_installation(
     }
     let mut prepared_candidate = journal.candidate.clone();
     prepared_candidate.provenance_verified = false;
-    if serde_json::to_value(&prepared_candidate).map_err(|_| SetupDiagnostic::io())?
-        != serde_json::to_value(&candidate).map_err(|_| SetupDiagnostic::io())?
-    {
-        return Err(error(
-            "upgrade_receipt",
-            "Prepared component identities differ from the published candidate",
-        ));
-    }
+    verify_relocated_candidate_identity(&prepared_candidate, &candidate)?;
     verify_published_provenance(&candidate).await?;
     // The user-side prepare already ran the bounded metadata probe. Elevated
     // installer verification must never execute a candidate as administrator.
@@ -781,6 +776,71 @@ fn bounded_file(path: &Path) -> SetupResultValue<Vec<u8>> {
     }
     Ok(data)
 }
+/// Compare the prepared, owner-bound candidate with an independently verified
+/// package-hook copy. Only its storage root may change; manifest-relative
+/// component and Desktop paths, bytes, metadata and provenance remain exact.
+fn verify_relocated_candidate_identity(
+    prepared: &UpgradeCandidate,
+    candidate: &UpgradeCandidate,
+) -> SetupResultValue<()> {
+    if candidate_identity_without_root(prepared)? != candidate_identity_without_root(candidate)? {
+        return Err(error(
+            "upgrade_receipt",
+            "Prepared component identities differ from the published candidate",
+        ));
+    }
+    Ok(())
+}
+
+fn candidate_identity_without_root(
+    candidate: &UpgradeCandidate,
+) -> SetupResultValue<UpgradeCandidate> {
+    if !candidate.root.is_absolute()
+        || candidate
+            .root
+            .components()
+            .any(|part| matches!(part, PathComponent::ParentDir | PathComponent::CurDir))
+    {
+        return Err(error("candidate_path", "Candidate storage root is invalid"));
+    }
+    // Both candidates have already passed verification at their respective
+    // roots. This lexical check also rejects altered persisted paths without
+    // requiring the original extraction directory to remain available.
+    let mut identity = candidate.clone();
+    for artifact in identity.artifacts.values_mut() {
+        artifact.path = candidate_relative_path(&candidate.root, &artifact.path)?;
+    }
+    if let Some(desktop) = &mut identity.desktop {
+        desktop.path = candidate_relative_path(&candidate.root, &desktop.path)?;
+        desktop.executable = candidate_relative_path(&candidate.root, &desktop.executable)?;
+        // managed_files maps installation-relative destinations to hashes;
+        // these are identities, not candidate storage locations.
+    }
+    identity.root = PathBuf::new();
+    Ok(identity)
+}
+
+fn candidate_relative_path(root: &Path, path: &Path) -> SetupResultValue<PathBuf> {
+    let invalid = || {
+        error(
+            "candidate_path",
+            "A candidate path leaves its verified storage root",
+        )
+    };
+    if !path.is_absolute() {
+        return Err(invalid());
+    }
+    let relative = path.strip_prefix(root).map_err(|_| invalid())?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|part| !matches!(part, PathComponent::Normal(_)))
+    {
+        return Err(invalid());
+    }
+    Ok(relative.to_path_buf())
+}
+
 fn artifact_path(root: &Path, value: &str) -> SetupResultValue<PathBuf> {
     let relative = Path::new(value);
     if value.contains('\\')
