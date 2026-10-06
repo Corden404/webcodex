@@ -15,8 +15,14 @@ use webcodex_core::desktop_runtime_contract::{MachineBuildInfo, DESKTOP_RUNTIME_
 #[cfg(unix)]
 mod desktop_tree;
 mod observation;
+mod status;
 pub mod windows_legacy;
+pub(crate) use observation::upgrade_observation_under_lock;
 pub use observation::{upgrade_observation, UpgradeObservation, UpgradeOutcome};
+pub use status::{
+    upgrade_status, upgrade_status_at, UpgradeFileComponent, UpgradePhase, UpgradeServiceComponent,
+    UpgradeServiceKind, UpgradeStatus, UpgradeTarget,
+};
 
 const COMPONENTS: [&str; 4] = [
     "webcodex",
@@ -1292,6 +1298,61 @@ fn verify_installed_target_path(path: &Path) -> SetupResultValue<()> {
 }
 
 impl NativeEnvironment {
+    /// Observe active tasks using the saved Core credentials and execution
+    /// target. No lock, service operation or state write is performed.
+    pub async fn upgrade_task_count(
+        &self,
+        store: &EnvironmentStore,
+        expected_environment_id: &str,
+    ) -> SetupResultValue<u64> {
+        let record = status::load_task_record(store, expected_environment_id)?;
+        let count = self.upgrade_task_count_for_record(store, &record).await;
+        // Recheck even after an unavailable response: a stale observation must
+        // not be attached to a replacement environment or changed request.
+        let current = status::load_task_record(store, expected_environment_id)?;
+        status::verify_task_record_unchanged(&record, &current)?;
+        count.map_err(|_| status::tasks_unknown())
+    }
+
+    async fn upgrade_task_count_for_record(
+        &self,
+        store: &EnvironmentStore,
+        record: &EnvironmentRecord,
+    ) -> SetupResultValue<u64> {
+        let token = if record.request.local_server() {
+            crate::native::bootstrap_token(store)?
+        } else {
+            read_secret(&store.root().join("webcodex-user-token"))?
+        };
+        let runtime = self
+            .post(
+                &record.request.server_url,
+                "/api/runtime/status",
+                Some(token.expose()),
+                json!({}),
+            )
+            .await?;
+        let runner = if !record.request.local_server() {
+            if let Some(client_id) = &record.runner_client_id {
+                let token = read_secret(&store.root().join("webcodex-user-token"))?;
+                Some(
+                    self.post(
+                        &record.request.server_url,
+                        "/api/runtime-console/runner",
+                        Some(token.expose()),
+                        json!({"client_id":client_id,"project_limit":1}),
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        status::task_count_from_responses(record, &runtime, runner.as_ref())
+    }
+
     pub async fn upgrade_preflight(
         &self,
         store: &EnvironmentStore,
@@ -1345,42 +1406,7 @@ impl NativeEnvironment {
                 ));
             }
         }
-        let token = if record.request.local_server() {
-            crate::native::bootstrap_token(store)?
-        } else {
-            read_secret(&store.root().join("webcodex-user-token"))?
-        };
-        let status = self
-            .post(
-                &record.request.server_url,
-                "/api/runtime/status",
-                Some(token.expose()),
-                json!({}),
-            )
-            .await?;
-        let status = status.get("output").unwrap_or(&status);
-        let active = if record.request.local_server() {
-            status.pointer("/jobs/active_count").and_then(Value::as_u64)
-        } else if let Some(client_id) = &record.runner_client_id {
-            let token = read_secret(&store.root().join("webcodex-user-token"))?;
-            let runner = self
-                .post(
-                    &record.request.server_url,
-                    "/api/runtime-console/runner",
-                    Some(token.expose()),
-                    json!({"client_id":client_id,"project_limit":1}),
-                )
-                .await?;
-            runner.get("active_jobs").and_then(Value::as_u64)
-        } else {
-            Some(0)
-        }
-        .ok_or_else(|| {
-            error(
-                "upgrade_tasks_unknown",
-                "Active task state is unavailable; an idle environment cannot be assumed",
-            )
-        })?;
+        let active = self.upgrade_task_count_for_record(store, &record).await?;
         if active != 0 {
             diagnostics.push(error(
                 "upgrade_active_tasks",
@@ -1400,7 +1426,7 @@ impl NativeEnvironment {
         store: &EnvironmentStore,
         candidate_dir: &Path,
     ) -> SetupResultValue<UpgradePreflight> {
-        self.upgrade_prepare_with_options(store, candidate_dir, false)
+        self.upgrade_prepare_with_options(store, candidate_dir, false, None)
             .await
     }
     pub async fn upgrade_prepare_development(
@@ -1408,7 +1434,18 @@ impl NativeEnvironment {
         store: &EnvironmentStore,
         candidate_dir: &Path,
     ) -> SetupResultValue<UpgradePreflight> {
-        self.upgrade_prepare_with_options(store, candidate_dir, true)
+        self.upgrade_prepare_with_options(store, candidate_dir, true, None)
+            .await
+    }
+    /// Prepare only the environment/candidate/operation selected by the caller.
+    /// The identity is checked under the same lock as preparation effects.
+    pub async fn upgrade_prepare_guarded(
+        &self,
+        store: &EnvironmentStore,
+        candidate_dir: &Path,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<UpgradePreflight> {
+        self.upgrade_prepare_with_options(store, candidate_dir, false, Some(target))
             .await
     }
     async fn upgrade_prepare_with_options(
@@ -1416,15 +1453,41 @@ impl NativeEnvironment {
         store: &EnvironmentStore,
         candidate_dir: &Path,
         development_build: bool,
+        target: Option<&UpgradeTarget>,
     ) -> SetupResultValue<UpgradePreflight> {
         let lock = store.lock()?;
+        let previous: Option<UpgradeJournal> = if target.is_some() {
+            store.read_json("upgrade.json")?
+        } else {
+            None
+        };
+        if let Some(target) = target {
+            status::validate_target_under_lock(
+                store,
+                target,
+                previous.as_ref(),
+                Some(&target.manifest_sha256),
+            )?;
+        }
         let mut candidate = verify_upgrade_candidate(candidate_dir)?;
+        if let Some(target) = target {
+            status::validate_target_under_lock(
+                store,
+                target,
+                previous.as_ref(),
+                Some(&candidate.manifest_sha256),
+            )?;
+        }
         if !development_build {
             verify_published_provenance(&candidate).await?;
             candidate.provenance_verified = true;
         }
         verify_candidate_executables(&candidate).await?;
-        let previous: Option<UpgradeJournal> = store.read_json("upgrade.json")?;
+        let previous = if target.is_some() {
+            previous
+        } else {
+            store.read_json("upgrade.json")?
+        };
         if let Some(previous) = previous
             .as_ref()
             .filter(|journal| matches!(journal.phase, Phase::Committed | Phase::RolledBack))
@@ -1551,7 +1614,15 @@ impl NativeEnvironment {
         let prepared = self.complete_upgrade_preparation(store, &mut journal).await;
         drop(lock);
         if let Err(original) = prepared {
-            if let Err(recovery) = self.upgrade_rollback(store).await {
+            let recovery_target = UpgradeTarget {
+                environment_id: journal.record.environment_id.clone(),
+                manifest_sha256: journal.candidate.manifest_sha256.clone(),
+                operation_id: Some(journal.operation_id.clone()),
+            };
+            if let Err(recovery) = self
+                .upgrade_rollback_with_target(store, target.map(|_| &recovery_target), false)
+                .await
+            {
                 return Err(SetupDiagnostic::new(
                     "upgrade_recovery_required",
                     "Upgrade preparation failed and automatic restoration could not be verified",
@@ -1686,10 +1757,43 @@ impl NativeEnvironment {
     }
 
     pub async fn upgrade_finish(&mut self, store: &EnvironmentStore) -> SetupResultValue<()> {
+        self.upgrade_finish_with_target(store, None, false).await
+    }
+    pub async fn upgrade_finish_guarded(
+        &mut self,
+        store: &EnvironmentStore,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<()> {
+        self.upgrade_finish_with_target(store, Some(target), false)
+            .await
+    }
+    /// Headless recovery cannot prove that an installer has finished replacing
+    /// files. Only retry the lease release of an already durable commit.
+    pub async fn upgrade_finish_headless_guarded(
+        &mut self,
+        store: &EnvironmentStore,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<()> {
+        self.upgrade_finish_with_target(store, Some(target), true)
+            .await
+    }
+    async fn upgrade_finish_with_target(
+        &mut self,
+        store: &EnvironmentStore,
+        target: Option<&UpgradeTarget>,
+        headless: bool,
+    ) -> SetupResultValue<()> {
         let lock = store.lock()?;
-        let Some(mut journal): Option<UpgradeJournal> = store.read_json("upgrade.json")? else {
+        let journal: Option<UpgradeJournal> = store.read_json("upgrade.json")?;
+        if let Some(target) = target {
+            status::validate_target_under_lock(store, target, journal.as_ref(), None)?;
+        }
+        let Some(mut journal) = journal else {
             return Ok(());
         };
+        if headless && journal.phase != Phase::Committed {
+            return Err(status::manual_recovery());
+        }
         if journal.phase == Phase::Committed {
             return crate::upgrade_transport::end_maintenance(store, &journal.record).await;
         }
@@ -1707,7 +1811,10 @@ impl NativeEnvironment {
             if journal.phase == Phase::Committed {
                 return Err(original);
             }
-            return match self.upgrade_rollback(store).await {
+            return match self
+                .upgrade_rollback_with_target(store, target, false)
+                .await
+            {
                 Ok(()) => Err(original),
                 Err(recovery) => Err(SetupDiagnostic::new(
                     "upgrade_recovery_required",
@@ -1793,10 +1900,69 @@ impl NativeEnvironment {
     }
 
     pub async fn upgrade_rollback(&self, store: &EnvironmentStore) -> SetupResultValue<()> {
+        self.upgrade_rollback_with_target(store, None, false).await
+    }
+    pub async fn upgrade_rollback_guarded(
+        &self,
+        store: &EnvironmentStore,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<()> {
+        self.upgrade_rollback_with_target(store, Some(target), false)
+            .await
+    }
+    /// Initial preparation phases have not admitted a current-operation
+    /// installer receipt. Later phases require explicit installer recovery.
+    pub async fn upgrade_rollback_headless_guarded(
+        &self,
+        store: &EnvironmentStore,
+        target: &UpgradeTarget,
+    ) -> SetupResultValue<()> {
+        self.upgrade_rollback_with_target(store, Some(target), true)
+            .await
+    }
+    async fn upgrade_rollback_with_target(
+        &self,
+        store: &EnvironmentStore,
+        target: Option<&UpgradeTarget>,
+        headless: bool,
+    ) -> SetupResultValue<()> {
         let _lock = store.lock()?;
-        let Some(mut journal): Option<UpgradeJournal> = store.read_json("upgrade.json")? else {
+        let journal: Option<UpgradeJournal> = store.read_json("upgrade.json")?;
+        if let Some(target) = target {
+            status::validate_target_under_lock(store, target, journal.as_ref(), None)?;
+        }
+        let Some(mut journal) = journal else {
             return Ok(());
         };
+        if headless
+            && !matches!(
+                journal.phase,
+                Phase::Prepared | Phase::Stopping | Phase::Stopped | Phase::RolledBack
+            )
+        {
+            return Err(status::manual_recovery());
+        }
+        if headless && journal.phase != Phase::RolledBack {
+            let receipt: Option<PreparedInstallationReceipt> = store.read_json(PREPARED_RECEIPT)?;
+            if journal.replacement_started
+                || journal.rollback_from.is_some()
+                || receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.operation_id == journal.operation_id)
+                || journal
+                    .programs
+                    .iter()
+                    .any(|backup| digest(&backup.target).ok().as_deref() != Some(&backup.sha256))
+                || journal.desktop.as_ref().is_some_and(|backup| {
+                    desktop_installed_hash(&backup.target).ok().as_deref() != Some(&backup.sha256)
+                        || (!backup.directory_modes_sha256.is_empty()
+                            && desktop_directory_modes_hash(&backup.target).ok().as_deref()
+                                != Some(&backup.directory_modes_sha256))
+                })
+            {
+                return Err(status::manual_recovery());
+            }
+        }
         if journal.phase == Phase::RolledBack {
             return crate::upgrade_transport::end_maintenance(store, &journal.record).await;
         }
@@ -2803,7 +2969,7 @@ async fn verify_published_provenance(candidate: &UpgradeCandidate) -> SetupResul
 mod tests {
     use super::*;
 
-    fn fixture(root: &Path, phase: Phase) -> UpgradeJournal {
+    pub(super) fn fixture(root: &Path, phase: Phase) -> UpgradeJournal {
         let account = LocalAccount {
             name: "owner".into(),
             identity: "1000".into(),

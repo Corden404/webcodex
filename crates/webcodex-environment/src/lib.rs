@@ -42,6 +42,10 @@ mod tunnel;
 mod types;
 pub use local_status::{ComponentObservation, LocalEnvironmentStatus};
 pub use upgrade::{upgrade_observation, UpgradeObservation, UpgradeOutcome};
+pub use upgrade::{
+    upgrade_status, upgrade_status_at, UpgradeFileComponent, UpgradePhase, UpgradeServiceComponent,
+    UpgradeServiceKind, UpgradeStatus, UpgradeTarget,
+};
 pub mod unified_update;
 mod upgrade;
 pub mod upgrade_transport;

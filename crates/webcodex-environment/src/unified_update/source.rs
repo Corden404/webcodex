@@ -13,6 +13,11 @@ pub struct UpdateSource {
     components: BTreeMap<String, Component>,
 }
 impl UpdateSource {
+    pub fn component_build(&self, name: &str) -> Option<&MachineBuildInfo> {
+        self.components
+            .get(name)
+            .map(|component| &component.build_info)
+    }
     pub fn component_sha256(&self, name: &str) -> Option<&str> {
         self.components
             .get(name)

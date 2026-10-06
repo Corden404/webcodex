@@ -56,6 +56,58 @@ impl EnvironmentStore {
     pub fn root(&self) -> &Path {
         &self.root
     }
+    /// Open a saved environment for observation without creating directories.
+    pub fn open_existing(root: PathBuf) -> SetupResultValue<Option<Self>> {
+        if !root.is_absolute() {
+            return Err(SetupDiagnostic::new(
+                "state_path",
+                "Environment directory must be absolute",
+                "Select an absolute path owned by the project user",
+            ));
+        }
+        let missing = match std::fs::symlink_metadata(&root) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => return Err(SetupDiagnostic::io()),
+            Ok(_) => false,
+        };
+        for ancestor in root.ancestors() {
+            let metadata = match std::fs::symlink_metadata(ancestor) {
+                Err(error) if missing && error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(SetupDiagnostic::io()),
+                Ok(metadata) => metadata,
+            };
+            if is_link(&metadata) || !metadata.is_dir() {
+                return Err(SetupDiagnostic::io());
+            }
+        }
+        if missing {
+            return Ok(None);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::symlink_metadata(&root).map_err(|_| SetupDiagnostic::io())?;
+            if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+                return Err(SetupDiagnostic::io());
+            }
+        }
+        #[cfg(windows)]
+        validate_windows_private(&root)?;
+        Ok(Some(Self { root }))
+    }
+    /// Observe using the setup fence already installed by a mutation. Missing
+    /// or unreadable fences fail closed rather than changing the environment.
+    pub fn lock_existing(&self) -> SetupResultValue<EnvironmentLock> {
+        let file = open_existing_private(&self.root.join("setup.lock"), true)?;
+        file.try_lock_exclusive().map_err(|_| {
+            SetupDiagnostic::new(
+                "setup_busy",
+                "Another process owns environment setup",
+                "Wait for the existing setup operation to finish",
+            )
+        })?;
+        Ok(EnvironmentLock { _file: file })
+    }
     pub fn lock(&self) -> SetupResultValue<EnvironmentLock> {
         let path = self.root.join("setup.lock");
         let file = match open_private(&path, true) {

@@ -4,12 +4,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use webcodex_environment::unified_update::{InstallerTarget, PackageFormat, UpdateError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LaunchOutcome {
-    Started,
-    NotStarted(UpdateError),
-    Unknown,
-}
+use webcodex_environment::unified_update::LaunchOutcome;
 
 pub(super) fn supported(target: InstallerTarget) -> bool {
     if !target.valid() {
@@ -185,6 +180,7 @@ pub(super) async fn launch_unix(
     _: &Path,
     _: &str,
     _: &str,
+    _: InstallerTarget,
 ) -> LaunchOutcome {
     LaunchOutcome::NotStarted(UpdateError::UnsupportedPlatform)
 }
