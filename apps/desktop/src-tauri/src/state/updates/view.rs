@@ -243,8 +243,7 @@ fn loopback(url: &str) -> bool {
 }
 
 fn standalone_tunnel_service(profile: &webcodex_environment::TunnelRecord) -> bool {
-    profile.installed
-        && profile.host_mode == webcodex_environment::TunnelHostMode::Standalone
+    profile.installed && profile.host_mode == webcodex_environment::TunnelHostMode::Standalone
 }
 
 impl AppState {

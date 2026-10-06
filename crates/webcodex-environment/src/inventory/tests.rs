@@ -14,6 +14,7 @@ fn fixture(local_server: bool, runner: bool) -> (tempfile::TempDir, EnvironmentR
         projects: vec![],
         configured: true,
         request: SetupRequest {
+            runner_display_name: None,
             service_scope: crate::service::ServiceScope::User,
             mode: if local_server {
                 EnvironmentMode::Create {

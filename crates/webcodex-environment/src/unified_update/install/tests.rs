@@ -300,6 +300,7 @@ fn guarded_fixture() -> (
             server_url: "http://127.0.0.1:1".into(),
             project: None,
             runner: None,
+            runner_display_name: None,
             account: crate::current_account().unwrap(),
             binaries: crate::RuntimeBinaries {
                 cli: store.root().join("webcodex"),

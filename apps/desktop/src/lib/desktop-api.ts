@@ -103,6 +103,7 @@ export const desktopApi = {
     serverUrl?: string | null;
     projectPath?: string | null;
     runner?: boolean;
+    runnerDisplayName?: string | null;
     pairingCode?: string | null;
     userToken?: string | null;
     replacePairingCode?: boolean;

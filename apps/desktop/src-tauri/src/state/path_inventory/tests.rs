@@ -54,6 +54,7 @@ impl Fixture {
             schema_version: 1,
             environment_id: "fixture-environment".into(),
             request: SetupRequest {
+                runner_display_name: None,
                 service_scope: webcodex_environment::service::ServiceScope::User,
                 mode: if local_server {
                     EnvironmentMode::Create {

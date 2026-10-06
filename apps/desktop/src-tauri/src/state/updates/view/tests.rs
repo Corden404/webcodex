@@ -328,6 +328,7 @@ fn external_environment_changes_invalidate_the_whole_local_observation() {
             server_url: "http://127.0.0.1:8080".into(),
             project: None,
             runner: Some(true),
+            runner_display_name: None,
             account: LocalAccount {
                 name: "fixture-owner".into(),
                 identity: "fixture-owner-id".into(),

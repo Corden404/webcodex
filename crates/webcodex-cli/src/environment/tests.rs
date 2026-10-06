@@ -80,6 +80,28 @@ fn projectless_runner_is_explicit_and_does_not_change_legacy_viewer_defaults() {
     ])
     .unwrap();
     assert!(remote.runner && remote.project.is_none() && remote.code_stdin);
+    let named = input(&[
+        "configure",
+        "--create",
+        "--runner",
+        "--runner-name",
+        "My laptop",
+    ])
+    .unwrap();
+    assert_eq!(named.runner_name.as_deref(), Some("My laptop"));
+    let named_project = input(&[
+        "configure",
+        "--join",
+        "https://server.example",
+        "--project",
+        "project",
+        "--runner-name",
+        "Build runner",
+    ])
+    .unwrap();
+    assert_eq!(named_project.runner_name.as_deref(), Some("Build runner"));
+    assert!(input(&["configure", "--create", "--runner-name", "orphan"]).is_err());
+    assert!(input(&["status", "--runner-name", "orphan"]).is_err());
     assert!(
         !input(&["configure", "--create", "--no-project"])
             .unwrap()

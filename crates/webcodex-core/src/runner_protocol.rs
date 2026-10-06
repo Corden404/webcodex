@@ -3,6 +3,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// Shared registration/configuration bounds for optional Runner metadata.
+const MAX_RUNNER_FIELD_LEN: usize = 200;
+pub fn validate_optional_runner_field(value: &Option<String>, field: &str) -> Result<(), String> {
+    if let Some(value) = value {
+        if value.chars().count() > MAX_RUNNER_FIELD_LEN {
+            return Err(format!(
+                "{} is too long; maximum is {} characters",
+                field, MAX_RUNNER_FIELD_LEN
+            ));
+        }
+        if value.contains('\0') {
+            return Err(format!("{} cannot contain NUL bytes", field));
+        }
+    }
+    Ok(())
+}
+
 mod job;
 mod transport;
 

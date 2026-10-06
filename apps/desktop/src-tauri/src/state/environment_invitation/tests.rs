@@ -97,6 +97,7 @@ fn record(root: &Path, url: String, local: bool) -> EnvironmentRecord {
         schema_version: ENVIRONMENT_SCHEMA,
         environment_id: ID.into(),
         request: SetupRequest {
+            runner_display_name: None,
             service_scope: ServiceScope::System,
             mode: if local {
                 EnvironmentMode::Create {
@@ -551,6 +552,17 @@ fn setup_projection_preserves_saved_and_pending_roles_scope_and_optional_project
                 .to_string_lossy()
                 .into_owned()
         )
+    );
+    let mut named = fixture.store.load_journal().unwrap().unwrap();
+    named.environment.request.runner_display_name = Some("My laptop".into());
+    fixture.store.save_journal(&named).unwrap();
+    assert_eq!(
+        setup_snapshot_in(&fixture.store, Some(ID))
+            .unwrap()
+            .unwrap()
+            .runner_display_name
+            .as_deref(),
+        Some("My laptop")
     );
     let serialized = serde_json::to_value(&projection).unwrap();
     assert_eq!(serialized.as_object().unwrap().len(), 7);

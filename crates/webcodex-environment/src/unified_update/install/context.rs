@@ -440,6 +440,7 @@ mod tests {
                 server_url: "http://127.0.0.1:1".into(),
                 project: None,
                 runner: None,
+                runner_display_name: None,
                 account: crate::current_account().unwrap(),
                 binaries: RuntimeBinaries {
                     cli: root.join("webcodex"),
