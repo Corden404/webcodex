@@ -678,6 +678,14 @@ pub fn get_update_download_state(state: State<'_, AppState>) -> crate::updates::
 }
 
 #[tauri::command]
+pub async fn get_local_update_status(
+    inspect_files: bool,
+    state: State<'_, AppState>,
+) -> DesktopResult<crate::state::updates::LocalUpdateStatus> {
+    state.local_update_status(inspect_files).await
+}
+
+#[tauri::command]
 pub async fn download_update(
     version: String,
     state: State<'_, AppState>,
@@ -702,10 +710,14 @@ pub async fn set_automatic_update_download(
 pub async fn install_verified_update(
     version: String,
     confirmed: bool,
+    confirmation: crate::state::updates::UpdateConfirmation,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> DesktopResult<()> {
-    if state.install_verified_update(&version, confirmed).await? {
+    if state
+        .install_verified_update(&version, confirmed, confirmation)
+        .await?
+    {
         // Only the explicit Install confirmation authorizes this exit. The
         // normal exit path closes Desktop-owned processes, not persistent services.
         app.exit(0);

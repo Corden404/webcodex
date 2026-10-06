@@ -28,25 +28,6 @@ impl UpdateManager {
         self.engine
             .request(notice, automatic, manual, installation, target);
     }
-    pub async fn install(
-        &self,
-        context: &shared::InstallContext,
-        version: &str,
-        confirmed: bool,
-    ) -> shared::UpdateResult<bool> {
-        let identity = self
-            .engine
-            .candidate_identity()?
-            .filter(|c| c.version == version)
-            .ok_or(shared::UpdateError::UpgradePreflightFailed)?;
-        let target = webcodex_environment::UpgradeTarget {
-            environment_id: context.environment_id.clone(),
-            manifest_sha256: identity.manifest_sha256.clone(),
-            operation_id: None,
-        };
-        self.install_checked(context, &identity, &target, confirmed)
-            .await
-    }
     pub async fn install_checked(
         &self,
         context: &shared::InstallContext,

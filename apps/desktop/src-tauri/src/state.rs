@@ -16,7 +16,7 @@ mod reconfiguration_tests;
 mod runner_capability_grant;
 mod runtime_shell;
 mod ssh_resources;
-mod updates;
+pub(crate) mod updates;
 mod workspace;
 mod workspace_settings;
 use crate::activity::{ActivityEventKind, ActivityLevel, ActivityLog};

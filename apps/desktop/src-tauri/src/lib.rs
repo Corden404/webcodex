@@ -81,6 +81,7 @@ pub fn run() {
             commands::get_desktop_build_info,
             commands::check_for_updates,
             commands::get_update_download_state,
+            commands::get_local_update_status,
             commands::download_update,
             commands::cancel_update_download,
             commands::set_automatic_update_download,
