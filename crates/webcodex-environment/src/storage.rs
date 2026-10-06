@@ -48,6 +48,11 @@ impl EnvironmentStore {
         ensure_private_directory(&root)?;
         Ok(Self { root })
     }
+    /// Existing metadata-only access; validates without creating or repairing state.
+    pub(crate) fn existing(root: PathBuf) -> SetupResultValue<Self> {
+        validate_existing_private_directory(&root)?;
+        Ok(Self { root })
+    }
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -103,18 +108,7 @@ impl EnvironmentStore {
 }
 
 pub(crate) fn ensure_private_directory(path: &Path) -> SetupResultValue<()> {
-    // Inspect every existing ancestor before creation; never follow a planted link.
-    for parent in path.ancestors() {
-        if let Ok(metadata) = std::fs::symlink_metadata(parent) {
-            if is_link(&metadata) || !metadata.is_dir() {
-                return Err(SetupDiagnostic::new(
-                    "unsafe_path",
-                    "Configuration path contains a link or a non-directory",
-                    "Choose a real directory owned by the project user",
-                ));
-            }
-        }
-    }
+    validate_directory_ancestors(path)?;
     let created = !path.exists();
     if created {
         let mut builder = std::fs::DirBuilder::new();
@@ -125,6 +119,38 @@ pub(crate) fn ensure_private_directory(path: &Path) -> SetupResultValue<()> {
             builder.mode(0o700);
         }
         builder.create(path).map_err(|_| SetupDiagnostic::io())?;
+    }
+    #[cfg(windows)]
+    if created {
+        secure_windows_path(path)?;
+    }
+    validate_existing_private_directory(path)
+}
+
+/// Validate without creating directories, changing ACLs, or opening write handles.
+pub(crate) fn validate_directory_ancestors(path: &Path) -> SetupResultValue<()> {
+    for parent in path.ancestors() {
+        match std::fs::symlink_metadata(parent) {
+            Ok(metadata) if is_link(&metadata) || !metadata.is_dir() => {
+                return Err(SetupDiagnostic::new(
+                    "unsafe_path",
+                    "Configuration path contains a link or a non-directory",
+                    "Choose a real directory owned by the project user",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(SetupDiagnostic::io()),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_existing_private_directory(path: &Path) -> SetupResultValue<()> {
+    validate_directory_ancestors(path)?;
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| SetupDiagnostic::io())?;
+    if !metadata.is_dir() || is_link(&metadata) {
+        return Err(SetupDiagnostic::io());
     }
     #[cfg(unix)]
     {
@@ -140,9 +166,6 @@ pub(crate) fn ensure_private_directory(path: &Path) -> SetupResultValue<()> {
     }
     #[cfg(windows)]
     {
-        if created {
-            secure_windows_path(path)?;
-        }
         validate_windows_private(path)?;
     }
     Ok(())
@@ -170,7 +193,7 @@ mod tests {
     }
 }
 
-fn is_link(metadata: &std::fs::Metadata) -> bool {
+pub(crate) fn is_link(metadata: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

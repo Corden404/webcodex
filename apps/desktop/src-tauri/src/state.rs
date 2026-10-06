@@ -7,6 +7,8 @@ pub use environment_invitation::{InvitationRequest, InvitationResponse};
 mod managed_instructions;
 mod mcp_providers;
 mod operation_completion;
+mod path_inventory;
+pub use path_inventory::{ExportInventoryRequest, OpenInventoryRequest};
 #[cfg(test)]
 mod projectless_tests;
 #[cfg(test)]

@@ -18,6 +18,8 @@ pub use embedded_tunnel::{embedded_tunnel_profiles, EmbeddedTunnelProfile};
 mod installer_authorization;
 #[cfg(unix)]
 mod installer_unix;
+pub mod inventory;
+pub use inventory::*;
 mod layout;
 #[cfg(target_os = "linux")]
 mod legacy_cli;

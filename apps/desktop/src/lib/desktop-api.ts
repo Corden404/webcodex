@@ -1,3 +1,4 @@
+import type { PathInventory, InventoryDocumentKind } from "../models/path-inventory";
 import type { MachineBuildInfo, RuntimeSettings, RuntimeSource, RuntimeSwitchRequest, RuntimeSwitchResult, DiagnosticSnapshot, DiagnosticResource, TraceUpdate, TraceSettings, UpdateStatus, UpdateDownloadStatus } from "../models/runtime-shell";
 import { invoke } from "@tauri-apps/api/core";
 import type {
@@ -28,6 +29,9 @@ export const desktopApi = {
   probeRuntime: (source: RuntimeSource) => invoke<RuntimeSettings>("probe_runtime", { source }),
   recheckRuntime: () => invoke<RuntimeSettings>("recheck_runtime"),
   switchRuntime: (request: RuntimeSwitchRequest) => invoke<RuntimeSwitchResult>("switch_runtime", { request }),
+  pathInventory: () => invoke<PathInventory>("get_path_inventory"),
+  openInventoryLocation: (entryId: string, expectedRevision: string) => invoke<void>("open_inventory_location", { request: { entry_id: entryId, expected_revision: expectedRevision } }),
+  exportInventoryDocument: (kind: InventoryDocumentKind, path: string, expectedRevision: string) => invoke<void>("export_inventory_document", { request: { kind, path, expected_revision: expectedRevision } }),
   diagnostics: () => invoke<DiagnosticSnapshot>("get_diagnostics"),
   setToolRequestTracing: (request: TraceUpdate) => invoke<TraceSettings>("set_tool_request_tracing", { request }),
   openDiagnosticResource: (kind: DiagnosticResource) => invoke<void>("open_diagnostic_resource", { kind }),

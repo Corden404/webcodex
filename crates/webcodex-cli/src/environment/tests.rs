@@ -216,3 +216,35 @@ fn legacy_server_network_inputs_are_explicit_and_scoped() {
     assert_eq!(legacy.username.as_deref(), Some("alice"));
     assert!(input(&["configure", "--create", "--listen", "0.0.0.0:8080"]).is_err());
 }
+
+#[tokio::test]
+async fn path_commands_are_read_only_and_manifest_is_explicitly_metadata_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("absent-environment");
+    for command in ["paths", "backup-manifest"] {
+        let args = vec![
+            command.to_string(),
+            "--environment-dir".into(),
+            directory.display().to_string(),
+            "--json".into(),
+        ];
+        let result = run(&args).await.unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        if command == "paths" {
+            assert_eq!(json["roots"][0]["status"], "missing");
+        } else {
+            assert_eq!(json["kind"], "manifest_only");
+            assert_eq!(json["cannot_restore"], true);
+        }
+        assert!(!directory.exists());
+    }
+    let args = vec![
+        "paths".into(),
+        "--environment-dir".into(),
+        directory.display().to_string(),
+        "--token-file".into(),
+        "private-unreadable-input".into(),
+    ];
+    assert!(run(&args).await.is_err());
+    assert!(!directory.exists());
+}

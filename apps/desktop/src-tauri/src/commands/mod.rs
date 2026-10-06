@@ -643,6 +643,29 @@ pub async fn export_support_bundle(path: String, state: State<'_, AppState>) -> 
 }
 
 #[tauri::command]
+pub async fn get_path_inventory(
+    state: State<'_, AppState>,
+) -> DesktopResult<webcodex_environment::inventory::PathInventory> {
+    state.path_inventory().await
+}
+
+#[tauri::command]
+pub async fn open_inventory_location(
+    request: crate::state::OpenInventoryRequest,
+    state: State<'_, AppState>,
+) -> DesktopResult<()> {
+    state.open_inventory_location(request).await
+}
+
+#[tauri::command]
+pub async fn export_inventory_document(
+    request: crate::state::ExportInventoryRequest,
+    state: State<'_, AppState>,
+) -> DesktopResult<()> {
+    state.export_inventory_document(request).await
+}
+
+#[tauri::command]
 pub async fn check_for_updates(
     manual: bool,
     state: State<'_, AppState>,
