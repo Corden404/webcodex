@@ -76,7 +76,7 @@ pub(super) static BUILTIN_MCP_APPS: &[BundledMcpApp] = &[
     BundledMcpApp {
         listing: Some(AppListing {
             name: "WebCodex",
-            description: "Persistent user-facing card for one client Window and Project. Present it once near the start of substantial work; the mounted App refreshes the same bounded Window ActionAudit activity used by WebUI, including observe/diagnostic actions, without creating extra cards. Workflow Session collaboration and immutable final changes are optional linked evidence that may appear later; live internal checks/review state is not the primary UI.",
+            description: "Persistent user-facing card for one client Window and Project. Present it once near the start of substantial work; the mounted App refreshes the same bounded Window ActionAudit activity used by WebUI, including observe/diagnostic actions, without creating extra cards. Changed files follow fresh workspace observations; users can pin their code snapshot for stable review. Workflow Session collaboration and immutable final changes are optional linked evidence that may appear later; live internal checks/review state is not the primary UI.",
         }),
         tools: &["present_work_result"],
         tool_title: Some("WebCodex Work Result"),
