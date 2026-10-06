@@ -40,6 +40,7 @@ pub enum UpdateBlocker {
     EnvironmentNotConfigured,
     UnsupportedInstallation,
     UnsupportedPlatform,
+    GuardedHandoffUnavailable,
     CandidateNotVerified,
     DownloadRequired,
     PendingInstall,
@@ -216,10 +217,17 @@ impl UpdateManager {
                 })
                 .unwrap_or_default(),
         );
+        let guarded_handoff_available = candidate.as_ref().is_none_or(|(identity, source)| {
+            identity.target.format != PackageFormat::Exe
+                || source.supports_guarded_windows_handoff()
+        });
         let candidate = candidate.map(|(identity, _)| identity);
         let upgrade = crate::upgrade_status_at(&self.environment_root)
             .map_err(|_| UpdateError::RecoveryRequired)?;
         let mut blockers = Vec::new();
+        if !guarded_handoff_available {
+            blockers.push(UpdateBlocker::GuardedHandoffUnavailable);
+        }
         match download.installation {
             InstallationKind::Managed => {}
             InstallationKind::EnvironmentNotConfigured => {
@@ -244,7 +252,7 @@ impl UpdateManager {
                 u.environment_id != p.environment_id
                     || p.operation_id
                         .as_deref()
-                        .is_some_and(|op| op != u.operation_id)
+                        .is_none_or(|op| op != u.operation_id)
             })
         }) || download.error_kind == Some(UpdateError::RecoveryRequired)
         {

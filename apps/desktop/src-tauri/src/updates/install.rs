@@ -64,11 +64,18 @@ impl shared::LaunchAdapter for NativeLaunchAdapter {
             }
             #[cfg(windows)]
             {
+                let Some(handoff) = request.windows_handoff else {
+                    return shared::LaunchOutcome::NotStarted(
+                        shared::UpdateError::GuardedHandoffUnavailable,
+                    );
+                };
                 native::launch_windows(
                     request.installer,
                     request.installer_sha256,
                     request.environment_root,
+                    handoff,
                 )
+                .await
             }
             #[cfg(not(any(unix, windows)))]
             {

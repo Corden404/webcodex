@@ -15,9 +15,10 @@ use crate::{
     upgrade_observation, EnvironmentStore, UpgradeObservation, UpgradeOutcome, UpgradeTarget,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchOutcome {
     Started,
+    StartedWithOperation(String),
     NotStarted(UpdateError),
     Unknown,
 }
@@ -34,6 +35,7 @@ pub struct LaunchRequest<'a> {
     pub target: unified::InstallerTarget,
     pub installer_sha256: &'a str,
     pub environment_root: &'a std::path::Path,
+    pub windows_handoff: Option<&'a super::WindowsHandoff>,
 }
 pub trait LaunchAdapter: Send + Sync {
     fn supported(&self, target: unified::InstallerTarget) -> bool;
@@ -185,12 +187,23 @@ impl UpdateManager {
                 return Err(UpdateError::UpgradePreflightFailed);
             }
             self.remember_pending(cache, context)?;
-            let prepared = backend
-                .upgrade_prepare_guarded(&store, &candidate, target_identity)
-                .await;
-            if !prepared.is_ok_and(|ready| ready.ready) {
-                self.restore_unlaunched(cache, &store).await?;
-                return Err(UpdateError::UpgradePreflightFailed);
+            let (prepared, prepared_receipt) = backend
+                .upgrade_prepare_guarded_with_receipt(&store, &candidate, target_identity)
+                .await
+                .map_err(|_| UpdateError::RecoveryRequired)?;
+            if !prepared.ready {
+                return Err(UpdateError::RecoveryRequired);
+            }
+            // Bind the operation returned by this preparing invocation before
+            // observing the journal again. A later same-candidate operation
+            // must never become this launch's operation.
+            self.change(|record| {
+                if let Some(pending) = &mut record.pending {
+                    pending.operation_id = Some(prepared_receipt.operation_id.clone());
+                }
+            });
+            if self.persist(cache).is_err() {
+                return Err(UpdateError::RecoveryRequired);
             }
             let observed = upgrade_observation(&store)
                 .map_err(|_| UpdateError::RecoveryRequired)?
@@ -199,15 +212,6 @@ impl UpdateManager {
                 || observed.outcome != UpgradeOutcome::Pending
             {
                 return Err(UpdateError::RecoveryRequired);
-            }
-            self.change(|record| {
-                if let Some(pending) = &mut record.pending {
-                    pending.operation_id = Some(observed.operation_id.clone());
-                }
-            });
-            if self.persist(cache).is_err() {
-                self.restore_unlaunched(cache, &store).await?;
-                return Err(UpdateError::CacheUnavailable);
             }
             let receipt = store.root().join("upgrade-prepared.json");
             let outcome = adapter
@@ -221,6 +225,7 @@ impl UpdateManager {
                     target,
                     installer_sha256: &entry.sha256,
                     environment_root: store.root(),
+                    windows_handoff: None,
                 })
                 .await;
             match outcome {
@@ -229,7 +234,9 @@ impl UpdateManager {
                     self.restore_unlaunched(cache, &store).await?;
                     Err(error)
                 }
-                LaunchOutcome::Unknown => Err(UpdateError::RecoveryRequired),
+                LaunchOutcome::Unknown | LaunchOutcome::StartedWithOperation(_) => {
+                    Err(UpdateError::RecoveryRequired)
+                }
             }
         }
         #[cfg(windows)]
@@ -237,6 +244,10 @@ impl UpdateManager {
             // The verified *outer* NSIS bootstrap owns canonical extraction,
             // preflight/prepare, inner package invocation, finish and rollback.
             // Desktop must not duplicate a weaker preflight from the bare .exe.
+            if !release.source.supports_guarded_windows_handoff() {
+                return Err(UpdateError::GuardedHandoffUnavailable);
+            }
+            let handoff = super::WindowsHandoff::create(&target_cache, target_identity)?;
             self.remember_pending(cache, context)?;
             let receipt = store.root().join("upgrade-prepared.json");
             match adapter
@@ -250,10 +261,21 @@ impl UpdateManager {
                     target,
                     installer_sha256: &entry.sha256,
                     environment_root: store.root(),
+                    windows_handoff: Some(&handoff),
                 })
                 .await
             {
-                LaunchOutcome::Started => self.handed_off(cache),
+                LaunchOutcome::StartedWithOperation(operation_id) => {
+                    self.change(|state| {
+                        if let Some(pending) = &mut state.pending {
+                            pending.operation_id = Some(operation_id.clone());
+                        }
+                    });
+                    self.persist(cache)?;
+                    handoff.accept_prepared(&operation_id)?;
+                    self.handed_off(cache)
+                }
+                LaunchOutcome::Started => Err(UpdateError::RecoveryRequired),
                 LaunchOutcome::NotStarted(error) => {
                     self.change(|state| state.pending = None);
                     self.persist(cache)?;
@@ -568,7 +590,10 @@ fn reconcile(
     let Some(observed) = observed else {
         return Reconciliation::RecoveryRequired;
     };
-    if observed.environment_id != pending.environment_id || !matches_target(record, observed) {
+    if pending.operation_id.is_none()
+        || observed.environment_id != pending.environment_id
+        || !matches_target(record, observed)
+    {
         return Reconciliation::RecoveryRequired;
     }
     let at_least_target = record.version.as_deref().is_some_and(|target| {

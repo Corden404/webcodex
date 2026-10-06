@@ -9,6 +9,7 @@ pub mod discovery;
 mod download;
 mod install;
 mod view;
+mod windows_handoff;
 pub use cancellation::CancellationSignal;
 pub use desktop_data_dir::{default_desktop_data_dir, DESKTOP_DATA_DIR_ENV};
 pub use discovery::{
@@ -23,6 +24,9 @@ pub use install::{
     LaunchAdapter, LaunchOutcome, LaunchRequest,
 };
 pub use view::*;
+pub use windows_handoff::{WindowsHandoff, WINDOWS_GUARDED_HANDOFF_VERSION};
+/// Raw, additive CLI build-info attestation for its same-source Windows outer bootstrap.
+pub const WINDOWS_GUARDED_BOOTSTRAP_BUILD_INFO_FIELD: &str = "windows_guarded_bootstrap_contract";
 pub const CHECK_INTERVAL_MS: u64 = 24 * 60 * 60 * 1000;
 pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -72,6 +76,7 @@ pub enum UpdateError {
     UpgradePreflightFailed,
     AuthorizationRequired,
     InstallerLaunchFailed,
+    GuardedHandoffUnavailable,
     UpgradeRolledBack,
     RecoveryRequired,
 }

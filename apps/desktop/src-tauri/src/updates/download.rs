@@ -63,6 +63,11 @@ impl UpdateManager {
                 &super::install::NativeLaunchAdapter,
             )
             .await
-            .map(|outcome| outcome == shared::LaunchOutcome::Started)
+            .map(|outcome| {
+                matches!(
+                    outcome,
+                    shared::LaunchOutcome::Started | shared::LaunchOutcome::StartedWithOperation(_)
+                )
+            })
     }
 }

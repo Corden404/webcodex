@@ -165,6 +165,18 @@ async fn stale_guarded_targets_have_no_journal_or_receipt_effects() {
         );
         assert_eq!(
             backend
+                .upgrade_prepare_guarded_with_receipt(
+                    &store,
+                    Path::new("/absent-candidate"),
+                    &stale
+                )
+                .await
+                .unwrap_err()
+                .code,
+            "upgrade_target_changed"
+        );
+        assert_eq!(
+            backend
                 .upgrade_finish_guarded(&store, &stale)
                 .await
                 .unwrap_err()
