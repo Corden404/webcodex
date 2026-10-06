@@ -2736,7 +2736,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Err(error) => {
-                eprintln!("{error}");
+                if args.first().map(String::as_str) == Some("update")
+                    && args.iter().any(|arg| arg == "--json")
+                {
+                    // Public headless status has one bounded JSON document on
+                    // stdout; sudo and authorization prompts use the terminal.
+                    println!("{error}");
+                } else {
+                    eprintln!("{error}");
+                }
                 std::process::exit(1);
             }
         },
