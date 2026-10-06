@@ -80,6 +80,7 @@ mod patch;
 mod patch_tools;
 pub(crate) mod peer_collaboration;
 pub(crate) mod permissions;
+mod presentation;
 mod process;
 mod project_build;
 mod project_resolution;
@@ -218,5 +219,6 @@ pub(crate) use surface::registered_tool_categories;
 #[cfg(test)]
 mod tests;
 
+mod edit_outcome;
 mod execution_outcome;
 mod external_observations;
