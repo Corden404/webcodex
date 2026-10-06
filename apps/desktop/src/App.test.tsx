@@ -8,6 +8,10 @@ const workspace = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: workspace.invoke, isTauri: () => false }));
 
 const api = vi.hoisted(() => ({
+  shellRestoreOnly: vi.fn(),
+  shellBootstrapComplete: vi.fn(),
+  readDesktopNavigation: vi.fn(),
+  acknowledgeDesktopNavigation: vi.fn(),
   getState: vi.fn(),
   computerPermissions: vi.fn(),
   requestComputerPermission: vi.fn(),
@@ -233,6 +237,10 @@ async function editTunnel() {
 
 beforeEach(() => {
     vi.resetAllMocks();
+    api.shellRestoreOnly.mockResolvedValue(false);
+    api.shellBootstrapComplete.mockResolvedValue(undefined);
+    api.readDesktopNavigation.mockResolvedValue(null);
+    api.acknowledgeDesktopNavigation.mockResolvedValue(undefined);
     window.localStorage.removeItem("webcodex.desktop.appearance.v1");
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-appearance");
@@ -274,6 +282,48 @@ beforeEach(() => {
     api.stopRegularTunnel.mockResolvedValue(readyState);
     api.tunnelProfileAction.mockResolvedValue(readyState);
     api.saveTunnelProfile.mockResolvedValue(readyState);
+  });
+
+  it.each([false, true])("recreated UI restores state and pending page without resuming (runtime autostart=%s)", async (runtimeAutostart) => {
+    api.shellRestoreOnly.mockResolvedValue(true);
+    api.getState.mockResolvedValue({
+      ...readyState,
+      runtime_autostart: runtimeAutostart,
+      // Exercise the original connection-autostart eligibility, not a profile
+      // already marked started by the default fixture.
+      connections: connectionSnapshot(connectionFixture({
+        lifecycle: "stopped", ready: false, pid: null, health: "unknown",
+        process_started: false, process_ready: false, tunnel_ready: false,
+      })),
+    });
+    api.readDesktopNavigation.mockResolvedValueOnce({ sequence: 8, target: "settings" });
+    renderApp();
+    await waitFor(() => expect(api.acknowledgeDesktopNavigation).toHaveBeenCalledWith(8));
+    expect(await screen.findByRole("heading", { level: 1, name: "Desktop 设置" })).toBeInTheDocument();
+    await waitFor(() => expect(api.shellRestoreOnly).toHaveBeenCalled());
+    expect(api.resumeSavedRuntime).not.toHaveBeenCalled();
+    expect(api.resumeSavedConnections).not.toHaveBeenCalled();
+  });
+
+  it("does not enable lightweight until one-time Runtime autostart settles", async () => {
+    const resumed = deferred<DesktopState>();
+    api.getState.mockResolvedValue({ ...readyState, runtime_autostart: true });
+    api.resumeSavedRuntime.mockReturnValueOnce(resumed.promise);
+    renderApp();
+    await waitFor(() => expect(api.resumeSavedRuntime).toHaveBeenCalledTimes(1));
+    expect(api.shellBootstrapComplete).not.toHaveBeenCalled();
+    resumed.resolve(readyState);
+    await waitFor(() => expect(api.shellBootstrapComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it("recreated persistent Environment skips eager refresh and only observes existing state", async () => {
+    api.shellRestoreOnly.mockResolvedValue(true);
+    api.getState.mockResolvedValue({ ...readyState, persistent_environment: "env-a" });
+    renderApp();
+    await screen.findByRole("heading", { level: 1, name: "工作概览" });
+    await waitFor(() => expect(api.shellRestoreOnly).toHaveBeenCalledTimes(1));
+    expect(api.refresh).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.shellBootstrapComplete).toHaveBeenCalledTimes(1));
   });
 
   it("offers explicit persistent local and remote setup from Runtime settings", async () => {
@@ -789,11 +839,13 @@ beforeEach(() => {
     await screen.findByRole("heading", { level: 1, name: "工作概览" });
     await waitFor(() => expect(tauriEvents.handler).not.toBeNull());
 
+    api.readDesktopNavigation.mockResolvedValueOnce({ sequence: 1, target: "settings" });
     act(() => {
       tauriEvents.handler?.({ payload: "settings" });
     });
     expect(await screen.findByRole("heading", { level: 1, name: "Desktop 设置" })).toBeInTheDocument();
 
+    api.readDesktopNavigation.mockResolvedValueOnce({ sequence: 2, target: "activity" });
     act(() => {
       tauriEvents.handler?.({ payload: "activity" });
     });
