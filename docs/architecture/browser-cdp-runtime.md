@@ -186,6 +186,20 @@ URLs, profile paths, PIDs and native node identities remain Runner-private.
 The owned Chromium process tree is spawned through `webcodex-process::ManagedChild`.
 Manual close, idle/lifetime reaping, and Runner shutdown use bounded process-tree
 termination/reaping only for owned instances; external attachments only detach.
+Each Supervisor owns one low-frequency cleanup worker shared by its clones. It
+checks idle and absolute lifetime expiry every 60 seconds even without subsequent
+Browser requests. A busy operation mutex skips that tick; the next tick checks
+current activity under the same mutex before removing expired identities. Backend
+cleanup runs after releasing the mutex, using the existing ownership-specific
+shutdown path and bounded budget. Opportunistic expiry checks remain in place.
+Shutdown admission wakes the worker without waiting for Browser I/O. Final shutdown
+waits for in-flight cleanup only until its deadline and retains the worker's ownership
+if cleanup is still running. The shutdown report includes removed runtimes, completed
+cleanup failures, and pending cleanup as timeouts; fixed-size counters retain late
+failures without retaining a cleanup history. Remaining cleanup skips graceful work
+once shutdown begins. The final Supervisor owner also stops and joins the worker;
+its idle wait never retains Browser state. An unavailable or exited worker rejects
+launch/attachment before acquiring a Browser runtime.
 Runner restart invalidates all opaque Browser identities. Managed profile data
 survives, but no old Browser/page/element identity is recovered or reused.
 
