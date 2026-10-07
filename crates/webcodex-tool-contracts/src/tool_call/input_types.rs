@@ -762,6 +762,11 @@ pub enum BrowserObserveToolCall {
         #[schemars(range(min = 1, max = 32))]
         #[serde(default)]
         max_depth: Option<u32>,
+        /// Skip this many post-filter semantic nodes before returning the bounded window.
+        /// Each window is a fresh snapshot and therefore stales element ids from prior windows.
+        #[schemars(range(min = 0, max = 4096))]
+        #[serde(default)]
+        node_offset: Option<usize>,
     },
     Console {
         #[schemars(length(min = 1, max = 128))]
