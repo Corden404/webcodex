@@ -929,8 +929,37 @@ async fn e2a_js_error_after_job_handoff_preserves_effect_receipt_and_no_retry_cl
         .unwrap();
 }
 
+#[test]
+fn e2a_cpu_timeout_after_child_dispatch_preserves_started_job_truth() {
+    // The 300ms deadline includes the process-global execution-slot wait. Run
+    // this positive post-handoff case without competing cells so it cannot
+    // expire before the child dispatch that its assertions require.
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args([
+        "--exact",
+        "tool_runtime::tests::code_mode::e2a_cpu_timeout_after_child_dispatch_fixture",
+        "--ignored",
+        "--nocapture",
+    ]);
+    let (code, stdout, stderr, _, timed_out) =
+        crate::tool_runtime::helpers::run_test_command_with_timeout(command, None, 45);
+    assert!(
+        !timed_out,
+        "isolated timeout fixture stalled: {stdout}\n{stderr}"
+    );
+    assert_eq!(
+        code, 0,
+        "isolated timeout fixture failed: {stdout}\n{stderr}"
+    );
+    assert!(
+        stdout.contains("1 passed; 0 failed"),
+        "the exact timeout fixture must execute: {stdout}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn e2a_cpu_timeout_after_child_dispatch_preserves_started_job_truth() {
+#[ignore = "run by the parent regression in an isolated process"]
+async fn e2a_cpu_timeout_after_child_dispatch_fixture() {
     let client_id = "code-mode-e2a-timeout-after-child";
     let (runtime, project, session_id) = e2a_validation_runtime(client_id).await;
     let task = spawn_code_mode_call(
@@ -939,16 +968,14 @@ async fn e2a_cpu_timeout_after_child_dispatch_preserves_started_job_truth() {
         project,
         session_id,
         r#"
-        const child = tools.cargo_check({timeout_secs: 600});
+        const child = await tools.cargo_check({timeout_secs: 600});
         while (true) {}
         "#
         .to_string(),
         300,
     );
-    // This case intentionally burns a CPU-time budget after starting the child.
-    // Under a heavily parallel full suite, that CPU budget can span more than
-    // the generic 10-second wall-clock readiness fence. Widen only this positive
-    // dispatch wait; the production timeout contract remains unchanged.
+    // Await the canonical Job handoff before entering the CPU loop. An unawaited
+    // child may still be awaiting dispatch when the frontend deadline cancels it.
     let (request, job_id) = super::validation_handoff::poll_start_validation_job_with_timeout(
         &runtime,
         client_id,
