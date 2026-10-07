@@ -1,4 +1,8 @@
-import { createFillBatch, reconcileFill, type Attention } from "./fill-batch.js";
+import { createFillBatch, fieldSatisfied, reconcileFill, type Attention, type FillAction } from "./fill-batch.js";
+import { choiceGroupKey, planChoiceGroup } from "./choice-controls.js";
+import { resolveUploadLocation } from "./upload-source.js";
+import { resolveChoicePath } from "./location-values.js";
+import { dateForControl } from "./widget-values.js";
 import {
   definePlugin,
   errorResult,
@@ -8,7 +12,8 @@ import {
   textResult,
 } from "@yyjeqhc/webcodex-plugin-sdk";
 import {
-  choiceMatches,
+  choiceState,
+  isChoiceControl,
   formStructureSignature,
   isResumeUpload,
   matchField,
@@ -96,9 +101,11 @@ const recognizedSchema = schema.object({
   element_id: schema.string({ maxLength: 160 }),
   current_value: schema.string({ maxLength: 4096 }),
   proposed_value: schema.string({ maxLength: 4096 }),
+  desired_state: schema.optional(schema.boolean()),
+  choice_value: schema.optional(schema.string({ maxLength: 500 })),
   confidence: schema.number(),
   support: schema.string({
-    enum: ["input_text", "select_option", "set_value", "upload_file", "click", "manual_review"] as const,
+    enum: ["input_text", "select_option", "set_value", "select_choice", "set_date", "upload_file", "click", "manual_review"] as const,
   }),
 });
 
@@ -148,18 +155,25 @@ const flowActionSchema = schema.object({
 type FillSupport =
   | "input_text"
   | "select_option"
+  | "select_choice"
+  | "set_date"
   | "set_value"
   | "upload_file"
   | "click"
   | "manual_review";
 
-function supportFor(node: SnapshotNode): FillSupport {
+function supportFor(node: SnapshotNode, field: CanonicalField): FillSupport {
   const role = node.role.toLowerCase();
   if (node.actions?.includes("upload_file") === true || isResumeUpload(node)) {
     return "upload_file";
   }
+  if (node.form_context?.dom_tag.toLowerCase() === "input"
+    && ["date", "month", "datetime-local"].includes(node.form_context?.input_type?.toLowerCase() ?? "")
+    && node.actions?.includes("set_value")) return "set_value";
+  if (field.endsWith("_date") && node.actions?.includes("set_date")) return "set_date";
+  if (node.actions?.includes("select_choice") && node.form_context?.dom_tag.toLowerCase() !== "select") return "select_choice";
+  if (role === "combobox" || role === "listbox") return node.form_context?.dom_tag.toLowerCase() === "select" ? "select_option" : "manual_review";
   if (node.actions?.includes("set_value")) return "set_value";
-  if (role === "combobox" || role === "listbox") return "select_option";
   if (role === "datetime" || role === "date" || role === "time") return "set_value";
   if (role === "textbox" || role === "searchbox" || role === "spinbutton") return "input_text";
   return "manual_review";
@@ -221,6 +235,8 @@ function analyzeNodes(
     proposed_value: string;
     confidence: number;
     support: FillSupport;
+    desired_state?: boolean;
+    choice_value?: string;
   }> = [];
   const blockers: Array<{
     mapping_id: string;
@@ -274,7 +290,9 @@ function analyzeNodes(
     );
   }
 
-  for (const { node, mapping, mapping_id } of resolved.nodes) {
+  const processedChoiceGroups = new Set<string>();
+  for (const entry of resolved.nodes) {
+    const { node, mapping, mapping_id } = entry;
     const role = node.role.toLowerCase();
     const label =
       node.group_label ||
@@ -284,9 +302,19 @@ function analyzeNodes(
       node.form_context?.section_label ||
       node.description ||
       "";
-    const resolvedValue = mapping
+    let resolvedValue = mapping
       ? resolveResumeValue(resume, mapping.resumePath)
       : { found: false, value: "" };
+
+    if (mapping && node.actions?.includes("select_choice") && !resolvedValue.value.trim()) {
+      const derived = resolveChoicePath(resume, mapping.canonicalField, mapping.resumePath, resolvedValue.value, node);
+      if (derived.path) resolvedValue = { found: true, value: derived.path.join(" / ") };
+    }
+    if (mapping && Buffer.byteLength(resolvedValue.value) > 4096) {
+      blockers.push({ mapping_id, label, role: node.role, element_id: node.element_id ?? "",
+        reason: "Mapped value exceeds the bounded field value; teach or select a narrower resume path." });
+      continue;
+    }
 
     if (mapping && (!resolvedValue.found || resolvedValue.value.trim().length === 0)) {
       const existing = missingProfileFields.get(mapping.resumePath);
@@ -315,29 +343,29 @@ function analyzeNodes(
       continue;
     }
 
-    if (
-      (
-        mapping?.source === "group" ||
-        mapping?.source === "form_context" ||
-        mapping?.source === "hint"
-      ) &&
-      (role === "radio" || role === "checkbox")
-    ) {
-      const desired = resolvedValue.value;
-      const observedChoice = mapping.choiceValue ?? node.name;
-      if (choiceMatches(observedChoice, desired)) {
-        const checked = node.checked === "true" || node.selected === true;
+    if (mapping && isChoiceControl(node)) {
+      const mapped = { ...entry, mapping };
+      const groupKey = choiceGroupKey(mapped);
+      if (processedChoiceGroups.has(groupKey)) continue;
+      processedChoiceGroups.add(groupKey);
+      const decision = planChoiceGroup(mapped, resolved.nodes, resolvedValue.value);
+      if (decision.reason) blockers.push({
+        mapping_id, label, role: node.role, element_id: node.element_id ?? "",
+        reason: decision.reason,
+      });
+      for (const target of decision.targets) {
         recognized.push({
-          mapping_id,
-          canonical_field: mapping.canonicalField,
-          resume_path: mapping.resumePath,
-          label: node.group_label || label || observedChoice,
-          role: node.role,
-          element_id: node.element_id ?? "",
-          current_value: checked ? desired : "",
-          proposed_value: desired,
-          confidence: Math.min(1, mapping.confidence + 0.01),
+          mapping_id: target.mapping_id,
+          canonical_field: target.mapping.canonicalField,
+          resume_path: target.mapping.resumePath,
+          label: target.node.group_label || label,
+          role: target.node.role,
+          element_id: target.node.element_id ?? "",
+          current_value: choiceState(target.node) === target.desired_state ? resolvedValue.value : "",
+          proposed_value: resolvedValue.value,
+          confidence: target.mapping.confidence,
           support: "click",
+          desired_state: target.desired_state,
         });
       }
       continue;
@@ -398,7 +426,7 @@ function analyzeNodes(
       });
       if (
         unmappedUpload ||
-        !["button", "link", "option", "radio", "checkbox"].includes(role)
+        !["button", "link"].includes(role)
       ) {
         blockers.push({
           mapping_id,
@@ -413,7 +441,7 @@ function analyzeNodes(
       continue;
     }
 
-    const support = supportFor(node);
+    const support = supportFor(node, mapping.canonicalField);
     recognized.push({
       mapping_id,
       canonical_field: mapping.canonicalField,
@@ -425,6 +453,7 @@ function analyzeNodes(
       proposed_value: resolvedValue.value,
       confidence: mapping.confidence,
       support,
+      ...(mapping.choiceValue === undefined ? {} : { choice_value: mapping.choiceValue }),
     });
     if (support === "manual_review") {
       blockers.push({
@@ -522,11 +551,14 @@ const batchSchema = schema.object({
   browser_id: scopeProperties.browser_id,
   page_id: scopeProperties.page_id,
   operations: schema.array(schema.object({
-    action: schema.string({ enum: ["input_text", "select_option", "set_value"] as const }),
+    action: schema.string({ enum: ["input_text", "select_option", "set_value", "select_choice", "set_date", "click", "upload_file"] as const }),
     element_id: schema.string({ maxLength: 160 }),
     text: schema.optional(schema.string({ maxLength: 4096 })),
     option: schema.optional(schema.string({ maxLength: 4096 })),
     value: schema.optional(schema.string({ maxLength: 4096 })),
+    project: schema.optional(schema.string({ maxLength: 512 })),
+    path: schema.optional(schema.string({ maxLength: 4096 })),
+    choice_path: schema.optional(schema.array(schema.string({ minLength: 1, maxLength: 4096 }), { minItems: 1, maxItems: 4 })),
   }), { minItems: 1, maxItems: 32 }),
 });
 const attentionSchema = schema.array(schema.object({
@@ -543,9 +575,14 @@ const fillResultProperties = {
 };
 const planFill = defineTool({
   name: "plan_fill",
-  description: "Plan one executable Browser batch from a fresh semantic query (prefer query.fields_only=true, optionally section/group; up to 256 nodes). Copy batch unchanged into control_browser; 1..32 admitted native field operations, no per-field calls. Then take ONE fresh query and pass it with the batch receipt to reconcile_fill. plan_id keeps expectations only in bounded provider memory for 15 minutes; restart/expiry requires fresh planning, never replay. Deferred fields continue after reconciliation. Uncertain/custom controls stay in needs_attention. Full snapshots can also propose one section-expansion or next-step click; each requires fresh observation. No Browser effects or final submission.",
+  description: "Plan one executable Browser batch from a fresh semantic query (prefer query.fields_only=true, optionally section/group; up to 256 nodes). Copy batch unchanged into control_browser; 1..32 admitted text/select/choice/upload operations, no per-field calls. Uploads require explicit upload_source.project; provide project_root when the profile resume path is absolute or home-relative. Browser independently authorizes this Project/path. Choice toggles require known checked/selected state and never click group wrappers. Then take ONE fresh query and pass it with the batch receipt to reconcile_fill. plan_id keeps expectations only in bounded provider memory for 15 minutes; restart/expiry requires fresh planning, never replay. Deferred fields continue after reconciliation. Admitted custom choices use one select_choice operation with choice_path (1..4 exact labels). Location paths use their own province/city/district facts; preferred-location alternatives are not hierarchy levels. Admitted custom dates use one set_date operation with canonical YYYY-MM or YYYY-MM-DD; native date/month inputs keep set_value. Native fields run first. Widgets default to one operation per batch; widget_batch_limit=2..8 is for a form with verified stable sibling authority. The same limit continues across fresh reconciliation; never replay uncertain batches. Unsupported or ambiguous controls stay in needs_attention. Full snapshots can also propose one section-expansion or next-step click; each requires fresh observation. No Browser effects or final submission.",
   inputSchema: schema.object({
     ...scopeProperties,
+    widget_batch_limit: schema.optional(schema.integer({ enum: [1, 2, 3, 4, 5, 6, 7, 8] })),
+    upload_source: schema.optional(schema.object({
+      project: schema.string({ minLength: 1, maxLength: 512 }),
+      project_root: schema.optional(schema.string({ maxLength: 4096 })),
+    })),
     title: schema.string({ maxLength: 1000 }),
     nodes: schema.array(nodeSchema, { maxItems: 256 }),
     mapping_hints: schema.optional(schema.array(mappingHintSchema, { maxItems: 256 })),
@@ -558,7 +595,7 @@ const planFill = defineTool({
     review_reason: schema.optional(schema.string({ maxLength: 500 })),
   }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  async execute({ title, nodes: rawNodes, mapping_hints, ...scope }) {
+  async execute({ title, nodes: rawNodes, mapping_hints, upload_source, widget_batch_limit, ...scope }) {
     const nodes = rawNodes.map(node => ({ ...node, name: node.name ?? "" }));
     const { url } = scope;
     const resume = loadResumeProfile();
@@ -575,32 +612,48 @@ const planFill = defineTool({
     if (sectionExpansion) return textResult("Expand once, then observe the changed section.", {
       phase: "expand_sections", section_actions: [sectionExpansion] as SectionExpansionAction[], needs_attention: [] as Attention[],
     });
-    const actions = analysis.recognized
-      .map((item) => ({
-        ...item,
-        proposed_value: adaptValue(site_kind, item.canonical_field, item.proposed_value),
-      }))
-      .filter((item) => {
-        const expectedFileName = item.proposed_value.split(/[\\/]/).pop() ?? item.proposed_value;
-        const alreadySatisfied =
-          item.current_value === item.proposed_value ||
-          (item.support === "upload_file" && item.current_value === expectedFileName);
-        return (
-          item.support !== "manual_review" &&
-          item.proposed_value.length > 0 &&
-          !alreadySatisfied
-        );
-      })
-      .map((item) => ({
-        mapping_id: item.mapping_id,
-        kind: item.support,
-        label: item.label,
-        element_id: item.element_id,
-        value: item.proposed_value,
-        confidence: item.confidence,
-      }));
+    const blockers: Attention[] = analysis.blockers.map(item => ({
+      mapping_id: item.mapping_id, label: item.label, status: "unresolved", reason: item.reason,
+    }));
+    const actions: FillAction[] = [];
+    for (const item of analysis.recognized) {
+      if (item.support === "manual_review") continue;
+      const matching = nodes.filter(node => node.element_id === item.element_id);
+      const node = matching.length === 1 ? matching[0] : undefined;
+      let value = adaptValue(site_kind, item.canonical_field, item.proposed_value);
+      let choice_path: string[] | undefined;
+      if (item.support === "select_choice" && node) {
+        const choice = resolveChoicePath(resume, item.canonical_field, item.resume_path, value, node, item.choice_value);
+        if (choice.reason !== undefined) {
+          blockers.push({ mapping_id: item.mapping_id, label: item.label, status: "unresolved", reason: choice.reason });
+          continue;
+        }
+        choice_path = choice.path;
+        value = choice_path.join(" / ");
+      }
+      if (node && (item.support === "set_date" || item.support === "set_value"
+        && ["date", "month", "datetime-local"].includes(node.form_context?.input_type?.toLowerCase() ?? ""))) {
+        const date = dateForControl(value, node);
+        if (!date) {
+          blockers.push({ mapping_id: item.mapping_id, label: item.label, status: "unresolved",
+            reason: "Date needs a valid year-first calendar value with the control's required precision; a missing day is never invented." });
+          continue;
+        }
+        value = date;
+      }
+      const upload = item.support === "upload_file" ? resolveUploadLocation(value, upload_source) : undefined;
+      const action: FillAction = {
+        mapping_id: item.mapping_id, kind: item.support, label: item.label,
+        element_id: item.element_id, value, confidence: item.confidence,
+        ...(item.desired_state === undefined ? {} : { desired_state: item.desired_state }),
+        ...(upload ? { upload } : {}),
+        ...(choice_path ? { choice_path } : {}),
+      };
+      if (node && fieldSatisfied(action, node)) continue;
+      actions.push(action);
+    }
 
-    if (!actions.length && !analysis.blockers.length) {
+    if (!actions.length && !blockers.length) {
       if (flow.review_required) return textResult("Review required; never submit automatically.", {
         phase: "ready_for_review", review_reason: flow.review_reason, needs_attention: [] as Attention[],
       });
@@ -608,9 +661,7 @@ const planFill = defineTool({
         phase: "advance_step", flow_actions: [flow.advance] as FlowAction[], needs_attention: [] as Attention[],
       });
     }
-    const result = createFillBatch(scope, nodes, actions, analysis.blockers.map(item => ({
-      mapping_id: item.mapping_id, label: item.label, status: "unresolved" as const, reason: item.reason,
-    })));
+    const result = createFillBatch(scope, nodes, actions, blockers, widget_batch_limit);
     return textResult("Execute batch once, then fresh semantic readback → reconcile_fill.", {
       phase: "fill_fields", ...result,
     });
