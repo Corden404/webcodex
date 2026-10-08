@@ -197,6 +197,7 @@ fn aggregate_local_projection_enforces_a_cap_including_adapter_fields() {
             schema_version: 1,
             download: Default::default(),
             installed: vec![],
+            installed_target: None,
             candidate: None,
             candidate_components: vec![],
             upgrade: None,

@@ -58,8 +58,9 @@ pub use storage::{default_environment_dir, EnvironmentLock, EnvironmentStore};
 pub use types::*;
 
 pub use installer_authorization::{
-    authorize_prepared_installation, cancel_installer_authorization,
-    verify_installer_authorization, verify_installer_targets,
+    authorize_prepared_installation, authorize_prepared_installation_for_target,
+    cancel_installer_authorization, verify_installer_authorization,
+    verify_installer_package_target, verify_installer_targets,
 };
 #[cfg(unix)]
 pub use installer_unix::{finish_authorized_installation, run_installer_upgrade_child};

@@ -342,6 +342,28 @@ async fn guarded_handoff_rejects_missing_owner_and_unacknowledged_followups_with
 }
 
 #[tokio::test]
+async fn same_package_verification_rejects_an_invalid_installer_target_before_candidate_access() {
+    let temp = tempfile::tempdir().unwrap();
+    let candidate = temp.path().join("absent-candidate");
+    let runtime = temp.path().join("absent-runtime");
+    let args = vec![
+        "installer-verify-same".to_owned(),
+        "--candidate-dir".into(),
+        candidate.display().to_string(),
+        "--expected-runtime-dir".into(),
+        runtime.display().to_string(),
+        "--installer-target".into(),
+        "invalid-target".into(),
+    ];
+    assert_eq!(
+        run(&args).await.unwrap_err(),
+        "Invalid installer package target"
+    );
+    assert!(!candidate.exists());
+    assert!(!runtime.exists());
+}
+
+#[tokio::test]
 async fn path_commands_are_read_only_and_manifest_is_explicitly_metadata_only() {
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().join("absent-environment");
@@ -371,4 +393,151 @@ async fn path_commands_are_read_only_and_manifest_is_explicitly_metadata_only() 
     ];
     assert!(run(&args).await.is_err());
     assert!(!directory.exists());
+}
+
+#[tokio::test]
+async fn invalid_package_target_is_rejected_before_authorization_and_does_not_echo_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("absent");
+    let args = vec![
+        "installer-authorize".into(),
+        "--candidate-dir".into(),
+        root.to_string_lossy().into_owned(),
+        "--upgrade-receipt".into(),
+        root.join("receipt.json").to_string_lossy().into_owned(),
+        "--installer-target".into(),
+        "secret-canary".into(),
+        "--json".into(),
+    ];
+    let output = run(&args).await.unwrap_err();
+    assert!(!output.contains("secret-canary"));
+    assert!(!root.exists());
+}
+
+// Run the public adapter in an isolated child so cache/config overrides never
+// mutate process-global state or inherit the invoking terminal.
+fn public_environment_fixture(test_name: &str) -> Option<PathBuf> {
+    const FIXTURE_ROOT: &str = "WEBCODEX_PUBLIC_ENVIRONMENT_TEST_ROOT";
+    if let Some(root) = std::env::var_os(FIXTURE_ROOT) {
+        return Some(root.into());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child
+        .args(["--exact", test_name, "--nocapture"])
+        .stdin(std::process::Stdio::null())
+        .env(FIXTURE_ROOT, directory.path())
+        .env(
+            "WEBCODEX_DESKTOP_DATA_DIR",
+            directory.path().join("absent-update-cache"),
+        );
+    for (name, leaf) in [
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_DATA_HOME", "data"),
+        ("XDG_STATE_HOME", "state"),
+        ("XDG_CACHE_HOME", "cache"),
+    ] {
+        child.env(name, directory.path().join(leaf));
+    }
+    let output = child.output().unwrap();
+    assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+    assert!(
+        output.status.success(),
+        "isolated public entry fixture failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    None
+}
+
+#[tokio::test]
+async fn public_environment_entry_help_has_newlines_and_delegates_update_help() {
+    let Some(root) = public_environment_fixture(
+        "environment::tests::public_environment_entry_help_has_newlines_and_delegates_update_help",
+    ) else {
+        return;
+    };
+    let help = run(&["--help".into()]).await.unwrap();
+    assert!(help.starts_with("webcodex environment <COMMAND>\n\n"));
+    assert!(!help.contains("\\n"));
+    let update_help = run(&["update".into(), "--help".into()]).await.unwrap();
+    assert!(update_help.starts_with("webcodex environment update <COMMAND>\n\n"));
+    assert!(update_help.contains("apply --version VERSION --yes"));
+    assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn public_environment_entry_update_status_is_bounded_and_read_only_when_absent() {
+    let Some(root) = public_environment_fixture(
+        "environment::tests::public_environment_entry_update_status_is_bounded_and_read_only_when_absent",
+    ) else {
+        return;
+    };
+    let environment = root.join("absent-environment");
+    let output = run(&[
+        "update".into(),
+        "status".into(),
+        "--json".into(),
+        "--environment-dir".into(),
+        environment.to_string_lossy().into_owned(),
+    ])
+    .await
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["ok"], true);
+    assert!(value["environment_id"].is_null());
+    assert_eq!(value["headless_apply_supported"], false);
+    assert!(output.len() <= unified_update::MAX_UPDATE_VIEW_BYTES);
+    assert!(!output.contains(root.to_str().unwrap()));
+    assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn public_environment_entry_update_effects_reject_non_tty_before_store_access() {
+    let Some(root) = public_environment_fixture(
+        "environment::tests::public_environment_entry_update_effects_reject_non_tty_before_store_access",
+    ) else {
+        return;
+    };
+    for (command, option, target) in [
+        ("apply", "--version", "1.2.3"),
+        (
+            "resume",
+            "--operation-id",
+            "11111111-1111-4111-8111-111111111111",
+        ),
+        (
+            "rollback",
+            "--operation-id",
+            "11111111-1111-4111-8111-111111111111",
+        ),
+    ] {
+        let output = run(&[
+            "update".into(),
+            command.into(),
+            option.into(),
+            target.into(),
+            "--yes".into(),
+            "--json".into(),
+            "--environment-dir".into(),
+            root.join("absent-environment")
+                .to_string_lossy()
+                .into_owned(),
+        ])
+        .await
+        .unwrap_err();
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["ok"], false);
+        assert_eq!(
+            value["error_kind"],
+            if cfg!(target_os = "linux") {
+                "interactive_terminal_required"
+            } else {
+                "headless_platform_not_supported"
+            }
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    }
 }
