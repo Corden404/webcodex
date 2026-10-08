@@ -4,10 +4,11 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { JSDOM } from 'jsdom';
 
-const source = name => readFileSync(new URL(`../src/mcp-apps/work-result/${name}.mjs`, import.meta.url), 'utf8')
-  .replace(/^import .*;\n/gm, '').replace('export function createPreview', 'function createPreview');
-const previewSource = source('pdf-continuous-preview');
-const documentSource = source('pdf-document');
+function source(name, lineEnding) {
+  let value = readFileSync(new URL(`../src/mcp-apps/work-result/${name}.mjs`, import.meta.url), 'utf8');
+  if (lineEnding) value = value.replace(/\r?\n/g, lineEnding);
+  return value.replace(/^import .*;\r?\n/gm, '').replace('export function createPreview', 'function createPreview');
+}
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function deferred() {
   let resolve, reject;
@@ -100,6 +101,8 @@ function reader(options = {}) {
   } };
   context.parent = parent;
   const deliver = data => listeners.get('message')({ source: parent, data: { jsonrpc: '2.0', ...data } });
+  const previewSource = source('pdf-continuous-preview', options.sourceLineEnding);
+  const documentSource = source('pdf-document', options.sourceLineEnding);
   runInNewContext(`(() => { ${previewSource}\nglobalThis.createPreview = createPreview; })();\n${documentSource}`, context);
   return {
     dom, document, host, timers, workers, documents, observers,
@@ -129,6 +132,17 @@ function reader(options = {}) {
 }
 const failure = 'PDF unavailable: page paint failed';
 const rejectedPaint = () => ({ promise: Promise.reject(new Error('page paint failed')) });
+
+for (const [name, sourceLineEnding] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+  test(`reader lifecycle loads ${name} source files`, async () => {
+    const view = reader({ sourceLineEnding });
+    try {
+      await view.present();
+      assert.match(view.status(), /^PDF · 3 pages/);
+      assert.ok(view.page(1).querySelector('canvas').width > 0);
+    } finally { await view.close(); view.dom.window.close(); }
+  });
+}
 
 for (const action of ['Next', 'Zoom in', 'resize', 'completion']) {
   test(`page render failure survives ${action} without hiding Retry`, async () => {
