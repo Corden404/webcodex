@@ -784,10 +784,11 @@ const WebCodexSpreadsheet = (() => {
     el('viewport').setAttribute('aria-colcount', String(current.columns));
     el('spacer').style.width = gutter + current.columns * columnWidth + 'px';
     el('spacer').style.height = Math.max(1, current.rows * rowHeight) + 'px';
+    // Selection content can change the document scrollbar and viewport width.
+    select(position?.selected[0] ?? 0, position?.selected[1] ?? 0, false);
     // Size first, then clamp explicitly: old virtual cells may still overflow the spacer.
     viewport.scrollTop = Math.min(position?.top ?? 0, Math.max(0, current.rows * rowHeight - viewport.clientHeight));
     viewport.scrollLeft = Math.min(position?.left ?? 0, Math.max(0, gutter + current.columns * columnWidth - viewport.clientWidth));
-    select(position?.selected[0] ?? 0, position?.selected[1] ?? 0, false);
     scheduleRender();
   }
   function select(row, column, reveal) {

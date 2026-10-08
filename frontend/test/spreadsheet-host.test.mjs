@@ -337,6 +337,28 @@ test('restored scroll is clamped to the target sheet before stale virtual cells 
   await view.teardown();
 });
 
+test('restoring scroll measures the viewport after selected content changes its width', async () => {
+  const view = reader(); await view.initialize();
+  const longValue = 'long selected value\n'.repeat(12);
+  // Long selection text can add an outer document scrollbar in a bounded Host.
+  Object.defineProperty(view.nodes.viewport, 'clientWidth', {
+    get: () => view.nodes.value.textContent === longValue ? 706 : 721,
+  });
+  await openPositionWorkbook(view, 'content-width', { sheets: [
+    { name: 'Long', firstRow: 0, firstColumn: 0, rows: 100, columns: 12, cells: [[0, 0, 'long', longValue, false]] },
+    { name: 'Short', firstRow: 0, firstColumn: 0, rows: 100, columns: 12, cells: [] },
+  ] });
+  await moveViewport(view, 0, 10000);
+  assertPosition(view, 'A1', 0, 1066);
+  await switchSheet(view, 1);
+  assert.equal(view.nodes.viewport.clientWidth, 721);
+  await switchSheet(view, 0);
+  assert.equal(view.nodes.viewport.clientWidth, 706);
+  assertPosition(view, 'A1', 0, 1066);
+  assert.equal(view.nodes.cells.querySelector('[aria-selected="true"]'), null);
+  await view.teardown();
+});
+
 test('private identity and segment metadata survive Host wrappers and normalized meta fields', async () => {
   const wrappers = [value => value, value => ({ result: value }), value => ({ toolResult: value }),
     value => ({ tool_result: value }), value => ({ ...value, meta: value._meta, _meta: undefined })];
