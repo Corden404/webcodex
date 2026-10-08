@@ -3,9 +3,10 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use webcodex_environment::*;
 
+mod cloudflare;
 mod update;
 
-const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--host embedded|standalone] [--credentials-file PATH]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH [--installer-target TARGET]\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure only).\n--runner enables local work without requiring an initial project.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nTunnel credentials use hidden input or a protected JSON file with tunnel_id and api_key.\nRuntime Join: configure --join URL --runner --no-project (hidden terminal pairing input, or --code-stdin).\nJoining starts only this machine’s Runner; it never creates or starts the central Server.\n";
+const USAGE: &str = "webcodex environment <COMMAND>\n\nconfigure [--create | --join URL] [--runner] [--runner-name NAME] [--project PATH | --no-project]\n          [--scope user|system]\n          [--code-stdin | --token-file PATH] [--new-pairing-code]\nresume    [--code-stdin] [--new-pairing-code] [--token-file PATH]\ninvite\nadd-project PATH [--code-stdin] [--new-pairing-code]\nremove-project PROJECT_ID\nstatus|doctor\npaths|backup-manifest (read-only metadata; no files or restore)\nstart|stop|restart <server|runner|tunnel> [--profile PROFILE]\nrepair-credential runner\nrepair-user-credential [--token-file PATH]\nuninstall-service <server|runner|tunnel> [--profile PROFILE]\nconfigure-tunnel [PROFILE] [--provider openai|cloudflare_named|cloudflare_quick]\n                 [--host embedded|standalone] [--name NAME] [--autostart true|false]\n                 [--expected-revision N] [--credentials-file PATH | --token-file PATH]\n                 [--public-origin HTTPS_ORIGIN --tunnel-id ID] [--ingress-port PORT]\ncloudflare-status|cloudflare-start|cloudflare-stop PROFILE\ncloudflare-oauth PROFILE --redirect-uri URL [--scopes JSON_ARRAY] [--replace]\ntunnel-status [PROFILE]\ntunnel-host PROFILE --host embedded|standalone\nremove-tunnel [PROFILE] [--expected-revision N]\nupdate status|check|download|apply|resume|rollback (use update --help)\nupgrade-preflight|upgrade-prepare --candidate-dir PATH [--development-build]\nupgrade-finish|upgrade-rollback\ninstaller-authorize --upgrade-receipt PATH --candidate-dir PATH\ninstaller-apply --upgrade-receipt PATH --candidate-dir PATH --installer-file PATH --installer-target TARGET (OS authorization required)\ninstaller-verify --candidate-dir PATH [--installer-target TARGET]\ninstaller-verify-same --candidate-dir PATH --expected-runtime-dir PATH [--installer-target TARGET]\ninstaller-classify --expected-runtime-dir PATH (Windows)\npackage-upgrade-preflight|package-upgrade-prepare|package-upgrade-verify --candidate-dir PATH --expected-runtime-dir PATH (Windows)\npackage-upgrade-finish|package-upgrade-rollback --expected-runtime-dir PATH (Windows)\ninstaller-finish|installer-cancel\n\nPublic environment commands accept --json and --environment-dir PATH.\nInstaller finalization uses only the fixed owner authorization.\nAdvanced: --bin-dir PATH (configure only).\n--runner enables local work without requiring an initial project.\nNew environments default to user services; saved environments retain their manager.\nUser scope: Linux systemd user manager (linger-dependent), macOS login LaunchAgent, Windows signed-in user task.\nSystem scope: boot services with explicit OS authorization; no automatic fallback.\nSame-machine creation issues separate local credentials automatically, without pairing input.\nViewer-only uses a user credential; pairing codes are only for Runner machines.\nOpenAI credentials use hidden input or protected JSON with tunnel_id and api_key.\nNamed Cloudflare uses protected JSON with tunnel_id, public_origin and token, or --token-file plus identity/origin options. Quick Tunnel takes no credentials or saved origin.\nNew Cloudflare profiles default to embedded Server ownership; OpenAI retains its standalone default.\nExisting Cloudflare edits require --expected-revision. Separate Cloudflare services must be selected for startup before installation; stop and uninstall before deselecting them.\nCloudflare OAuth configuration returns a newly issued client secret once; repeat configuration retains the existing secret. Use --replace explicitly to recover a lost secret or change the callback; replacement revokes the previous client authorization.\nRuntime Join: configure --join URL --runner --no-project (hidden terminal pairing input, or --code-stdin).\nJoining starts only this machine’s Runner; it never creates or starts the central Server.\n";
 #[derive(Default)]
 struct Input {
     command: String,
@@ -28,6 +29,16 @@ struct Input {
     credentials_file: Option<PathBuf>,
     profile: Option<String>,
     tunnel_host: Option<TunnelHostMode>,
+    tunnel_provider: Option<crate::ServerTunnelProvider>,
+    public_origin: Option<String>,
+    tunnel_id: Option<String>,
+    name: Option<String>,
+    autostart: Option<bool>,
+    expected_revision: Option<u64>,
+    ingress_port: Option<u16>,
+    redirect_uri: Option<String>,
+    scopes: Option<Vec<String>>,
+    replace: bool,
     upgrade_receipt: Option<PathBuf>,
     installer_file: Option<PathBuf>,
     installer_target: Option<String>,
@@ -68,6 +79,42 @@ fn parse(args: &[String]) -> Result<Input, String> {
             "--token-file" => input.token_file = Some(PathBuf::from(value(&mut iter)?)),
             "--credentials-file" => input.credentials_file = Some(PathBuf::from(value(&mut iter)?)),
             "--profile" => input.profile = Some(value(&mut iter)?),
+            "--provider" => {
+                input.tunnel_provider =
+                    Some(crate::ServerTunnelProvider::parse(&value(&mut iter)?)?)
+            }
+            "--public-origin" => input.public_origin = Some(value(&mut iter)?),
+            "--tunnel-id" => input.tunnel_id = Some(value(&mut iter)?),
+            "--name" => input.name = Some(value(&mut iter)?),
+            "--autostart" => {
+                input.autostart = Some(
+                    value(&mut iter)?
+                        .parse()
+                        .map_err(|_| "--autostart must be true or false")?,
+                )
+            }
+            "--expected-revision" => {
+                input.expected_revision = Some(
+                    value(&mut iter)?
+                        .parse()
+                        .map_err(|_| "--expected-revision must be a positive integer")?,
+                )
+            }
+            "--ingress-port" => {
+                input.ingress_port = Some(
+                    value(&mut iter)?
+                        .parse()
+                        .map_err(|_| "--ingress-port must be a nonzero port number")?,
+                )
+            }
+            "--redirect-uri" => input.redirect_uri = Some(value(&mut iter)?),
+            "--replace" => input.replace = true,
+            "--scopes" => {
+                input.scopes = Some(
+                    serde_json::from_str(&value(&mut iter)?)
+                        .map_err(|_| "--scopes must be a JSON string array")?,
+                )
+            }
             "--host" => {
                 input.tunnel_host = Some(match value(&mut iter)?.as_str() {
                     "embedded" => TunnelHostMode::Embedded,
@@ -143,6 +190,7 @@ fn parse(args: &[String]) -> Result<Input, String> {
     if input.credentials_file.is_some() && input.command != "configure-tunnel" {
         return Err("--credentials-file applies only to configure-tunnel".into());
     }
+    cloudflare::validate_input(&input)?;
     if input.upgrade_target_file.is_some() {
         if !matches!(
             input.command.as_str(),
@@ -817,7 +865,56 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             }
             let status = if component == service::Component::Tunnel {
                 let profile = input.profile.as_deref().unwrap_or("default");
-                if operation == ServiceOperation::Start {
+                let environment_id = store
+                    .load_environment()
+                    .map_err(|error| error.to_string())?
+                    .ok_or("No saved environment is available")?
+                    .environment_id;
+                let saved = tunnel_profiles(&store)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .find(|entry| entry.profile_id == profile);
+                if saved
+                    .as_ref()
+                    .is_some_and(|entry| entry.provider != TunnelProvider::Openai)
+                {
+                    if input.expected_revision.is_some_and(|revision| saved.as_ref().is_none_or(|entry| entry.revision != revision)) {
+                        return Err("The Cloudflare profile changed; reload it before controlling its service".into());
+                    }
+                    if saved
+                        .as_ref()
+                        .is_some_and(|entry| entry.host_mode == TunnelHostMode::Embedded)
+                        && matches!(operation, ServiceOperation::Start | ServiceOperation::Stop)
+                    {
+                        return cloudflare::run_profile_action(
+                            &store,
+                            &core.backend,
+                            profile,
+                            if operation == ServiceOperation::Start {
+                                "start"
+                            } else {
+                                "stop"
+                            },
+                            input.expected_revision,
+                            input.json,
+                        )
+                        .await;
+                    }
+                    let observed = cloudflare_tunnel_profile(&store, profile)
+                        .map_err(|error| error.to_string())?;
+                    if saved.as_ref().is_none_or(|entry| {
+                        entry.revision != observed.revision
+                            || entry.provider != observed.provider
+                            || entry.host_mode != observed.host_mode
+                            || entry.effective_configuration_id().as_deref()
+                                != Some(observed.configuration_id.as_str())
+                    }) {
+                        return Err("The Cloudflare profile changed; reload it before controlling its service".into());
+                    }
+                    core.backend
+                        .control_cloudflare_tunnel(&store, &environment_id, &observed, operation)
+                        .await
+                } else if operation == ServiceOperation::Start {
                     core.backend.configure_tunnel(&store, profile, None).await
                 } else {
                     core.backend
@@ -837,8 +934,15 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 Ok(format!("{}: running={:?}", status.id, status.running))
             }
         }
+        "cloudflare-status" | "cloudflare-start" | "cloudflare-stop" | "cloudflare-oauth" => {
+            cloudflare::run_control(&store, &core.backend, &input).await
+        }
         "configure-tunnel" => {
             let profile = input.operand.as_deref().unwrap_or("default");
+            if cloudflare::selected_provider(&store, &input)? != crate::ServerTunnelProvider::Openai
+            {
+                return cloudflare::configure(&store, &core.backend, &input).await;
+            }
             let profiles = tunnel_profiles(&store).map_err(|e| e.to_string())?;
             let existing = profiles.iter().find(|entry| entry.profile_id == profile);
             let credentials = if let Some(path) = input.credentials_file {
@@ -864,10 +968,10 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
                 .configure_tunnel_profile(
                     &store,
                     profile,
-                    None,
+                    input.name.as_deref(),
                     host_mode,
-                    None,
-                    None,
+                    input.autostart,
+                    input.expected_revision,
                     credentials.as_ref(),
                     host_mode == TunnelHostMode::Standalone,
                 )
@@ -924,6 +1028,24 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
             }
         }
         "tunnel-status" => {
+            let profile = input.operand.as_deref().unwrap_or("default");
+            if tunnel_profiles(&store)
+                .map_err(|error| error.to_string())?
+                .iter()
+                .any(|entry| {
+                    entry.profile_id == profile && entry.provider != TunnelProvider::Openai
+                })
+            {
+                return cloudflare::run_profile_action(
+                    &store,
+                    &core.backend,
+                    profile,
+                    "status",
+                    input.expected_revision,
+                    input.json,
+                )
+                .await;
+            }
             let status = core
                 .backend
                 .tunnel_status(&store, input.operand.as_deref().unwrap_or("default"))
@@ -947,7 +1069,11 @@ async fn run_inner(args: &[String]) -> Result<String, String> {
         }
         "remove-tunnel" => {
             core.backend
-                .remove_tunnel(&store, input.operand.as_deref().unwrap_or("default"))
+                .remove_tunnel_at_revision(
+                    &store,
+                    input.operand.as_deref().unwrap_or("default"),
+                    input.expected_revision,
+                )
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(if input.json {

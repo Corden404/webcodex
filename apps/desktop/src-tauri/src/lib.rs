@@ -146,6 +146,7 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             commands::authorize_runner_capabilities,
             commands::runner_capability_authorization,
             commands::tunnel_profile_action,
+            commands::cloudflare_connection,
             commands::inspect_project,
             commands::inspect_project_access,
             commands::configure_local_setup,

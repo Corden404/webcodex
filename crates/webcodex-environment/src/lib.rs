@@ -12,6 +12,13 @@ fn test_tempdir() -> std::io::Result<tempfile::TempDir> {
     tempfile::tempdir()
 }
 
+mod cloudflare_tunnel;
+pub use cloudflare_tunnel::{
+    cloudflare_ingress_port, cloudflare_tunnel_profile, cloudflare_tunnel_profiles,
+    load_cloudflare_server_ingress_port, load_cloudflare_server_materializations,
+    load_cloudflare_tunnel_materialization, materialize_cloudflare_tunnel_profiles,
+    CloudflareTunnelProfileRequest, CloudflareTunnelRuntimeProfile, TunnelProvider,
+};
 mod embedded_tunnel;
 mod engine;
 pub use embedded_tunnel::{embedded_tunnel_profiles, EmbeddedTunnelProfile};
