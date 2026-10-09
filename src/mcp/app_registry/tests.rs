@@ -7,8 +7,8 @@ fn bundled_app_registry_has_unique_exact_identities_and_stable_discovery() {
         "ui://webcodex/pdf/v6",
         "ui://webcodex/spreadsheet/v1",
         "ui://webcodex/computer/v12",
-        "ui://webcodex/workbench/v2",
-        "ui://webcodex/work-result/v30",
+        "ui://webcodex/workbench/v3",
+        "ui://webcodex/work-result/v31",
         "ui://webcodex/goal-plan/v7",
         "ui://webcodex/agent-continuation/v18",
         "ui://webcodex/job-terminal-continuation/v2",
@@ -46,6 +46,8 @@ fn bundled_app_registry_has_unique_exact_identities_and_stable_discovery() {
         "ui://webcodex/computer/v11",
         "ui://webcodex/changes/v3",
         "ui://webcodex/workbench/v1",
+        "ui://webcodex/workbench/v2",
+        "ui://webcodex/work-result/v30",
         "ui://webcodex/work-result/v27",
         "ui://webcodex/work-result/v26",
         "ui://webcodex/work-result/v25",
@@ -156,7 +158,7 @@ fn bundled_app_registry_keeps_resource_csp_display_modes_and_cache_policy_separa
             assert_eq!(contents[0]["_meta"]["ui"], expected["ui"]);
             if matches!(
                 app.uri,
-                MCP_WORKBENCH_UI_RESOURCE_URI
+                MCP_WORK_RESULT_UI_RESOURCE_URI
                     | MCP_DOCX_UI_RESOURCE_URI
                     | MCP_SPREADSHEET_UI_RESOURCE_URI
             ) {
@@ -166,7 +168,10 @@ fn bundled_app_registry_keeps_resource_csp_display_modes_and_cache_policy_separa
                         "availableDisplayModes": ["inline", "fullscreen"], "preferredDisplayMode": "inline",
                     })
                 );
-            } else if app.uri == MCP_PDF_UI_RESOURCE_URI {
+            } else if matches!(
+                app.uri,
+                MCP_PDF_UI_RESOURCE_URI | MCP_WORKBENCH_UI_RESOURCE_URI
+            ) {
                 assert_eq!(
                     contents[0]["_meta"]["openai/ui"],
                     json!({"availableDisplayModes": ["fullscreen", "inline"], "preferredDisplayMode": "fullscreen"})
@@ -210,7 +215,7 @@ fn bundled_app_registry_metadata_preserves_existing_descriptor_fields() {
         if app.uri == MCP_WORKBENCH_UI_RESOURCE_URI {
             assert_eq!(
                 descriptor["_meta"]["openai/ui"],
-                json!({"entrypoints":[{"type":"global"},{"type":"thread"}]})
+                json!({"entrypoints":[{"type":"global"}]})
             );
         } else {
             assert!(descriptor["_meta"].get("openai/ui").is_none());

@@ -74,6 +74,68 @@ function threadResult(state, selectedSession = null) {
   return result;
 }
 
+function emptyThreadResult() {
+  const result = toolResult({ work_result: null });
+  result._meta = { "webcodex/workResultThread": { empty: true, session_id: null } };
+  return result;
+}
+
+for (const resultFirst of [false, true]) test(`first-open thread is an empty panel without inferred identity (result-first=${resultFirst})`, async () => {
+  const view = app("mcp_work_result_app.html");
+  if (!resultFirst) view.toolInput({});
+  view.notification("ui/notifications/tool-result", emptyThreadResult());
+  if (resultFirst) view.toolInput({});
+  await view.initialize();
+  assert.equal(view.nodes.emptyState.hidden, false);
+  assert.equal(view.nodes.viewTabs.hidden, true);
+  assert.equal(view.nodes.workResultContent.hidden, true);
+  assert.equal(view.nodes.refresh.disabled, true);
+  assert.match(view.nodes.status.textContent, /Waiting for a work result/);
+  await view.fireTimers(10000);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+  assert.equal(view.calls("list_sessions").length, 0);
+  view.notification("ui/notifications/tool-result", threadResult(baseState, session_id));
+  assert.equal(view.nodes.emptyState.hidden, true);
+  assert.equal(view.nodes.workResultContent.hidden, false);
+  assert.equal(view.nodes.viewTabs.hidden, false);
+  assert.equal(view.nodes.refresh.disabled, false);
+});
+
+test("empty thread can initialize from the private result fallback", async () => {
+  const view = app("mcp_work_result_app.html");
+  const result = emptyThreadResult();
+  result._meta["webcodex/workResult"] = result.structuredContent;
+  delete result.structuredContent;
+  view.notification("ui/notifications/tool-result", result);
+  await view.initialize();
+  assert.equal(view.nodes.emptyState.hidden, false);
+  assert.equal(view.calls("get_work_result_state").length, 0);
+});
+
+test("a mounted result cannot be erased by an empty thread result", async () => {
+  const view = app("mcp_work_result_app.html");
+  view.toolInput({});
+  view.notification("ui/notifications/tool-result", threadResult(baseState, session_id));
+  await view.initialize();
+  view.notification("ui/notifications/tool-result", emptyThreadResult());
+  assert.equal(view.nodes.emptyState.hidden, true);
+  assert.equal(view.nodes.refresh.disabled, true);
+  assert.match(view.nodes.status.textContent, /unavailable/);
+});
+
+for (const context of [undefined, { empty: true, session_id }, { empty: true, session_id: null, project }]) {
+  test(`malformed empty context fails closed: ${JSON.stringify(context)}`, async () => {
+    const view = app("mcp_work_result_app.html");
+    const result = emptyThreadResult();
+    result._meta["webcodex/workResultThread"] = context;
+    view.notification("ui/notifications/tool-result", result);
+    await view.initialize();
+    assert.equal(view.nodes.emptyState.hidden, true);
+    assert.equal(view.calls("get_work_result_state").length, 0);
+    assert.equal(view.nodes.refresh.disabled, true);
+  });
+}
+
 for (const resultFirst of [false, true]) test(`thread initialization preserves the explicit Session on refresh (result-first=${resultFirst})`, async () => {
   const view = app("mcp_work_result_app.html");
   if (!resultFirst) view.toolInput({});
