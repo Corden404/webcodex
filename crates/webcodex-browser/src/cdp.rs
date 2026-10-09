@@ -1273,14 +1273,29 @@ impl BrowserBackend for CdpBackend {
     fn navigate(&mut self, target_id: &str, url: &str) -> BrowserResult<()> {
         self.ensure_event_collector(target_id)?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
-        self.page_call_until(
+        let result = self.page_call_until(
             target_id,
             "Page.navigate",
             json!({ "url": url }),
             true,
             deadline,
-        )
-        .map(|_| ())
+        )?;
+        if let Some(reason) = result
+            .get("errorText")
+            .and_then(Value::as_str)
+            .filter(|reason| !reason.is_empty())
+        {
+            // The command completed, but navigation failed after dispatch. This
+            // does not prove no effects occurred, including when isDownload is
+            // true: a download may have started even though navigation failed.
+            return Err(BrowserError::observed(
+                "navigation_failed",
+                format!("Browser navigation failed: {}", clip_bytes(reason, 256)),
+                Some("snapshot"),
+            ));
+        }
+        // Preserve accepted navigations (including downloads) without errorText.
+        Ok(())
     }
 
     fn reload(&mut self, target_id: &str) -> BrowserResult<()> {
