@@ -48,12 +48,12 @@ function event() {
 }
 function fixture() {
   const calls = [], sent = [], tabs = new Map([[7, {id:7, windowId:9, title:'Signed in', url:'https://example.test/account'}]]);
-  let activeTab = 7, nextTab = 8, attachHook = null, getHook = null, commandHook = null, detachHook = null;
+  let activeTab = 7, nextTab = 8, attachHook = null, getHook = null, queryHook = null, readyHook = null, commandHook = null, detachHook = null;
   const port = {onMessage:event(), onDisconnect:event(), postMessage(value) { sent.push(value); }, disconnect() { calls.push(['disconnect']); }};
   const chrome = {
-    runtime:{id:ID, onMessage:event(), connectNative(host) { assert.equal(host, 'com.webcodex.browser_bridge'); queueMicrotask(() => port.onMessage.emit({kind:'ready',version:1})); return port; }},
+    runtime:{id:ID, onMessage:event(), connectNative(host) { assert.equal(host, 'com.webcodex.browser_bridge'); queueMicrotask(() => { if(readyHook) readyHook(port); else port.onMessage.emit({kind:'ready',version:1}); }); return port; }},
     windows:{async get(id) { assert.equal(id,9); return {id, left:40, top:60, width:800, height:600}; }},
-    tabs:{onRemoved:event(), async query() { return [tabs.get(activeTab)]; }, async get(id) { if(getHook) await getHook(); if (!tabs.has(id)) throw Error('missing'); return tabs.get(id); },
+    tabs:{onRemoved:event(), async query() { if(queryHook) await queryHook(); return [tabs.get(activeTab)]; }, async get(id) { if(getHook) await getHook(); if (!tabs.has(id)) throw Error('missing'); return tabs.get(id); },
       async create(options) { const tab={id:nextTab++,windowId:options.windowId,url:options.url,title:'New'};tabs.set(tab.id,tab);calls.push(['create',tab.id]);return tab; },
       async remove(id) { calls.push(['remove',id]);tabs.delete(id);chrome.tabs.onRemoved.emit(id); }},
     debugger:{onEvent:event(),onDetach:event(),async attach(debuggee) { calls.push(['attach',debuggee.tabId]);if(attachHook) await attachHook(); },
@@ -68,7 +68,7 @@ function fixture() {
   };
   const request=action => new Promise(resolve => chrome.runtime.onMessage.listeners[0]({action},{id:ID},resolve));
   const share=() => request('share');
-  return {calls,sent,tabs,chrome,port,context,command,share,setActiveTab(id){activeTab=id;},revoke:()=>request('revoke'),setCommandHook(fn){commandHook=fn;},setDetachHook(fn){detachHook=fn;},setGetHook(fn){getHook=fn;},setAttachHook(fn){attachHook=fn;},async cleanup(){await vm.runInContext('disconnect()',context);}};
+  return {calls,sent,tabs,chrome,port,context,command,share,status:()=>request('status'),setActiveTab(id){activeTab=id;},revoke:()=>request('revoke'),setCommandHook(fn){commandHook=fn;},setDetachHook(fn){detachHook=fn;},setGetHook(fn){getHook=fn;},setQueryHook(fn){queryHook=fn;},setReadyHook(fn){readyHook=fn;},setAttachHook(fn){attachHook=fn;},async cleanup(){await vm.runInContext('disconnect()',context);}};
 }
 test('manifest public key fixes the exact native caller identity',()=>{
   const digest=createHash('sha256').update(Buffer.from(manifest.key,'base64')).digest('hex').slice(0,32);
@@ -136,7 +136,8 @@ test('large navigation diagnostics do not disconnect or revoke a shared tab',asy
     f.chrome.debugger.onEvent.emit({tabId:7},'Runtime.consoleAPICalled',{args:[{value:'x'.repeat(70000)}]});
     assert.equal(vm.runInContext('leases.size',f.context),1);
     assert(!f.calls.some(call=>call[0]==='disconnect'));
-    assert.equal(f.sent.at(-1).message.method,'WebCodex.eventsDiscarded');
+    assert.equal(f.sent.at(-1).message.method,'Runtime.consoleAPICalled');
+    assert.equal(f.sent.at(-1).message.params.args[0].value.length,2048);
     await f.command('Page.getFrameTree',{},'cdp','tab_7');
     assert(f.sent.at(-1).message.result);
   } finally {await f.cleanup();}
@@ -247,5 +248,123 @@ test('failed debugger attach releases reservations without detaching another deb
     await f.command('attach');
     assert.equal(vm.runInContext('leases.size + tabLease.size + attaching.size',f.context),0);
     assert(!f.calls.some(call=>call[0]==='detach'));
+  } finally {await f.cleanup();}
+});
+
+for (const method of ['Network.requestWillBeSent', 'Network.responseReceived', 'Runtime.consoleAPICalled']) {
+  test(`projects oversized unused fields for ${method} without losing evidence`, async () => {
+    const f = fixture(); try {
+      await f.share(); await f.command('attach');
+      const secret = 'private'.repeat(20000);
+      f.chrome.debugger.onEvent.emit({tabId:7}, method, {
+        requestId:'exact-id', type:'Document', timestamp:12,
+        request:{method:'GET', url:'https://example.test/', headers:{cookie:secret}, postData:secret},
+        response:{status:200, headers:{cookie:secret}},
+        args:[{value:'hello', preview:{description:secret}, objectId:secret}], stackTrace:secret
+      });
+      const event = f.sent.at(-1);
+      assert.equal(event.message.method, method);
+      assert(!JSON.stringify(event).includes('private'));
+      assert(Buffer.byteLength(JSON.stringify(event)) < 65536);
+      await f.command('Page.navigate',{url:'https://example.test/next'},'cdp','tab_7');
+      assert(f.sent.at(-1).message.result);
+      assert.equal(vm.runInContext('leases.size',f.context),1);
+    } finally { await f.cleanup(); }
+  });
+}
+
+test('popup status is read only and repeated Share is idempotent', async () => {
+  const f = fixture(); try {
+    assert.equal((await f.status()).state, 'unshared');
+    assert.equal(f.sent.length, 0);
+    assert.equal((await f.share()).state, 'offered');
+    const offered = f.sent.length;
+    assert.equal((await f.share()).state, 'offered');
+    assert.equal(f.sent.length, offered);
+    await f.command('attach');
+    assert.equal((await f.status()).state, 'attached');
+    assert.equal((await f.share()).state, 'attached');
+    assert.equal(f.sent.filter(m => m.kind === 'offer').length, 1);
+    f.tabs.set(8,{id:8,windowId:9,openerTabId:7,url:'https://example.test/child'});
+    f.setActiveTab(8);
+    assert.equal((await f.status()).state, 'unshared');
+    f.setActiveTab(7);
+    await f.cleanup();
+    assert.equal((await f.status()).state, 'disconnected');
+    assert.equal((await f.share()).state, 'offered');
+    await f.revoke();
+    assert.equal((await f.status()).state, 'unshared');
+  } finally { await f.cleanup(); }
+});
+
+test('oversized network identities still mark loss; display-only payloads are UTF-8 bounded', async () => {
+  const f=fixture(); try {
+    await f.share(); await f.command('attach');
+    f.chrome.debugger.onEvent.emit({tabId:7},'Network.requestWillBeSent',{requestId:'x'.repeat(70000),request:{url:'https://example.test/'}});
+    assert.equal(f.sent.at(-1).message.method,'WebCodex.eventsDiscarded');
+    assert.equal(f.sent.at(-1).message.params.domain,'Network');
+    f.chrome.debugger.onEvent.emit({tabId:7},'Runtime.consoleAPICalled',{args:[{value:'😀'.repeat(20000)}]});
+    assert.equal(Buffer.byteLength(f.sent.at(-1).message.params.args[0].value),2048);
+    f.chrome.debugger.onEvent.emit({tabId:7},'Network.requestWillBeSent',{requestId:'exact',request:{url:'https://example.test/'+ 'x'.repeat(100000)}});
+    assert.equal(f.sent.at(-1).message.params.requestId,'exact');
+    assert.equal(Buffer.byteLength(f.sent.at(-1).message.params.request.url),8192);
+    await f.cleanup(); await f.share(); await f.command('attach');
+    assert.equal(vm.runInContext('leases.size',f.context),1);
+  } finally {await f.cleanup();}
+});
+
+test('Revoke wins against an earlier Share awaiting Chrome tab lookup', async () => {
+  const f=fixture(); try {
+    let release, queries=0;
+    f.setQueryHook(() => ++queries === 1 ? new Promise(resolve => { release=resolve; }) : Promise.resolve());
+    const pendingShare=f.share();
+    for(let n=0;n<10 && !release;n++) await Promise.resolve();
+    assert(release);
+    assert.equal((await f.revoke()).ok, true);
+    release();
+    await pendingShare;
+    assert.equal(f.sent.filter(m=>m.kind==='offer').length,0);
+    assert.equal((await f.status()).state,'unshared');
+    assert.equal((await f.share()).state,'offered');
+  } finally {await f.cleanup();}
+});
+
+test('Revoke wins against an earlier Share awaiting native readiness', async () => {
+  const f=fixture(); try {
+    let release;
+    f.setReadyHook(port => { release=() => port.onMessage.emit({kind:'ready',version:1}); });
+    const pendingShare=f.share();
+    for(let n=0;n<10 && !release;n++) await Promise.resolve();
+    assert(release);
+    assert.equal((await f.revoke()).ok, true);
+    release();
+    await pendingShare;
+    assert.equal(f.sent.filter(m=>m.kind==='offer').length,0);
+    assert.equal((await f.status()).state,'unshared');
+    assert.equal((await f.share()).state,'offered');
+  } finally {await f.cleanup();}
+});
+
+test('large console object values are bounded before serialization', async () => {
+  const f=fixture(); try {
+    await f.share(); await f.command('attach');
+    const object={nested:{private:'sensitive'.repeat(100000)}};
+    f.chrome.debugger.onEvent.emit({tabId:7},'Runtime.consoleAPICalled',{args:[{value:object}]});
+    const data=JSON.stringify(f.sent.at(-1));
+    assert(!data.includes('sensitive'));
+    assert(data.includes('omitted') || f.sent.at(-1).message.method==='WebCodex.eventsDiscarded');
+    assert.equal(vm.runInContext('leases.size',f.context),1);
+  } finally {await f.cleanup();}
+});
+
+test('concurrent Share requests issue only one offer after connection', async () => {
+  const f=fixture(); try {
+    await Promise.all([f.share(), f.share(), f.share()]);
+    assert.equal(f.sent.filter(m => m.kind === 'offer').length, 1);
+    f.chrome.debugger.onEvent.emit({tabId:7},'Network.loadingFinished',{requestId:'not-attached'});
+    assert.equal(f.sent.length, 1);
+    await f.command('attach');
+    f.chrome.debugger.onEvent.emit({tabId:7},'Runtime.consoleAPICalled',{args:[{value:'x'.repeat(2045)},{value:'a'}]});
+    assert.equal(f.sent.at(-1).message.params.args[0].value, 'x'.repeat(2045)+' a');
   } finally {await f.cleanup();}
 });
