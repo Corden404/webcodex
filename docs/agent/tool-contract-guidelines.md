@@ -740,6 +740,10 @@ do not fill it with duplicated facts or enlarge ordinary descriptions by default
 Startup/context envelope byte budgets and Skill/Plugin catalog/body limits remain
 independent resource contracts. Their truncation and continuation behavior must
 remain honest even when individual guidance fields fit their character ceilings.
+When expanding the Direct surface, run the MCP tools/list serialized-size budget
+and compact-description semantic regressions. Fit selection prose by removing
+redundancy while preserving tool choice, pending Job identity, retry safety,
+recovery, and validation guidance; do not raise the byte ceilings to fit prose.
 
 A retained startup catalog is selection metadata. It does not prove that a Skill
 body or a Plugin input schema/binding is retained. Reuse a complete applicable
