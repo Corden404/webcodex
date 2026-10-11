@@ -841,6 +841,10 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
   function acceptToolInput(params) {
     // MCP Apps 2026-01-26: complete tool input is params.arguments.
     // This is an exact selector only; every tool call is reauthorized by Server.
+    // The protocol permits omitted arguments. This notification supplies no
+    // selector and must not revoke an identity verified by another message.
+    if (params && typeof params === "object" && !Array.isArray(params)
+      && !Object.prototype.hasOwnProperty.call(params, "arguments")) return;
     const args = params && params.arguments;
     if (args && !Array.isArray(args) && args.agent_continuation_ref != null) {
       const reference = args.agent_continuation_ref;
@@ -982,7 +986,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
 
   request("ui/initialize", {
     protocolVersion: APP_PROTOCOL,
-    appInfo: { name: "webcodex-agent-continuation-app", title: "WebCodex Agent Continuation", version: "19.0.0" },
+    appInfo: { name: "webcodex-agent-continuation-app", title: "WebCodex Agent Continuation", version: "20.0.0" },
     appCapabilities: {},
   }).then(() => {
     if (tornDown) return;
