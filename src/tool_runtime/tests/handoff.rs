@@ -1,5 +1,7 @@
 //! Tests for `read_session_handoff` — read-only structured handoff tool.
 
+mod continuity;
+
 use super::super::*;
 use super::support::*;
 use crate::auth::AuthContext;
@@ -1947,7 +1949,12 @@ async fn session_handoff_defaults_to_bounded_recovery_brief() {
         )
         .await;
     assert!(result.success, "{:?}", result.error);
-    assert_eq!(result.output.as_object().unwrap().len(), 3);
+    assert_eq!(result.output.as_object().unwrap().len(), 4);
+    assert_eq!(result.output["acceptance"]["state"], "needs_evidence");
+    assert!(result.output["acceptance"]["reason_codes"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("workspace_unobserved")));
     assert_eq!(result.output["session_id"], session.session_id);
     let brief = &result.output["handoff_brief"];
     for field in [

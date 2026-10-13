@@ -695,10 +695,19 @@ pub async fn copy_diagnostic_report(
 }
 
 #[tauri::command]
-pub async fn export_support_bundle(path: String, state: State<'_, AppState>) -> DesktopResult<()> {
+pub async fn export_support_bundle(
+    path: String,
+    state: State<'_, AppState>,
+    locale: State<'_, crate::desktop_locale::DesktopLocaleState>,
+) -> DesktopResult<()> {
     let report = state.diagnostics().await?.report;
+    let configuration = state.diagnostic_configuration(&locale).await?;
     tokio::task::spawn_blocking(move || {
-        crate::diagnostics::export_support(std::path::Path::new(&path), &report)
+        crate::diagnostics::export_support(
+            std::path::Path::new(&path),
+            &report,
+            &configuration,
+        )
     })
     .await
     .map_err(|_| crate::diagnostics::diagnostic_error("support_bundle_write_unconfirmed"))?
@@ -811,6 +820,25 @@ pub async fn prepare_project_unregister(
     state: State<'_, AppState>,
 ) -> Result<crate::project_inventory::UnregisterObservation, DesktopError> {
     state.prepare_project_unregister(&project).await
+}
+
+#[tauri::command]
+pub async fn prepare_projects_unregister(
+    projects: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::project_inventory::UnregisterObservation>, DesktopError> {
+    state.prepare_projects_unregister(projects).await
+}
+
+#[tauri::command]
+pub async fn unregister_projects(
+    request: crate::project_inventory::BatchUnregisterRequest,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::project_inventory::BatchUnregisterResult, DesktopError> {
+    let result = state.unregister_projects(request).await?;
+    tray::refresh_from_snapshot(&app, &result.state);
+    Ok(result)
 }
 
 #[tauri::command]

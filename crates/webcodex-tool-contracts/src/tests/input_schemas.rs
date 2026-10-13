@@ -322,6 +322,11 @@ fn project_build_schema_is_closed_bounded_and_has_no_raw_execution_fields() {
     )
     .is_ok());
 
+    assert!(test_support::validate_schema_instance(
+        &serde_json::json!({"project":"demo","adapter":"python"}),
+        &schema
+    )
+    .is_ok());
     for forbidden in [
         "executable",
         "args",
@@ -1333,7 +1338,7 @@ fn job_terminal_continuation_app_contract_is_exact_wait_plus_private_view_fence_
     )
     .is_ok());
 
-    assert!(!registered_tool_specs()
+    assert!(registered_tool_specs()
         .iter()
         .any(|spec| spec.name == "present_job_terminal_continuation"));
     let present = input_schema_for_tool("present_job_terminal_continuation");

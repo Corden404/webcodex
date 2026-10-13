@@ -1,3 +1,13 @@
+fn build_artifacts_schema() -> serde_json::Value {
+    serde_json::json!({"type":"array", "maxItems":16,
+        "description":"Observed existing build output files. Presence and metadata prove neither creation by this Job, package correctness nor source freshness. Read/export through the existing project artifact tools.",
+        "items":{"type":"object", "additionalProperties":false, "required":["path","bytes","sha256","mime_type"], "properties":{
+            "path":{"type":"string","maxLength":1024}, "bytes":{"type":"integer","minimum":0,"maximum":268435456},
+            "sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}, "mime_type":{"type":["string","null"],"maxLength":128}
+        }}
+    })
+}
+
 use serde_json::{json, Value};
 
 use super::common::{
@@ -458,6 +468,7 @@ fn job_structured_execution_metadata_schema() -> Value {
                             "run_detached_process",
                             "run_script",
                             "project_build",
+                            "project_format",
                             "run_skill_resource"
                         ]
                     },
@@ -590,7 +601,10 @@ fn observe_jobs_output_schema() -> Value {
                     {"type": "object", "additionalProperties": true},
                     {"type": "null"}
                 ]
-            }
+            },
+            "build_artifacts": build_artifacts_schema(),
+            "state_changed": nullable_schema("boolean", "Authoritative file mutation outcome for project_format."),
+            "failure_kind": nullable_schema("string", "Safe closed failure kind for project_format or project_build artifact observation.")
         },
         "required": [
             "job_id", "status", "exit_code", "stdout_tail", "stderr_tail",
@@ -665,7 +679,10 @@ fn observe_jobs_output_schema() -> Value {
             "purpose": nullable_schema("string", "Declared purpose retained on baseline/reset observations for disambiguation."),
             "command_summary": nullable_schema("string", "Bounded safe command summary retained on baseline/reset observations for disambiguation."),
             "detected_summary": {"type": "object", "additionalProperties": true},
-            "validation": validation_job_projection_schema()
+            "validation": validation_job_projection_schema(),
+            "build_artifacts": build_artifacts_schema(),
+            "state_changed": nullable_schema("boolean", "Authoritative file mutation outcome for project_format."),
+            "failure_kind": nullable_schema("string", "Safe closed failure kind for project_format or project_build artifact observation.")
         },
         "required": [
             "job_id", "status", "terminal", "changed", "meaningful_changed", "heartbeat_changed", "log_delta_status",
@@ -808,7 +825,12 @@ fn observe_jobs_output_schema() -> Value {
                         "type": "string",
                         "enum": ["immediate", "updated", "terminal", "item_error", "timeout"]
                     },
-                    "waited_ms": {"type": "integer", "minimum": 0}
+                    "waited_ms": {"type": "integer", "minimum": 0},
+                    "update_kind": {
+                        "type": "string",
+                        "enum": ["meaningful_change", "heartbeat", "change"],
+                        "description": "Present only on updated waits. Describes the triggering update over the full batch, including items omitted by the output budget."
+                    }
                 },
                 "required": ["outcome", "waited_ms"],
                 "description": "The single shared-wait fact for this batch. terminal policy never wakes updated: timeout means the deadline elapsed and may coexist with changed=true and cumulative log deltas. Item errors take precedence over terminal, then timeout. Final item outputs are snapshots and do not expose a second wait outcome."
@@ -863,6 +885,10 @@ fn observe_jobs_output_schema() -> Value {
                         "type": "integer",
                         "minimum": 1,
                         "description": "Non-zero shared wait duration; omitted when the canonical value is zero."
+                    },
+                    "update_kind": {
+                        "type": "string",
+                        "enum": ["meaningful_change", "heartbeat", "change"]
                     }
                 },
                 "required": ["outcome"],
@@ -988,6 +1014,63 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             }
             Some(schema)
         }
+        "project_format" => {
+            let mut schema = wrapped_output_schema(vec![
+                ("state_changed", json!({"type":["boolean","null"], "description":"Executor-verified aggregate mutation. Null is unknown, never retry permission."})),
+                ("failure_kind", json!({"type":"string", "maxLength":80})),
+                ("execution_state", json!({"type":"string", "enum":["not_started","outcome_unknown","pending"]})),
+                ("job_id", schema_type("string", "Original Job identity, never a replacement execution.")),
+                ("continuation", observe_job_continuation_schema()),
+                ("error_kind", json!({"type":"string", "maxLength":80, "description":"Safe closed error classification or kernel rejection code."})),
+                ("permission_reason", json!({"type":"string", "maxLength":128, "description":"Authoritative kernel rejection reason."})),
+                ("session_id", json!({"type":"string", "maxLength":128, "description":"Active Workflow Session identity associated with rejection or execution."})),
+                ("command_started", schema_type("boolean", "Whether any underlying process or command started.")),
+                ("command_completed", schema_type("boolean", "Whether any underlying process or command completed.")),
+                ("command_ok", schema_type("boolean", "False on pre-start tool failures.")),
+                ("exit_code", nullable_schema("integer", "Process exit code; null for unstarted responses.")),
+                ("tool_failure", schema_type("boolean", "True for kernel or Runner initiation and capability failures.")),
+                ("tool_name", json!({"type":"string", "maxLength":64, "description":"Authoritative runtime tool name associated with rejection."})),
+                ("guard", json!({"type":"string", "maxLength":64, "description":"Active workflow session guard policy that blocked admission."})),
+                ("mode", json!({"type":"string", "maxLength":32, "description":"Active workflow session mode at admission check."})),
+                ("lifecycle", json!({"type":"string", "maxLength":32, "description":"Workflow session lifecycle state at rejection."})),
+                ("session_project", json!({"type":"string", "maxLength":128, "description":"Bound workflow session project identity."})),
+                ("request_project", json!({"type":"string", "maxLength":128, "description":"Request project identity."})),
+                ("message_id", json!({"type":"string", "maxLength":128, "description":"Workflow session message identity."})),
+            ]);
+            schema["properties"]["output"]["additionalProperties"] = json!(false);
+            schema["allOf"]
+                .as_array_mut()
+                .expect("wrapped_output_schema provides allOf array")
+                .push(json!({
+                    "if": {"properties": {"success": {"const": true}}, "required": ["success"]},
+                    "then": {
+                        "properties": {
+                            "output": {
+                                "not": {
+                                    "anyOf": [
+                                        {"required": ["command_started"]},
+                                        {"required": ["command_completed"]},
+                                        {"required": ["command_ok"]},
+                                        {"required": ["exit_code"]},
+                                        {"required": ["tool_failure"]},
+                                        {"required": ["tool_name"]},
+                                        {"required": ["guard"]},
+                                        {"required": ["mode"]},
+                                        {"required": ["lifecycle"]},
+                                        {"required": ["session_project"]},
+                                        {"required": ["request_project"]},
+                                        {"required": ["message_id"]},
+                                        {"required": ["error_kind"]},
+                                        {"required": ["failure_kind"]},
+                                        {"required": ["permission_reason"]},
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }));
+            Some(schema)
+        }
         "project_build" => {
             let mut schema = output_schema_for_tool("run_process")
                 .expect("run_process output schema must exist");
@@ -1002,11 +1085,12 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
             ] {
                 properties.remove(inherited_only);
             }
+            properties.insert("build_artifacts".to_string(), build_artifacts_schema());
             properties.insert(
                 "backend".to_string(),
                 json!({
                     "type": "string",
-                    "enum": ["rust", "go"],
+                    "enum": ["rust", "go", "python", "node"],
                     "description": "Runner-resolved canonical build backend."
                 }),
             );

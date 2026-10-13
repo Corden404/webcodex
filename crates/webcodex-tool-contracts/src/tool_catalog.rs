@@ -79,8 +79,8 @@ pub const TOOL_RECOMMENDED_FLOWS: &[ToolRecommendedFlow] = &[
     },
     ToolRecommendedFlow {
         name: "agent_continuation_setup",
-        summary: "New durable Agent window setup: create identity -> create/rotate Endpoint -> present continuation card -> yield/end the current turn -> verify production_auto_resume_available.",
-        manifest_purpose: "Use create_agent_identity, then rotate_agent_continuation_endpoint, then present_agent_continuation. Presentation success is not Host readiness: yield/end the current model turn promptly so the MCP App can mount/bind, then verify the exact Agent through list_agent_identities.production_auto_resume_available. Keep durable Agent identity independent from the Host window.",
+        summary: "New durable Agent window setup: create identity -> create/rotate Endpoint -> present continuation card -> normal final assistant response -> later verify production_auto_resume_available.",
+        manifest_purpose: "Use create_agent_identity, then rotate_agent_continuation_endpoint, then present_agent_continuation. Presentation success is not Host readiness. Produce a normal final assistant response and let the current turn finalize promptly; the card/tool result alone does not end it. On a later turn verify the exact Agent through list_agent_identities.production_auto_resume_available. Keep durable Agent identity independent from the Host window.",
         tools: &[
             "create_agent_identity",
             "rotate_agent_continuation_endpoint",
@@ -199,9 +199,9 @@ pub const TOOL_RECOMMENDED_FLOWS: &[ToolRecommendedFlow] = &[
     ToolRecommendedFlow {
         name: "build",
         summary:
-            "Build: prefer project_build for portable Rust/Go builds; use native execution only outside the canonical gateway.",
+            "Build: prefer project_build for portable Rust/Go/Python/Node builds; use native execution only outside the canonical gateway.",
         manifest_purpose:
-            "Use project_build for canonical Rust cargo build and Go go build with portable bounded package or all-packages scope. dependency_policy.mode=locked prevents adapter-managed dependency selection updates without implying offline execution. It preserves Runner-owned recipe resolution, provenance, and same-execution Job admission. Use run_process only when the required build is outside this closed contract.",
+            "Use project_build for canonical Rust cargo build, Go go build, Python pyproject packaging via installed build --no-isolation, and manifest-declared Node build scripts (detected npm/pnpm/yarn/bun; no installation). Python rejects scope; Node rejects scope/dependency policy; Rust/Go support portable bounded package or all-packages scope. dependency_policy.mode=locked prevents adapter-managed dependency selection updates without implying offline execution. It preserves Runner-owned recipe resolution, provenance, and same-execution Job admission. Use run_process only when the required build is outside this closed contract.",
         tools: &["project_build", "observe_jobs", "run_process"],
     },
     ToolRecommendedFlow {
@@ -306,6 +306,7 @@ pub const CODING_INTENT_TOOL_NAMES: &[&str] = &[
     "execute_mutating_code_mode",
     // Portable project build plus ordinary execution specialists.
     "project_build",
+    "project_format",
     "run_process",
     "run_script",
     "run_shell",

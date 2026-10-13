@@ -363,11 +363,115 @@ fn serialized_value_len(value: &Value) -> usize {
     serialized_json_len(value).unwrap_or(usize::MAX)
 }
 
+// Borrow the original text while cloning only the surrounding item metadata.
+// The same helper keeps the single-item budget probe and the whole-batch size
+// projection consistent, without retaining file content in a new cache.
+fn cloned_read_item_without_text(item: &Value) -> Option<(Value, &str)> {
+    let fields = item.as_object()?;
+    let read_fields = fields.get("output")?.as_object()?;
+    let text = read_fields.get("text")?.as_str()?;
+
+    let mut read_clone = serde_json::Map::new();
+    for (key, value) in read_fields {
+        read_clone.insert(
+            key.clone(),
+            if key == "text" {
+                json!("")
+            } else {
+                value.clone()
+            },
+        );
+    }
+    let mut item_clone = serde_json::Map::new();
+    for (key, value) in fields {
+        if key != "output" {
+            item_clone.insert(key.clone(), value.clone());
+        }
+    }
+    item_clone.insert("output".to_string(), Value::Object(read_clone));
+    Some((Value::Object(item_clone), text))
+}
+
+// The projection needs the read metadata, not a second allocation of each
+// (potentially hundreds of KiB) text body. Temporarily substitute empty JSON
+// strings in the cloned view and add the exact serialized lengths of the
+// original strings back to the measured envelope.
+fn cloned_batch_without_read_text<'a>(output: &'a Value) -> (Value, Vec<(usize, &'a str)>) {
+    let Some(root) = output.as_object() else {
+        return (output.clone(), Vec::new());
+    };
+    let mut texts = Vec::new();
+    let mut clone = serde_json::Map::new();
+    for (key, value) in root {
+        if key == "items" {
+            if let Some(items) = value.as_array() {
+                let items = items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        if let Some((metadata, text)) = cloned_read_item_without_text(item) {
+                            texts.push((index, text));
+                            metadata
+                        } else {
+                            item.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                clone.insert(key.clone(), Value::Array(items));
+                continue;
+            }
+        }
+        clone.insert(key.clone(), value.clone());
+    }
+    (Value::Object(clone), texts)
+}
+
+// serde_json emits printable UTF-8 bytes unchanged and escapes only ASCII
+// control bytes, quote and backslash. Count this exactly instead of invoking
+// a second JSON serializer on potentially large unchanged read bodies.
+fn serialized_read_text_len(text: &str) -> Option<usize> {
+    let mut bytes = text.len().checked_add(2)?; // opening and closing JSON quotes
+    for byte in text.bytes() {
+        let extra = match byte {
+            b'"' | b'\\' | b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 1,
+            0x00..=0x1f => 5, // JSON \\u00XX expands one input byte to six
+            _ => 0,
+        };
+        bytes = bytes.checked_add(extra)?;
+    }
+    Some(bytes)
+}
+
 fn projected_batch_serialized_len(output: &Value, projection: &ReadModelProjection) -> usize {
-    let mut projected = ToolResult::ok(output.clone());
+    let (lightweight, texts) = cloned_batch_without_read_text(output);
+    let mut projected = ToolResult::ok(lightweight);
     add_actionable_read_continuations(projection, &mut projected);
     super::result_projection::sparsify_complete_read_success("read_files", &mut projected);
-    serialized_json_len(&projected).unwrap_or(usize::MAX)
+
+    // If a later projection changes/removes the text field, its semantics
+    // must be measured by the canonical path rather than silently undercounted.
+    if texts
+        .iter()
+        .any(|(index, _)| projected.output["items"][*index]["output"]["text"].as_str() != Some(""))
+    {
+        let mut original = ToolResult::ok(output.clone());
+        add_actionable_read_continuations(projection, &mut original);
+        super::result_projection::sparsify_complete_read_success("read_files", &mut original);
+        return serialized_json_len(&original).unwrap_or(usize::MAX);
+    }
+    let Some(mut bytes) = serialized_json_len(&projected).ok() else {
+        return usize::MAX;
+    };
+    for (_, text) in texts {
+        let Some(encoded_text) = serialized_read_text_len(text) else {
+            return usize::MAX;
+        };
+        let Some(next) = bytes.checked_add(encoded_text.saturating_sub(2)) else {
+            return usize::MAX;
+        };
+        bytes = next;
+    }
+    bytes
 }
 
 fn projected_read_item_len(item: &Value) -> usize {
@@ -400,6 +504,32 @@ fn projected_batch_len(base_len: usize, item_bytes: usize, item_count: usize) ->
         .saturating_add(item_count.saturating_sub(1))
 }
 
+fn set_truncated_read_metadata(
+    output: &mut serde_json::Map<String, Value>,
+    keep_lines: usize,
+    returned_lines: usize,
+    start_line: usize,
+    existing_budget_next_limit: usize,
+) {
+    output.insert("returned_lines".to_string(), json!(keep_lines));
+    output.insert(
+        "end_line".to_string(),
+        json!(start_line.saturating_add(keep_lines).saturating_sub(1)),
+    );
+    output.insert("has_more".to_string(), json!(true));
+    output.insert(
+        "next_start_line".to_string(),
+        json!(start_line.saturating_add(keep_lines)),
+    );
+    output.insert("budget_truncated".to_string(), json!(true));
+    output.insert(
+        "budget_next_limit".to_string(),
+        json!(returned_lines
+            .saturating_sub(keep_lines)
+            .saturating_add(existing_budget_next_limit)),
+    );
+}
+
 fn truncate_read_item(item: &Value, keep_lines: usize) -> Option<Value> {
     if item["success"].as_bool() != Some(true) || keep_lines == 0 {
         return None;
@@ -416,55 +546,168 @@ fn truncate_read_item(item: &Value, keep_lines: usize) -> Option<Value> {
         return None;
     }
 
-    let mut projected = item.clone();
-    let projected_output = projected.get_mut("output")?.as_object_mut()?;
-    projected_output.insert("text".to_string(), json!(lines[..keep_lines].join("\n")));
-    projected_output.insert("returned_lines".to_string(), json!(keep_lines));
-    projected_output.insert(
-        "end_line".to_string(),
-        json!(start_line.saturating_add(keep_lines).saturating_sub(1)),
-    );
-    projected_output.insert("has_more".to_string(), json!(true));
-    projected_output.insert(
-        "next_start_line".to_string(),
-        json!(start_line.saturating_add(keep_lines)),
-    );
-    projected_output.insert("budget_truncated".to_string(), json!(true));
     let existing_budget_next_limit = output
         .get("budget_next_limit")
         .and_then(Value::as_u64)
         .unwrap_or(0) as usize;
-    projected_output.insert(
-        "budget_next_limit".to_string(),
-        json!(returned_lines
-            .saturating_sub(keep_lines)
-            .saturating_add(existing_budget_next_limit)),
+    let mut projected = item.clone();
+    let projected_output = projected.get_mut("output")?.as_object_mut()?;
+    projected_output.insert("text".to_string(), json!(lines[..keep_lines].join("\n")));
+    set_truncated_read_metadata(
+        projected_output,
+        keep_lines,
+        returned_lines,
+        start_line,
+        existing_budget_next_limit,
     );
     Some(projected)
 }
 
+// Build one indexed view over the original line separators. Each prefix length
+// is its *serialized JSON body* byte count (without the two enclosing quotes),
+// including the two-byte escaping of retained newlines. This makes every
+// binary-search probe O(metadata), rather than resplitting or copying the text.
+fn read_prefix_lengths(text: &str, returned_lines: usize) -> Option<Vec<usize>> {
+    let mut prefixes = Vec::with_capacity(returned_lines.min(4096));
+    let mut json_bytes = 0usize;
+    for (index, line) in text.split('\n').enumerate() {
+        if index >= returned_lines {
+            return None;
+        }
+        let line_bytes = serialized_read_text_len(line)?.checked_sub(2)?;
+        json_bytes = json_bytes.checked_add(line_bytes)?;
+        prefixes.push(json_bytes);
+        // Kept newlines serialize as \n (two JSON bytes). The trailing value
+        // after the last line is ignored.
+        json_bytes = json_bytes.checked_add(2)?;
+    }
+    (prefixes.len() == returned_lines).then_some(prefixes)
+}
+
 fn truncate_read_item_to_fit(item: &Value, max_item_bytes: usize) -> Option<Value> {
-    let returned_lines = item.get("output")?.get("returned_lines")?.as_u64()? as usize;
+    if item["success"].as_bool() != Some(true) {
+        return None;
+    }
+    let output = item.get("output")?.as_object()?;
+    let returned_lines = output.get("returned_lines")?.as_u64()? as usize;
     if returned_lines <= 1 {
         return None;
     }
+    let start_line = output.get("start_line")?.as_u64()? as usize;
+    let existing_budget_next_limit = output
+        .get("budget_next_limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let (mut probe, text) = cloned_read_item_without_text(item)?;
+    let prefixes = read_prefix_lengths(text, returned_lines)?;
 
     let mut low = 1usize;
     let mut high = returned_lines - 1;
-    let mut best = None;
+    let mut best_keep = None;
     while low <= high {
         let keep = low + (high - low) / 2;
-        let Some(candidate) = truncate_read_item(item, keep) else {
-            break;
-        };
-        if projected_read_item_len(&candidate) <= max_item_bytes {
-            best = Some(candidate);
+        let metadata = probe.get_mut("output")?.as_object_mut()?;
+        set_truncated_read_metadata(
+            metadata,
+            keep,
+            returned_lines,
+            start_line,
+            existing_budget_next_limit,
+        );
+
+        // The probe retains its empty-string placeholder. The partial result
+        // always has has_more=true and a next_start_line, so complete-file
+        // sparsification cannot remove its text field.
+        let metadata_len = projected_read_item_len(&probe);
+        let candidate_len = metadata_len.saturating_add(prefixes[keep - 1]);
+        if candidate_len <= max_item_bytes {
+            best_keep = Some(keep);
             low = keep.saturating_add(1);
         } else {
             high = keep.saturating_sub(1);
         }
     }
-    best
+
+    // Construct the one selected output through the same canonical function
+    // used by final hard-cap trimming, preserving every range/continuation key.
+    best_keep.and_then(|keep| truncate_read_item(item, keep))
+}
+
+// The second-stage follow-up can change in size when a partial read range is
+// shortened. Keep one owned batch in place while probing candidate lengths:
+// cloning the already-accepted prefix for every binary-search step scales with
+// the entire batch rather than the candidate item.
+fn sync_truncated_batch_counts(output: &mut Value, next_index: Option<usize>) {
+    let items = output["items"]
+        .as_array()
+        .expect("truncated batch must contain canonical items");
+    let returned_count = items.len();
+    let succeeded_count = items
+        .iter()
+        .filter(|item| item["success"].as_bool() == Some(true))
+        .count();
+    output["returned_count"] = json!(returned_count);
+    output["succeeded_count"] = json!(succeeded_count);
+    output["failed_count"] = json!(returned_count - succeeded_count);
+    output["next_index"] = json!(next_index);
+}
+
+fn fit_truncated_batch_to_budget(
+    mut output: Value,
+    payload_budget: usize,
+    projection: &ReadModelProjection,
+) -> Value {
+    while projected_batch_serialized_len(&output, projection) > payload_budget {
+        let Some(items) = output.get_mut("items").and_then(Value::as_array_mut) else {
+            break;
+        };
+        let Some(removed) = items.pop() else {
+            break;
+        };
+        let next_index = removed["index"].as_u64().map(|index| index as usize);
+        let mut low = 1usize;
+        let mut high = removed["output"]["returned_lines"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(1) as usize;
+        let mut best = None;
+
+        while low <= high {
+            let keep = low + (high - low) / 2;
+            let Some(partial) = truncate_read_item(&removed, keep) else {
+                break;
+            };
+            output["items"]
+                .as_array_mut()
+                .expect("validated canonical batch")
+                .push(partial);
+            sync_truncated_batch_counts(&mut output, next_index);
+            let fits = projected_batch_serialized_len(&output, projection) <= payload_budget;
+            // Retain only the candidate item. The accepted prefix stays in
+            // the original batch throughout the binary search.
+            let candidate = output["items"]
+                .as_array_mut()
+                .expect("validated canonical batch")
+                .pop()
+                .expect("candidate was just appended");
+            if fits {
+                best = Some(candidate);
+                low = keep + 1;
+            } else {
+                high = keep.saturating_sub(1);
+            }
+        }
+        if let Some(partial) = best {
+            output["items"]
+                .as_array_mut()
+                .expect("validated canonical batch")
+                .push(partial);
+            sync_truncated_batch_counts(&mut output, next_index);
+            return output;
+        }
+        sync_truncated_batch_counts(&mut output, next_index);
+    }
+    output
 }
 
 fn apply_output_budget(
@@ -476,20 +719,20 @@ fn apply_output_budget(
 ) -> Value {
     let result_budget = normalized_result_budget(max_result_bytes);
     let payload_budget = result_budget.saturating_sub(MODEL_RESULT_ENVELOPE_RESERVE_BYTES);
-    let complete = batch_output(
-        project,
-        requested_count,
-        completed.clone(),
-        false,
-        None,
-        None,
-    );
+    // Own the canonical batch while measuring the final model projection.
+    // The common complete-fit path can return it without cloning every read
+    // body; on truncation, move its items into the existing budgeting loop.
+    let mut complete = batch_output(project, requested_count, completed, false, None, None);
     // Budget the shape the model would actually receive after the existing
     // sparse projection. The canonical representation remains available for
     // Session recording and for any partial-item cursor construction below.
     if projected_batch_serialized_len(&complete, projection) <= payload_budget {
         return complete;
     }
+    let completed = complete["items"]
+        .as_array_mut()
+        .map(std::mem::take)
+        .expect("batch_output always contains the canonical read items");
 
     let truncation_reason = if result_budget == MAX_SERIALIZED_OUTPUT_BYTES {
         "hard_result_cap"
@@ -543,7 +786,7 @@ fn apply_output_budget(
         break;
     }
 
-    let mut output = batch_output(
+    let output = batch_output(
         project,
         requested_count,
         returned,
@@ -551,58 +794,9 @@ fn apply_output_budget(
         next_index,
         Some(truncation_reason),
     );
-    // The combined follow-up changes size with the partial range. Fit the last
-    // item against the exact invocation projection before dropping it entirely.
-    while projected_batch_serialized_len(&output, projection) > payload_budget {
-        let Some(items) = output.get_mut("items").and_then(Value::as_array_mut) else {
-            break;
-        };
-        let Some(removed) = items.pop() else {
-            break;
-        };
-        next_index = removed["index"].as_u64().map(|index| index as usize);
-        let prefix = items.clone();
-        let mut low = 1;
-        let mut high = removed["output"]["returned_lines"]
-            .as_u64()
-            .unwrap_or(0)
-            .saturating_sub(1) as usize;
-        let mut best = None;
-        while low <= high {
-            let keep = low + (high - low) / 2;
-            let Some(partial) = truncate_read_item(&removed, keep) else {
-                break;
-            };
-            let mut candidate_items = prefix.clone();
-            candidate_items.push(partial);
-            let candidate = batch_output(
-                project,
-                requested_count,
-                candidate_items,
-                true,
-                next_index,
-                Some(truncation_reason),
-            );
-            if projected_batch_serialized_len(&candidate, projection) <= payload_budget {
-                best = Some(candidate);
-                low = keep + 1;
-            } else {
-                high = keep.saturating_sub(1);
-            }
-        }
-        if let Some(candidate) = best {
-            return candidate;
-        }
-        output = batch_output(
-            project,
-            requested_count,
-            prefix,
-            true,
-            next_index,
-            Some(truncation_reason),
-        );
-    }
-    output
+    // Recheck the exact final projection using in-place binary-search probes,
+    // retaining the accepted prefix and all canonical continuation semantics.
+    fit_truncated_batch_to_budget(output, payload_budget, projection)
 }
 
 pub(crate) fn apply_model_facing_output_budget(
@@ -630,7 +824,15 @@ pub(crate) fn apply_model_facing_output_budget(
     else {
         return;
     };
-    let Some(completed) = output.get("items").and_then(Value::as_array).cloned() else {
+    // All metadata has been validated; the original read bodies are no longer
+    // needed separately after budgeting. Keep the surrounding result metadata
+    // while transferring item ownership instead of cloning potentially 512 KiB.
+    let Some(completed) = result
+        .output
+        .get_mut("items")
+        .and_then(Value::as_array_mut)
+        .map(std::mem::take)
+    else {
         return;
     };
 
@@ -657,18 +859,21 @@ pub(crate) fn apply_model_facing_output_budget(
     ] {
         root.remove(key);
     }
-    if let Some(budgeted) = budgeted.as_object() {
+    // Merge the owned budget result back into the original envelope to retain
+    // any independent Session/context overlays, with no second item copy.
+    if let Value::Object(budgeted) = budgeted {
         for (key, value) in budgeted {
-            root.insert(key.clone(), value.clone());
+            root.insert(key, value);
         }
     }
 }
 
 fn final_model_result_len(output: &Value, projection: &ReadModelProjection) -> usize {
-    let mut projected = ToolResult::ok(output.clone());
-    add_actionable_read_continuations(projection, &mut projected);
-    super::result_projection::sparsify_complete_read_success("read_files", &mut projected);
-    serialized_json_len(&projected).unwrap_or(usize::MAX)
+    // The final hard cap needs the same exact model-visible projection as
+    // primary budgeting. Reuse its text-borrowing JSON sizer rather than
+    // repeatedly cloning multi-hundred-KiB file bodies on each backoff probe.
+    // Session/Job overlays remain in the canonical envelope and are counted.
+    projected_batch_serialized_len(output, projection)
 }
 
 fn mark_final_hard_cap_truncation(output: &mut Value, next_index: usize) {
@@ -732,10 +937,13 @@ pub(crate) fn enforce_final_model_facing_hard_cap(
     }
 
     loop {
-        let Some(items) = result.output.get("items").and_then(Value::as_array) else {
+        let Some(items) = result.output.get_mut("items").and_then(Value::as_array_mut) else {
             return;
         };
-        let Some(last) = items.last() else {
+        // Move the last source item out while probing candidate line counts.
+        // Previously every probe cloned the whole response (including all
+        // accepted file bodies and Session/Job metadata) before trimming it.
+        let Some(last) = items.pop() else {
             return;
         };
         let index = last["index"].as_u64().unwrap_or(0) as usize;
@@ -755,19 +963,24 @@ pub(crate) fn enforce_final_model_facing_hard_cap(
                 let mut best = None;
                 while low <= high {
                     let keep = low + (high - low) / 2;
-                    let Some(partial) = truncate_read_item(last, keep) else {
+                    let Some(partial) = truncate_read_item(&last, keep) else {
                         break;
                     };
-                    let mut candidate = result.output.clone();
-                    if let Some(candidate_items) =
-                        candidate.get_mut("items").and_then(Value::as_array_mut)
-                    {
-                        let last_index = candidate_items.len() - 1;
-                        candidate_items[last_index] = partial;
-                    }
-                    mark_final_hard_cap_truncation(&mut candidate, index);
-                    if final_model_result_len(&candidate, projection) <= MAX_SERIALIZED_OUTPUT_BYTES
-                    {
+                    result.output["items"]
+                        .as_array_mut()
+                        .expect("validated read batch")
+                        .push(partial);
+                    mark_final_hard_cap_truncation(&mut result.output, index);
+                    let fits = final_model_result_len(&result.output, projection)
+                        <= MAX_SERIALIZED_OUTPUT_BYTES;
+                    // Take only the candidate back out; the accepted prefix
+                    // and unrelated result metadata remain in the same object.
+                    let candidate = result.output["items"]
+                        .as_array_mut()
+                        .expect("validated read batch")
+                        .pop()
+                        .expect("just appended candidate");
+                    if fits {
                         best = Some(candidate);
                         low = keep.saturating_add(1);
                     } else {
@@ -775,22 +988,19 @@ pub(crate) fn enforce_final_model_facing_hard_cap(
                     }
                 }
                 if let Some(best) = best {
-                    result.output = best;
+                    result.output["items"]
+                        .as_array_mut()
+                        .expect("validated read batch")
+                        .push(best);
+                    mark_final_hard_cap_truncation(&mut result.output, index);
                     return;
                 }
             }
         }
 
-        let removed_index = {
-            let Some(items) = result.output.get_mut("items").and_then(Value::as_array_mut) else {
-                return;
-            };
-            items
-                .pop()
-                .and_then(|removed| removed["index"].as_u64())
-                .unwrap_or(index as u64) as usize
-        };
-        mark_final_hard_cap_truncation(&mut result.output, removed_index);
+        // The item could not fit even after trimming. It has already been
+        // removed; keep its exact original index as the continuation boundary.
+        mark_final_hard_cap_truncation(&mut result.output, index);
         if final_model_result_len(&result.output, projection) <= MAX_SERIALIZED_OUTPUT_BYTES {
             return;
         }
@@ -1291,6 +1501,472 @@ mod tests {
             },
             "error": null
         })
+    }
+
+    // Frozen reference of the previous second-stage trimming implementation.
+    // Deliberately retains its prefix clone and fresh batch construction so
+    // correctness can be tested independently from the optimized ownership
+    // path, including exact continuation and serialized sizing semantics.
+    fn reference_truncated_batch_fit(
+        mut output: Value,
+        payload_budget: usize,
+        projection: &ReadModelProjection,
+    ) -> Value {
+        let project = output["project"].as_str().unwrap().to_string();
+        let requested_count = output["requested_count"].as_u64().unwrap() as usize;
+        let reason = output["truncation_reason"].as_str().unwrap().to_string();
+        while projected_batch_serialized_len(&output, projection) > payload_budget {
+            let Some(items) = output.get_mut("items").and_then(Value::as_array_mut) else {
+                break;
+            };
+            let Some(removed) = items.pop() else {
+                break;
+            };
+            let next_index = removed["index"].as_u64().map(|index| index as usize);
+            let prefix = items.clone();
+            let mut low = 1;
+            let mut high = removed["output"]["returned_lines"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(1) as usize;
+            let mut best = None;
+            while low <= high {
+                let keep = low + (high - low) / 2;
+                let Some(partial) = truncate_read_item(&removed, keep) else {
+                    break;
+                };
+                let mut candidate_items = prefix.clone();
+                candidate_items.push(partial);
+                let candidate = batch_output(
+                    &project,
+                    requested_count,
+                    candidate_items,
+                    true,
+                    next_index,
+                    Some(&reason),
+                );
+                if projected_batch_serialized_len(&candidate, projection) <= payload_budget {
+                    best = Some(candidate);
+                    low = keep + 1;
+                } else {
+                    high = keep.saturating_sub(1);
+                }
+            }
+            if let Some(candidate) = best {
+                return candidate;
+            }
+            output = batch_output(
+                &project,
+                requested_count,
+                prefix,
+                true,
+                next_index,
+                Some(&reason),
+            );
+        }
+        output
+    }
+
+    #[test]
+    fn truncated_batch_backoff_matches_previous_exact_model_result_across_budgets() {
+        let unicode = (0..180)
+            .map(|index| format!("第{index:03}行-{}-\\\"\\t", "界".repeat(25)))
+            .collect::<Vec<_>>();
+        let ascii = (0..210)
+            .map(|index| format!("line-{index:04}-{}", "x".repeat(100)))
+            .collect::<Vec<_>>();
+        let mut failed = ranged_item(1, 25, &["rejected".to_string()]);
+        failed["success"] = json!(false);
+        failed["error"] = json!("read_file failed: PRIVATE_MISSING");
+        let batches = [
+            (vec![ranged_item(0, 11, &unicode)], Some(0usize)),
+            (
+                vec![
+                    default_complete_item(0, &["prefix".repeat(1000)]),
+                    ranged_item(1, 11, &ascii),
+                ],
+                Some(1),
+            ),
+            (
+                vec![
+                    default_complete_item(0, &["prefix".repeat(3500)]),
+                    default_complete_item(1, &["sentinel".repeat(1200)]),
+                    ranged_item(2, 51, &unicode),
+                ],
+                Some(2),
+            ),
+            (
+                vec![
+                    default_complete_item(0, &["first".repeat(600)]),
+                    failed,
+                    ranged_item(2, 11, &ascii),
+                ],
+                Some(2),
+            ),
+            (Vec::new(), Some(0)),
+        ];
+        let mut exercised_partial = 0;
+        let mut exercised_complete_drop = 0;
+        for (items, next_index) in batches {
+            for reason in ["batch_response_budget", "hard_result_cap"] {
+                for budget in [
+                    256,
+                    1024,
+                    2048,
+                    4096,
+                    8 * 1024,
+                    16 * 1024,
+                    32 * 1024,
+                    64 * 1024,
+                ] {
+                    let count = items.len();
+                    let input = batch_output(
+                        "agent:oe:demo",
+                        count,
+                        items.clone(),
+                        true,
+                        next_index,
+                        Some(reason),
+                    );
+                    let mut projection =
+                        batch_projection(count, Some(budget + MODEL_RESULT_ENVELOPE_RESERVE_BYTES));
+                    if let ReadModelProjection::Batch {
+                        with_line_numbers, ..
+                    } = &mut projection
+                    {
+                        *with_line_numbers = Some(true);
+                    }
+                    let expected =
+                        reference_truncated_batch_fit(input.clone(), budget, &projection);
+                    let actual = fit_truncated_batch_to_budget(input, budget, &projection);
+                    assert_eq!(
+                        actual, expected,
+                        "budget={budget} reason={reason} items={count}: optimized backoff must be exact"
+                    );
+                    if actual["items"].as_array().is_some_and(|returned| {
+                        returned
+                            .iter()
+                            .any(|item| item["output"]["budget_truncated"] == true)
+                    }) {
+                        exercised_partial += 1;
+                    }
+                    if actual["items"]
+                        .as_array()
+                        .is_some_and(|returned| returned.len() < count)
+                    {
+                        exercised_complete_drop += 1;
+                    }
+                    let mut model = ToolResult::ok(actual);
+                    add_actionable_read_continuations(&projection, &mut model);
+                    super::super::result_projection::sparsify_complete_read_success(
+                        "read_files",
+                        &mut model,
+                    );
+                    if let Some(call) = model.output.get("suggested_call") {
+                        assert_eq!(call["tool"], "read_files");
+                        ToolCall::from_tool_name("read_files", call["arguments"].clone())
+                            .expect("backoff continuation must be parser-ready");
+                    }
+                }
+            }
+        }
+        assert!(
+            exercised_partial > 0,
+            "fixture must exercise partial backoff"
+        );
+        assert!(
+            exercised_complete_drop > 0,
+            "fixture must exercise whole-item backoff"
+        );
+    }
+
+    #[test]
+    fn owned_budget_merge_preserves_overlays_and_continuations() {
+        let metadata = json!({
+            "session_hint": {"open_counts": {"todo": 2}},
+            "job_attention": {"items": [{"state": "terminal", "outcome": "passed"}]},
+            "future_metadata": {"value": "opaque", "count": 7}
+        });
+        let partial_lines = (0..900)
+            .map(|index| format!("第{index:04}行-{}", "界".repeat(40)))
+            .collect::<Vec<_>>();
+        let failed = json!({
+            "index": 1,
+            "path": "src/1.rs",
+            "success": false,
+            "output": {"reason_code": "not_file"},
+            "error": "read_file failed: not_file"
+        });
+
+        for (items, budget) in [
+            (
+                vec![
+                    default_complete_item(0, &["alpha\n\t界".to_string()]),
+                    default_complete_item(1, &["beta".to_string()]),
+                ],
+                None,
+            ),
+            (vec![ranged_item(0, 11, &partial_lines)], None),
+            (
+                vec![
+                    default_complete_item(0, &["x".repeat(140 * 1024)]),
+                    failed,
+                    default_complete_item(2, &["y".repeat(140 * 1024)]),
+                ],
+                Some(256 * 1024),
+            ),
+        ] {
+            let count = items.len();
+            let projection = batch_projection(count, budget);
+            let mut expected = ToolResult::ok(apply_output_budget(
+                "agent:oe:demo",
+                count,
+                items.clone(),
+                budget,
+                &projection,
+            ));
+            let mut actual = ToolResult::ok(batch_output(
+                "agent:oe:demo",
+                count,
+                items,
+                false,
+                None,
+                None,
+            ));
+            for (key, value) in metadata.as_object().unwrap() {
+                actual.output[key] = value.clone();
+                expected.output[key] = value.clone();
+            }
+
+            apply_model_facing_output_budget(&mut actual, budget, &projection);
+            assert_eq!(
+                serde_json::to_value(&actual).unwrap(),
+                serde_json::to_value(&expected).unwrap(),
+                "moving owned items must preserve all canonical fields and overlays"
+            );
+            add_actionable_read_continuations(&projection, &mut actual);
+            add_actionable_read_continuations(&projection, &mut expected);
+            super::super::result_projection::sparsify_complete_read_success(
+                "read_files",
+                &mut actual,
+            );
+            super::super::result_projection::sparsify_complete_read_success(
+                "read_files",
+                &mut expected,
+            );
+            assert_eq!(
+                serde_json::to_value(&actual).unwrap(),
+                serde_json::to_value(&expected).unwrap(),
+                "continuation and sparse model projection must be unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn owned_budget_guard_preserves_invalid_or_failed_result_without_mutation() {
+        for mut result in [
+            ToolResult::ok(json!({"project": "demo", "requested_count": 1})),
+            ToolResult::ok(json!({"requested_count": 1, "items": []})),
+            ToolResult::ok(json!({"project": "demo", "items": []})),
+            ToolResult::ok(json!({"project": "demo", "requested_count": 1, "items": "invalid"})),
+            ToolResult::err_with_output(
+                "read_files failed",
+                json!({"project": "demo", "requested_count": 1, "items": []}),
+            ),
+        ] {
+            let before = serde_json::to_value(&result).unwrap();
+            apply_model_facing_output_budget(&mut result, None, &batch_projection(1, None));
+            assert_eq!(
+                serde_json::to_value(&result).unwrap(),
+                before,
+                "invalid or failed results cannot lose items or metadata"
+            );
+        }
+    }
+
+    // Independent copy of the pre-optimization implementation. Do not
+    // delegate to the optimized range-field helper: this is the behavioral
+    // oracle for both chosen text and the exact continuation metadata.
+    fn legacy_partial_read_item(item: &Value, keep_lines: usize) -> Option<Value> {
+        if item["success"].as_bool() != Some(true) || keep_lines == 0 {
+            return None;
+        }
+        let output = item.get("output")?.as_object()?;
+        let returned_lines = output.get("returned_lines")?.as_u64()? as usize;
+        if keep_lines >= returned_lines || returned_lines <= 1 {
+            return None;
+        }
+        let start_line = output.get("start_line")?.as_u64()? as usize;
+        let text = output.get("text")?.as_str()?;
+        let lines = text.split('\n').collect::<Vec<_>>();
+        if lines.len() != returned_lines {
+            return None;
+        }
+        let mut projected = item.clone();
+        let projected_output = projected.get_mut("output")?.as_object_mut()?;
+        projected_output.insert("text".to_string(), json!(lines[..keep_lines].join("\n")));
+        projected_output.insert("returned_lines".to_string(), json!(keep_lines));
+        projected_output.insert(
+            "end_line".to_string(),
+            json!(start_line.saturating_add(keep_lines).saturating_sub(1)),
+        );
+        projected_output.insert("has_more".to_string(), json!(true));
+        projected_output.insert(
+            "next_start_line".to_string(),
+            json!(start_line.saturating_add(keep_lines)),
+        );
+        projected_output.insert("budget_truncated".to_string(), json!(true));
+        let existing_budget_next_limit = output
+            .get("budget_next_limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        projected_output.insert(
+            "budget_next_limit".to_string(),
+            json!(returned_lines
+                .saturating_sub(keep_lines)
+                .saturating_add(existing_budget_next_limit)),
+        );
+        Some(projected)
+    }
+
+    fn legacy_truncate_read_item_to_fit(item: &Value, max_item_bytes: usize) -> Option<Value> {
+        let returned_lines = item.get("output")?.get("returned_lines")?.as_u64()? as usize;
+        if returned_lines <= 1 {
+            return None;
+        }
+        let mut low = 1usize;
+        let mut high = returned_lines - 1;
+        let mut best = None;
+        while low <= high {
+            let keep = low + (high - low) / 2;
+            let Some(candidate) = legacy_partial_read_item(item, keep) else {
+                break;
+            };
+            if projected_read_item_len(&candidate) <= max_item_bytes {
+                best = Some(candidate);
+                low = keep.saturating_add(1);
+            } else {
+                high = keep.saturating_sub(1);
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn truncate_read_item_to_fit_matches_legacy_over_utf8_budget_and_metadata() {
+        let unicode = (0..900)
+            .map(|index| format!("第{index:04}行-{}-{}", "界".repeat(30), "🦀".repeat(8)))
+            .collect::<Vec<_>>();
+        let control = (0u8..=31).map(char::from).collect::<String>();
+        let escape_lines = (0..240)
+            .map(|index| format!("{index}: {control} \" \\\\ \t 🦀"))
+            .collect::<Vec<_>>();
+        let mut continued = ranged_item(0, 11, &unicode);
+        continued["output"]["has_more"] = json!(true);
+        continued["output"]["total_lines"] = json!(1010);
+        continued["output"]["next_start_line"] = json!(911);
+        continued["output"]["budget_truncated"] = json!(true);
+        continued["output"]["budget_next_limit"] = json!(110);
+        continued["output"]["unexpected_private_field"] = json!({
+            "sentinel": "keep-this-field",
+            "escaped": "quotation: \" and newlines: \n"
+        });
+        let numbered = ranged_item(0, 37, &escape_lines);
+        let trailing_empty = ranged_item(0, 1, &["last".to_string(), String::new()]);
+        let mut malformed = ranged_item(0, 11, &unicode[..3]);
+        malformed["output"]["returned_lines"] = json!(4);
+        let mut no_start = ranged_item(0, 11, &unicode[..3]);
+        no_start["output"]
+            .as_object_mut()
+            .unwrap()
+            .remove("start_line");
+        let mut failed = ranged_item(0, 11, &unicode[..3]);
+        failed["success"] = json!(false);
+        let mut bad_text = ranged_item(0, 11, &unicode[..3]);
+        bad_text["output"]["text"] = json!(["not-a-string"]);
+        let mut no_outer_path = ranged_item(0, 11, &unicode[..3]);
+        no_outer_path.as_object_mut().unwrap().remove("path");
+
+        let fixtures = [
+            continued,
+            numbered,
+            trailing_empty,
+            ranged_item(0, 11, &unicode[..3]),
+            malformed,
+            no_start,
+            failed,
+            bad_text,
+            no_outer_path,
+            default_complete_item(0, &["first".to_string(), "second".to_string()]),
+            ranged_item(0, 11, &["only one line".to_string()]),
+        ];
+        let budgets = [
+            0usize,
+            1,
+            16,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+            4096,
+            8192,
+            16 * 1024,
+            32 * 1024,
+            48 * 1024,
+            64 * 1024,
+            96 * 1024,
+            128 * 1024,
+        ];
+        let mut observed_partial = 0;
+        let mut observed_no_fit = 0;
+        for (index, item) in fixtures.iter().enumerate() {
+            let unchanged = item.clone();
+            for &max in &budgets {
+                let expected = legacy_truncate_read_item_to_fit(item, max);
+                let actual = truncate_read_item_to_fit(item, max);
+                assert_eq!(
+                    actual, expected,
+                    "fixture={index} max_item_bytes={max}: candidate content/range/continuation changed"
+                );
+                if let Some(partial) = &actual {
+                    observed_partial += 1;
+                    assert!(
+                        projected_read_item_len(partial) <= max,
+                        "chosen item must respect exact projected byte ceiling"
+                    );
+                } else {
+                    observed_no_fit += 1;
+                }
+            }
+            assert_eq!(item, &unchanged, "measurement may not mutate caller input");
+        }
+        assert!(observed_partial > 0);
+        assert!(observed_no_fit > 0);
+    }
+
+    #[test]
+    fn read_prefix_json_lengths_match_actual_joined_utf8_and_controls() {
+        let unicode_and_controls = (0..25)
+            .map(|i| format!("行-{i} \" \\ \t\u{0001}\u{001f} 😀"))
+            .collect::<Vec<_>>();
+        let text = unicode_and_controls.join("\n");
+        let prefixes = read_prefix_lengths(&text, unicode_and_controls.len()).unwrap();
+        for keep in 1..=unicode_and_controls.len() {
+            let expected =
+                serialized_read_text_len(&unicode_and_controls[..keep].join("\n")).unwrap() - 2;
+            assert_eq!(prefixes[keep - 1], expected, "keep={keep}");
+        }
+        for incorrect in [
+            0usize,
+            unicode_and_controls.len() - 1,
+            unicode_and_controls.len() + 1,
+        ] {
+            assert!(read_prefix_lengths(&text, incorrect).is_none());
+        }
+        assert_eq!(read_prefix_lengths("first\n", 2).unwrap(), vec![5, 7]);
+        assert_eq!(read_prefix_lengths("", 1).unwrap(), vec![0]);
     }
 
     #[test]
@@ -1857,6 +2533,330 @@ mod tests {
         assert!(partial_plus_later_model <= DEFAULT_READ_FILES_RESULT_BYTES);
     }
 
+    // Frozen previous final-cap size measurement. Independently checks the
+    // borrowed-text projection used by production against the full JSON clone.
+    fn legacy_final_model_result_len(output: &Value, projection: &ReadModelProjection) -> usize {
+        let mut projected = ToolResult::ok(output.clone());
+        add_actionable_read_continuations(projection, &mut projected);
+        super::super::result_projection::sparsify_complete_read_success(
+            "read_files",
+            &mut projected,
+        );
+        serialized_json_len(&projected).unwrap_or(usize::MAX)
+    }
+
+    // Frozen original implementation before in-place final hard-cap candidates.
+    fn legacy_enforce_final_model_facing_hard_cap(
+        result: &mut ToolResult,
+        projection: &ReadModelProjection,
+    ) {
+        if !result.success
+            || legacy_final_model_result_len(&result.output, projection)
+                <= MAX_SERIALIZED_OUTPUT_BYTES
+        {
+            return;
+        }
+        let Some(root) = result.output.as_object() else {
+            return;
+        };
+        if root.get("project").and_then(Value::as_str).is_none()
+            || root
+                .get("requested_count")
+                .and_then(Value::as_u64)
+                .is_none()
+            || root.get("items").and_then(Value::as_array).is_none()
+        {
+            return;
+        }
+
+        loop {
+            let Some(items) = result.output.get("items").and_then(Value::as_array) else {
+                return;
+            };
+            let Some(last) = items.last() else {
+                return;
+            };
+            let index = last["index"].as_u64().unwrap_or(0) as usize;
+
+            // Preserve as many whole source lines as possible from the last success
+            // item. Measuring the complete decorated ToolResult makes this exact and
+            // naturally accounts for recovery/handoff/attention bytes.
+            if last["success"].as_bool() == Some(true) {
+                let returned_lines = last
+                    .get("output")
+                    .and_then(|output| output.get("returned_lines"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as usize;
+                if returned_lines > 1 {
+                    let mut low = 1usize;
+                    let mut high = returned_lines - 1;
+                    let mut best = None;
+                    while low <= high {
+                        let keep = low + (high - low) / 2;
+                        let Some(partial) = truncate_read_item(last, keep) else {
+                            break;
+                        };
+                        let mut candidate = result.output.clone();
+                        if let Some(candidate_items) =
+                            candidate.get_mut("items").and_then(Value::as_array_mut)
+                        {
+                            let last_index = candidate_items.len() - 1;
+                            candidate_items[last_index] = partial;
+                        }
+                        mark_final_hard_cap_truncation(&mut candidate, index);
+                        if legacy_final_model_result_len(&candidate, projection)
+                            <= MAX_SERIALIZED_OUTPUT_BYTES
+                        {
+                            best = Some(candidate);
+                            low = keep.saturating_add(1);
+                        } else {
+                            high = keep.saturating_sub(1);
+                        }
+                    }
+                    if let Some(best) = best {
+                        result.output = best;
+                        return;
+                    }
+                }
+            }
+
+            let removed_index = {
+                let Some(items) = result.output.get_mut("items").and_then(Value::as_array_mut)
+                else {
+                    return;
+                };
+                items
+                    .pop()
+                    .and_then(|removed| removed["index"].as_u64())
+                    .unwrap_or(index as u64) as usize
+            };
+            mark_final_hard_cap_truncation(&mut result.output, removed_index);
+            if legacy_final_model_result_len(&result.output, projection)
+                <= MAX_SERIALIZED_OUTPUT_BYTES
+            {
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn final_hard_cap_size_matches_frozen_full_clone_on_all_projection_shapes() {
+        let utf = (0..850)
+            .map(|line| format!("line-{line:04} {} quote=\" slash=\\", "界🦀".repeat(25)))
+            .collect::<Vec<_>>();
+        let mut failure = ranged_item(1, 1, &["private failure".to_string()]);
+        failure["success"] = json!(false);
+        failure["error"] = json!("error");
+        let examples = [
+            batch_output(
+                "agent:oe:demo",
+                1,
+                vec![default_complete_item(0, &["abc".to_string()])],
+                false,
+                None,
+                None,
+            ),
+            batch_output(
+                "agent:oe:demo",
+                2,
+                vec![ranged_item(0, 11, &utf), failure],
+                true,
+                Some(0),
+                Some("hard_result_cap"),
+            ),
+            batch_output(
+                "agent:oe:demo",
+                1,
+                vec![default_complete_item(0, &["a".repeat(488 * 1024)])],
+                false,
+                None,
+                None,
+            ),
+            json!({"unexpected": "中\\n🌍", "items": "malformed"}),
+            json!({"items": [], "output_truncated": true, "next_index": 0,
+                   "unknown_metadata": {"error": "unknown"}}),
+        ];
+        for mut output in examples {
+            output["session_hint"] = json!({"work": "unfinished", "notes": "界🦀"});
+            output["job_attention"] = json!({"items": [{"count": 3, "status": "ready"}]});
+            output["extra"] = json!({"unicode": "🥟", "slash": "\\\\", "tab": "\\t"});
+            let snapshot = output.clone();
+            for projection in [
+                batch_projection(1, None),
+                batch_projection(2, Some(MAX_SERIALIZED_OUTPUT_BYTES)),
+                ReadModelProjection::None,
+            ] {
+                assert_eq!(
+                    final_model_result_len(&output, &projection),
+                    legacy_final_model_result_len(&output, &projection),
+                    "final 512 KiB cap sizer must equal frozen canonical serialization"
+                );
+                assert_eq!(output, snapshot, "sizing must not mutate result");
+            }
+        }
+    }
+
+    #[test]
+    fn final_hard_cap_in_place_matches_legacy_across_partial_drops_and_metadata() {
+        let utf_lines = (0..900)
+            .map(|line| format!("第{line:04}行-{}", "界".repeat(42)))
+            .collect::<Vec<_>>();
+        let ascii_lines = (0..1100)
+            .map(|line| format!("line={line} {} \" \\", "x".repeat(150)))
+            .collect::<Vec<_>>();
+        let mut existing_partial = ranged_item(1, 11, &ascii_lines);
+        existing_partial["output"]["budget_next_limit"] = json!(89);
+        existing_partial["output"]["budget_truncated"] = json!(true);
+        existing_partial["output"]["has_more"] = json!(true);
+        existing_partial["output"]["next_start_line"] = json!(1111);
+        existing_partial["output"]["total_lines"] = json!(1199);
+
+        let mut failed = ranged_item(0, 1, &["bad read".into()]);
+        failed["success"] = json!(false);
+        failed["error"] = json!("private_error_marker");
+
+        let cases = [
+            (
+                vec![default_complete_item(0, &["short".to_string()])],
+                0usize,
+            ),
+            (vec![ranged_item(0, 11, &utf_lines)], 455 * 1024),
+            (
+                vec![
+                    default_complete_item(0, &["p".repeat(340 * 1024)]),
+                    existing_partial.clone(),
+                ],
+                92 * 1024,
+            ),
+            (
+                vec![
+                    default_complete_item(0, &["p".repeat(90 * 1024)]),
+                    failed.clone(),
+                    ranged_item(2, 11, &utf_lines),
+                ],
+                390 * 1024,
+            ),
+            (
+                (0..8)
+                    .map(|index| default_complete_item(index, &["X".repeat(85 * 1024)]))
+                    .collect(),
+                0,
+            ),
+            (
+                vec![default_complete_item(0, &["Y".repeat(510 * 1024)])],
+                25 * 1024,
+            ),
+            (vec![failed], 550 * 1024),
+        ];
+
+        let mut actual_partials = 0usize;
+        let mut actual_drops = 0usize;
+        for (case, (items, metadata_bytes)) in cases.into_iter().enumerate() {
+            let count = items.len();
+            let projection = batch_projection(count, Some(MAX_SERIALIZED_OUTPUT_BYTES));
+            let mut base = ToolResult::ok(batch_output(
+                "agent:oe:demo",
+                count,
+                items,
+                false,
+                None,
+                None,
+            ));
+            base.output["session_hint"] = json!({
+                "purpose": "keep",
+                "todo": ["question", "context", "open"],
+                "weird": "新しい 🦀 \n \t \" \\"
+            });
+            base.output["job_attention"] = json!({
+                "items": [{"state": "terminal", "outcome": "passed"}]
+            });
+            base.output["unknown_extended_metadata"] = json!({
+                "padding": "m".repeat(metadata_bytes)
+            });
+            let input = ToolResult::ok(base.output.clone());
+            let mut previous = ToolResult::ok(base.output.clone());
+            legacy_enforce_final_model_facing_hard_cap(&mut previous, &projection);
+            enforce_final_model_facing_hard_cap(&mut base, &projection);
+            assert_eq!(
+                serde_json::to_value(&base).unwrap(),
+                serde_json::to_value(&previous).unwrap(),
+                "case={case}: canonical ToolResult differs from legacy"
+            );
+            let before_items = input.output["items"].as_array().unwrap();
+            let after_items = base.output["items"].as_array().unwrap();
+            actual_drops += usize::from(after_items.len() < before_items.len());
+            if after_items.iter().any(|item| {
+                item["output"]["budget_truncated"] == true
+                    && before_items.iter().any(|prior| {
+                        prior["index"] == item["index"]
+                            && prior["output"]["returned_lines"] != item["output"]["returned_lines"]
+                    })
+            }) {
+                actual_partials += 1;
+            }
+            assert!(base.output["session_hint"].is_object());
+            assert_eq!(base.output["job_attention"], input.output["job_attention"]);
+
+            let mut model = ToolResult::ok(base.output.clone());
+            let mut old_model = previous;
+            add_actionable_read_continuations(&projection, &mut model);
+            add_actionable_read_continuations(&projection, &mut old_model);
+            super::super::result_projection::sparsify_complete_read_success(
+                "read_files",
+                &mut model,
+            );
+            super::super::result_projection::sparsify_complete_read_success(
+                "read_files",
+                &mut old_model,
+            );
+            assert_eq!(
+                serde_json::to_value(&model).unwrap(),
+                serde_json::to_value(&old_model).unwrap(),
+                "case={case}: projected parser-visible result/continuations differ"
+            );
+            if let Some(next) = model.output.get("suggested_call") {
+                assert_eq!(next["tool"], "read_files");
+                ToolCall::from_tool_name("read_files", next["arguments"].clone())
+                    .expect("suggested continuation must parse");
+            }
+        }
+        assert!(
+            actual_partials > 0,
+            "some fixture must fit a partial final read"
+        );
+        assert!(
+            actual_drops > 0,
+            "some fixture must drop an entire final item"
+        );
+    }
+
+    #[test]
+    fn final_hard_cap_stops_on_missing_metadata_and_failure_without_mutation() {
+        for mut result in [
+            ToolResult::ok(
+                json!({"items": [], "requested_count": 1, "other": "x".repeat(530 * 1024)}),
+            ),
+            ToolResult::ok(
+                json!({"project": "demo", "items": [], "other": "x".repeat(530 * 1024)}),
+            ),
+            ToolResult::ok(
+                json!({"project": "demo", "requested_count": 1, "items": "not-array",
+                                  "other": "x".repeat(530 * 1024)}),
+            ),
+            ToolResult::err_with_output(
+                "failed",
+                json!({
+                    "project": "demo", "requested_count": 1,
+                    "items": [], "other": "x".repeat(530 * 1024)
+                }),
+            ),
+        ] {
+            let before = serde_json::to_value(&result).unwrap();
+            enforce_final_model_facing_hard_cap(&mut result, &batch_projection(1, None));
+            assert_eq!(serde_json::to_value(&result).unwrap(), before);
+        }
+    }
+
     #[test]
     fn inspection_ceiling_is_independent_from_single_file_read_cap() {
         assert_eq!(MAX_SERIALIZED_OUTPUT_BYTES, 512 * 1024);
@@ -1868,6 +2868,175 @@ mod tests {
             webcodex_workspace::file_read_range::MAX_RANGE_CONTENT_BYTES,
             192 * 1024
         );
+    }
+
+    fn canonical_projected_batch_bytes(output: &Value, projection: &ReadModelProjection) -> usize {
+        let mut result = ToolResult::ok(output.clone());
+        add_actionable_read_continuations(projection, &mut result);
+        super::super::result_projection::sparsify_complete_read_success("read_files", &mut result);
+        serialized_json_len(&result).unwrap_or(usize::MAX)
+    }
+
+    #[test]
+    fn serialized_read_text_len_matches_serde_json_for_all_control_bytes_and_utf8() {
+        let control: String = (0u8..=0x1f).map(char::from).collect();
+        let examples = [
+            "",
+            "\"",
+            "\\",
+            "\n\r\t\x08\x0c",
+            "\u{0000}\u{001f}\u{007f}",
+            "slash / and HTML < > &",
+            "Àéहिंदी日本語🦀",
+            "\u{2028}\u{2029}\u{0085}",
+            "control plus quotes",
+        ];
+        for text in examples
+            .iter()
+            .copied()
+            .chain(std::iter::once(control.as_str()))
+        {
+            assert_eq!(
+                serialized_read_text_len(text),
+                Some(serialized_json_len(text).unwrap()),
+                "exact escaped JSON length must match serde_json for {text:?}"
+            );
+        }
+        let mixed = format!(
+            "{}{}{}{}",
+            control.repeat(140),
+            "quotes \\\" and escaped \\\\ \n\r\t".repeat(400),
+            "界🦀".repeat(4096),
+            "ASCII only".repeat(2048),
+        );
+        assert_eq!(
+            serialized_read_text_len(&mixed),
+            Some(serialized_json_len(&mixed).unwrap())
+        );
+        assert_eq!(
+            serialized_read_text_len(&"x".repeat(128 * 1024)),
+            Some(128 * 1024 + 2)
+        );
+    }
+
+    #[test]
+    fn projected_budget_measurement_skips_read_text_copies_exactly() {
+        let strings = [
+            String::new(),
+            "plain ASCII".to_string(),
+            "unicode 漢字 🦀 café".to_string(),
+            "quote=\\\" escape=\\\\ newline=\\n tab=\\t".to_string(),
+            "\\u{0000}\\u{0001}\\u{001f}\\u{007f}".to_string(),
+            "A".repeat(95 * 1024),
+            "界".repeat(20 * 1024),
+        ];
+        for value in &strings {
+            for (numbered, output_truncated) in [(false, false), (true, false), (false, true)] {
+                let mut item = if numbered {
+                    ranged_item(0, 11, &[value.clone()])
+                } else {
+                    default_complete_item(0, &[value.clone()])
+                };
+                if output_truncated {
+                    item["output"]["has_more"] = json!(true);
+                    item["output"]["total_lines"] = json!(30);
+                    item["output"]["next_start_line"] = json!(12);
+                    item["output"]["budget_truncated"] = json!(true);
+                    item["output"]["budget_next_limit"] = json!(19);
+                }
+                let mut output = batch_output(
+                    "agent:oe:demo",
+                    1,
+                    vec![item],
+                    output_truncated,
+                    output_truncated.then_some(0),
+                    output_truncated.then_some("batch_response_budget"),
+                );
+                // Data unrelated to read text must still count in the exact
+                // projection; known/unknown fields cannot disappear.
+                output["unknown_metadata"] = json!({
+                    "unicode": "田中 🦀",
+                    "escaped": "one\\ntwo\\tthree",
+                });
+                let projection = ReadModelProjection::Batch {
+                    project: "agent:oe:demo".to_string(),
+                    items: vec![ReadFilesItem {
+                        path: "src/0.rs".to_string(),
+                        start_line: Some(if numbered { 11 } else { 1 }),
+                        limit: Some(100),
+                        expected_read_revision: None,
+                    }],
+                    session_id: Some("wc_sess_budget_probe".to_string()),
+                    with_line_numbers: Some(numbered),
+                    max_result_bytes: Some(256 * 1024),
+                };
+                let snapshot = output.clone();
+                let expected = canonical_projected_batch_bytes(&output, &projection);
+                let actual = projected_batch_serialized_len(&output, &projection);
+                assert_eq!(actual, expected,
+                    "JSON projection sizing must match canonical bytes: numbered={numbered}, truncated={output_truncated}, input_bytes={}",
+                    value.len());
+                assert_eq!(
+                    output, snapshot,
+                    "measurement must not mutate original read result"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn projected_budget_measurement_preserves_multiple_and_malformed_items() {
+        let mut failed = ranged_item(2, 3, &["failed".to_string()]);
+        failed["success"] = json!(false);
+        failed["error"] = json!("private failure");
+        let outputs = [
+            batch_output(
+                "agent:oe:demo",
+                3,
+                vec![
+                    default_complete_item(0, &["valid".to_string()]),
+                    ranged_item(1, 21, &["test".repeat(30_000)]),
+                    failed,
+                ],
+                false,
+                None,
+                None,
+            ),
+            batch_output(
+                "agent:oe:demo",
+                2,
+                vec![
+                    json!({"success": true, "index": 0, "output": {"text": ["not", "a", "string"]}}),
+                    json!({"success": false, "index": 1, "error": "failed", "output": null}),
+                ],
+                true,
+                Some(1),
+                Some("hard_result_cap"),
+            ),
+            batch_output(
+                "agent:oe:demo",
+                0,
+                vec![],
+                true,
+                Some(0),
+                Some("hard_result_cap"),
+            ),
+            json!({"items": "not an array", "other": {"text": "PRIVATE"}}),
+            json!({"items": [null, [], {}, {"output": {"text": "content"}}]}),
+        ];
+        for output in &outputs {
+            for projection in [
+                batch_projection(3, None),
+                batch_projection(3, Some(MAX_SERIALIZED_OUTPUT_BYTES)),
+                ReadModelProjection::None,
+            ] {
+                assert_eq!(
+                    projected_batch_serialized_len(output, &projection),
+                    canonical_projected_batch_bytes(output, &projection),
+                    "malformed/partial/read_failure schema cannot change size accounting"
+                );
+            }
+        }
     }
 
     #[test]

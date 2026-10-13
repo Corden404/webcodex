@@ -85,8 +85,8 @@ pub(crate) fn builtin_coding_workflow_projection_with_policy(
             "goal_workflow": policy.goal_selection_guidance(),
             "goal_continuation": policy.mcp_app_resume.guidance(),
             "goal_checkpoint": policy.goal_checkpoint_guidance(),
-            "handoff_recovery": "Use handoff recovery only after task-context loss/compaction/restart, explicit transfer or user-requested recovery. Never use it for routine progress/baselines; timeout alone is not Session loss. Missing exact session_id: original Window uses _wc.context=[\"workflow.resume\"]; otherwise list_sessions(project). Choose an authorized candidate, read read_session_handoff, check basis completeness/truncation, then resume Active work with work_on_project(session_id=..., instruction=...). Checkout derives and reauthorizes its bound Project; reuse project_ref. Closed is historical only. Notes are reports; recheck stale facts. Dirty files alone do not prove external changes; recover exact Session evidence first.",
-            "session_recording": "When work_on_project creates or resumes, prefer its returned session_ref as _wc.record on the next ordinary model-visible call for recorder provenance only; canonical wc_sess_* remains valid. business session_id may target another Session; _wc.record grants no authority. At recovery-worthy boundaries save agreed decisions and current progress/remaining work with post_session_message(kind=decision/progress) on the explicit business Session; use a stable delivery_key for uncertain same-payload retries. Host conversation/private reasoning is not automatically recorded. Before switching save context; never put credentials in notes. Keep delegated findings as explicit reports, not native validation proof.",
+            "handoff_recovery": "Use handoff only after task-context loss/compaction/restart, explicit transfer or user recovery. Never use it for routine progress/baselines; timeout alone is not Session loss. Missing exact session_id: original Window _wc.context=[\"workflow.resume\"]; else list_sessions(project). Choose authorized candidate; read read_session_handoff and check basis completeness/truncation. Snapshot changed: re-read exact handoff for latest instructions/decisions/progress/validation before dependent work. Active: work_on_project(session_id=..., instruction=...) reauthorizes bound Project; reuse project_ref. Closed: history only. Notes are reports; check stale facts. Dirty files alone don't prove external changes.",
+            "session_recording": "When work_on_project creates or resumes, prefer its returned session_ref as _wc.record on each ordinary call for that Session's recorder provenance only; canonical wc_sess_* remains valid. business session_id may target another Session but does not select a recorder; _wc.record grants no authority. Recorder is request-scoped, never sticky; omitted calls are not backfilled. Save agreed decisions/progress/remaining work via post_session_message(kind=decision/progress) on explicit business Session at recovery boundaries/before switching; stable delivery_key for uncertain same-payload retries. Chat/private reasoning is not auto-recorded. No credentials in notes. Delegated reports are not native validation proof.",
             "session_message_ack": "For any retained collaboration message with requires_ack=true projected in session_attention, peer_messages, or operator_messages, attach _wc.ack=[<wc_msg_*>] on the next ordinary model-visible call. Compact _wc.ack_ref remains Session-only. ACK proves model-context retention only; it never resolves messages, grants authority, or gates execution.",
             "window_reply": "After handling an operator_messages item, reply textually by attaching _wc.reply={reply_to:<wc_msg_*>,message:<text>} to the next ordinary model-visible WebCodex call in the same Window. No _wc.record or business session_id is required. If requires_ack=true, also include the same id in _wc.ack. The reply is a post-result collaboration sidecar: it never authorizes, predicts, or changes the main tool effect.",
             "session_message_resolution": "For a handled non-todo, attach _wc.resolve={message_id:<wc_msg_*>,resolution:<text>} on the next ordinary call together with _wc.record; if requires_ack, also include the id in _wc.ack. Resolve cannot predict or change the main call. Todos use complete_session_message.",
@@ -645,6 +645,7 @@ fn continuation_projection(
 
     let mut projected = json!({
         "status": status,
+        "task": attempt.get("task_context").cloned().unwrap_or(Value::Null),
         "reason_code": feedback.get("reason_code").cloned().unwrap_or(Value::Null),
         "instruction": {
             "status": attempt
@@ -1018,6 +1019,15 @@ fn startup_verdict(
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
     if continuation
+        .pointer("/task/stall/status")
+        .and_then(Value::as_str)
+        == Some("reconcile_required")
+    {
+        if let Some(action) = continuation_actions.first() {
+            push_unique(&mut actions, action);
+        }
+    }
+    if continuation
         .pointer("/validation/open_failures/total")
         .and_then(Value::as_u64)
         .unwrap_or(0)
@@ -1256,6 +1266,11 @@ fn enforce_hard_size_limit(brief: &mut Value) {
     // Extremely large continuation evidence is reduced item-by-item. Every
     // list retains the original total and flips truncated=true.
     const LIST_POINTERS: &[&str] = &[
+        "/continuation/task/recent_progress",
+        "/continuation/task/decisions",
+        "/continuation/task/relevant_files",
+        "/continuation/task/failure_locations",
+        "/continuation/task/next_steps",
         "/continuation/validation/delta/resolved_failures",
         "/continuation/validation/delta/new_failures",
         "/continuation/validation/delta/still_failing",
@@ -2131,6 +2146,20 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .any(|action| action.starts_with("rerun focused target 0")));
+    }
+    #[test]
+    fn startup_unknown_execution_reconciliation_precedes_other_attention_in_minimal_output() {
+        let action =
+            "reconcile the exact Job or execution outcome before considering another execution";
+        let feedback = json!({"status":"available","attempt":{
+            "task_context":{"stall":{"status":"reconcile_required"}},"suggested_next_actions":[action]}});
+        let continuation = continuation_projection(&feedback, &json!({}), true, "continued");
+        assert_eq!(
+            continuation["task"]["stall"]["status"],
+            "reconcile_required"
+        );
+        let verdict = startup_verdict(&["active_jobs_blocking".into()], &[], &continuation, true);
+        assert_eq!(verdict["suggested_next_actions"], json!([action]));
     }
 }
 

@@ -260,6 +260,8 @@ async fn lease_stale_instance_job_update_rejected() {
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -289,6 +291,8 @@ async fn lease_stale_instance_job_update_rejected() {
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -319,6 +323,8 @@ async fn lease_stale_instance_job_update_rejected() {
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: true,
         })
@@ -461,6 +467,8 @@ async fn lease_reconcile_disconnect_stale_instance_is_noop() {
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -637,6 +645,8 @@ async fn lease_replacement_transfers_exact_detached_inventory_to_new_instance() 
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -675,6 +685,8 @@ async fn lease_replacement_transfers_exact_detached_inventory_to_new_instance() 
             stderr: Default::default(),
             validation_progress: record.validation_progress.clone(),
             test_count_evidence: record.test_count_evidence.clone(),
+            format_mutation: record.format_mutation,
+            build_artifacts: record.build_artifacts.clone(),
             activity: record.activity,
         }
     };
@@ -737,6 +749,8 @@ async fn lease_replacement_transfers_exact_detached_inventory_to_new_instance() 
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -761,6 +775,8 @@ async fn lease_replacement_transfers_exact_detached_inventory_to_new_instance() 
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })

@@ -1,5 +1,174 @@
 use super::*;
 
+#[test]
+fn mcp_extension_route_lookup_preserves_membership_without_schema_materialization() {
+    use webcodex_tool_contracts::registry::{
+        stateless_operator_extension_tool_specs, take_tool_materialization_counts_for_test,
+    };
+    use webcodex_tool_contracts::{
+        runtime_tool_operator_extension_family, tool_definition::tool_definitions,
+    };
+    let names = stateless_operator_extension_tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    for definition in tool_definitions() {
+        assert_eq!(
+            runtime_tool_operator_extension_family(definition.name).is_some(),
+            names.contains(definition.name),
+            "{}",
+            definition.name
+        );
+    }
+    take_tool_materialization_counts_for_test();
+    for name in names
+        .iter()
+        .map(String::as_str)
+        .chain(["read_files", "unknown-tool"])
+    {
+        let ordinary =
+            crate::mcp::tools::adaptive_runtime_gateway_target_admitted_for_test(name, false);
+        let modern =
+            crate::mcp::tools::adaptive_runtime_gateway_target_admitted_for_test(name, true);
+        if names.contains(name) {
+            assert!(!ordinary);
+            assert!(modern);
+        }
+        if name == "unknown-tool" {
+            assert!(!ordinary);
+            assert!(!modern);
+        }
+    }
+    assert_eq!(take_tool_materialization_counts_for_test(), (0, 0));
+}
+
+#[tokio::test]
+async fn mcp_route_recovery_rejects_unavailable_tools_without_gateway_retry() {
+    let runtime = test_runtime_with_mcp_settings(true, false);
+    for stateless in [false, true] {
+        for name in [
+            "tool_manifest",
+            "runtime_status",
+            "unknown_tool_name",
+            "get_work_result_state",
+        ] {
+            let params = json!({"name": name, "arguments": {}});
+            let params = if stateless {
+                mcp_2026_params(params)
+            } else {
+                params
+            };
+            let outcome =
+                handle_mcp_request(&runtime, rpc("tools/call", Some(json!(8100)), params), None)
+                    .await;
+            let McpOutcome::BadRequest(value) = outcome else {
+                panic!("unavailable tool must be rejected before execution: {name}");
+            };
+            assert_eq!(value["error"]["code"], -32602);
+            let message = value["error"]["message"].as_str().unwrap();
+            assert!(message.contains("unavailable"), "{name}: {message}");
+            assert!(message.contains("tools/list"), "{name}: {message}");
+            assert!(!message.contains("call_runtime_tool"), "{name}: {message}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_route_recovery_suggests_gateway_only_with_current_scope() {
+    let runtime = test_runtime_with_mcp_settings(true, false);
+    let mut restricted = crate::auth::AuthContext::new(crate::auth::AuthKind::OAuth2Token);
+    restricted.scopes = vec!["runtime:read".to_string()];
+    for stateless in [false, true] {
+        for auth in [None, Some(&restricted)] {
+            let params = json!({"name": "list_projects", "arguments": {}});
+            let params = if stateless {
+                mcp_2026_params(params)
+            } else {
+                params
+            };
+            let outcome =
+                handle_mcp_request(&runtime, rpc("tools/call", Some(json!(8101)), params), auth)
+                    .await;
+            let McpOutcome::BadRequest(value) = outcome else {
+                panic!("gateway-only tool must not execute directly");
+            };
+            assert_eq!(value["error"]["code"], -32602);
+            let message = value["error"]["message"].as_str().unwrap();
+            assert_eq!(
+                message.contains("call_runtime_tool"),
+                auth.is_none(),
+                "{message}"
+            );
+            if auth.is_some() {
+                assert!(message.contains("authorization"), "{message}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn mcp_route_recovery_current_discovery_matches_callable_contracts() {
+    let runtime = test_runtime_with_mcp_settings(true, false);
+    let outcome = handle_mcp_request(
+        &runtime,
+        rpc("tools/list", Some(json!(8102)), mcp_2026_params(json!({}))),
+        None,
+    )
+    .await;
+    let McpOutcome::Ok(value) = outcome else {
+        panic!("expected discovery");
+    };
+    let tools = value["result"]["tools"].as_array().unwrap();
+    for retired in [
+        "tool_manifest",
+        "runtime_status",
+        "apply_text_edits",
+        "session_handoff_summary",
+    ] {
+        assert!(!tools.iter().any(|tool| tool["name"] == retired));
+    }
+    let bootstrap = tools
+        .iter()
+        .find(|tool| tool["name"] == "work_on_project")
+        .unwrap();
+    for retired in [
+        "include_project_instructions",
+        "include_workflow_guidance",
+        "recording_session_id",
+    ] {
+        assert!(bootstrap["inputSchema"]["properties"]
+            .get(retired)
+            .is_none());
+    }
+    assert!(bootstrap["inputSchema"]["properties"].get("_wc").is_some());
+    for (name, arguments) in [
+        ("get_runtime_status", json!({"compact": true})),
+        ("read_tool_manifest", json!({"tool_name": "read_files"})),
+    ] {
+        let descriptor = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        for key in arguments.as_object().unwrap().keys() {
+            assert!(descriptor["inputSchema"]["properties"].get(key).is_some());
+        }
+        let outcome = handle_mcp_request(
+            &runtime,
+            rpc(
+                "tools/call",
+                Some(json!(8103)),
+                mcp_2026_params(json!({"name": name, "arguments": arguments})),
+            ),
+            None,
+        )
+        .await;
+        let McpOutcome::Ok(value) = outcome else {
+            panic!("advertised callable failed: {name}");
+        };
+        assert_eq!(
+            value["result"]["structuredContent"]["success"], true,
+            "{name}: {value}"
+        );
+    }
+}
+
 async fn wait_for_mcp_agent_request(
     registry: &crate::runner_http::RunnerRegistry,
     client_id: &str,
@@ -751,151 +920,6 @@ fn stateless_workflow_recorder_metadata_adds_protocol_projection() {
 }
 
 #[test]
-fn stateless_ack_wrapper_normalizes_and_is_removed_before_concrete_tool_parsing() {
-    let mut arguments = json!({
-        crate::tool_runtime::sessions::TOOL_CALL_ACK_SESSION_MESSAGE_IDS_FIELD: [
-            "wc_msg_abcd-efgh_ijklmn",
-            "wc_msg_abcd-efgh_ijklmn",
-            "wc_msg_0123456789abcdef"
-        ]
-    });
-    let normalized = strip_stateless_ack_session_message_ids(&mut arguments).unwrap();
-    assert_eq!(
-        normalized,
-        vec!["wc_msg_abcd-efgh_ijklmn", "wc_msg_0123456789abcdef"]
-    );
-    assert!(arguments
-        .get(crate::tool_runtime::sessions::TOOL_CALL_ACK_SESSION_MESSAGE_IDS_FIELD)
-        .is_none());
-    assert_eq!(
-        normalized,
-        vec!["wc_msg_abcd-efgh_ijklmn", "wc_msg_0123456789abcdef"]
-    );
-    crate::tool_runtime::ToolCall::from_tool_name("list_tools", arguments)
-        .expect("wrapper ACK metadata must be gone before concrete parsing");
-
-    let mut malformed = json!({
-        crate::tool_runtime::sessions::TOOL_CALL_ACK_SESSION_MESSAGE_IDS_FIELD: ["not-a-message-id"]
-    });
-    assert!(strip_stateless_ack_session_message_ids(&mut malformed).is_err());
-    let mut oversized = json!({
-        crate::tool_runtime::sessions::TOOL_CALL_ACK_SESSION_MESSAGE_IDS_FIELD:
-            (0..=crate::tool_runtime::sessions::MAX_TOOL_CALL_ACK_MESSAGE_IDS)
-                .map(|index| format!("wc_msg_{index}"))
-                .collect::<Vec<_>>()
-    });
-    assert!(strip_stateless_ack_session_message_ids(&mut oversized).is_err());
-}
-
-#[test]
-fn stateless_ack_ref_wrapper_is_bounded_and_removed_before_concrete_parsing() {
-    let mut arguments = json!({
-        crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD: "  wc_ack1_example  "
-    });
-    let ack_ref = strip_stateless_ack_ref(&mut arguments).unwrap();
-    assert_eq!(ack_ref.as_deref(), Some("wc_ack1_example"));
-    assert!(arguments
-        .get(crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD)
-        .is_none());
-    crate::tool_runtime::ToolCall::from_tool_name("list_tools", arguments)
-        .expect("ACK ref wrapper metadata must be gone before concrete parsing");
-
-    let mut wrong_type = json!({
-        crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD: ["wc_ack1_example"]
-    });
-    assert!(strip_stateless_ack_ref(&mut wrong_type).is_err());
-
-    let mut oversized = json!({
-        crate::tool_runtime::sessions::TOOL_CALL_ACK_REF_FIELD:
-            "x".repeat(crate::tool_runtime::sessions::MAX_TOOL_CALL_ACK_REF_CHARS + 1)
-    });
-    assert!(strip_stateless_ack_ref(&mut oversized).is_err());
-}
-
-#[test]
-fn stateless_message_resolution_wrapper_is_validated_and_removed_before_concrete_parsing() {
-    let mut arguments = json!({
-        crate::tool_runtime::sessions::TOOL_CALL_SESSION_MESSAGE_RESOLUTION_FIELD: {
-            "message_id": "wc_msg_abcd-efgh_ijklmn",
-            "resolution": "  handled in the current model turn  "
-        }
-    });
-    let resolution = strip_stateless_session_message_resolution(&mut arguments)
-        .unwrap()
-        .expect("message resolution wrapper");
-    assert_eq!(resolution.message_id, "wc_msg_abcd-efgh_ijklmn");
-    assert_eq!(resolution.resolution, "handled in the current model turn");
-    assert!(arguments
-        .get(crate::tool_runtime::sessions::TOOL_CALL_SESSION_MESSAGE_RESOLUTION_FIELD)
-        .is_none());
-    crate::tool_runtime::ToolCall::from_tool_name("list_tools", arguments)
-        .expect("message resolution wrapper metadata must be gone before concrete parsing");
-
-    for malformed in [
-        json!({
-            crate::tool_runtime::sessions::TOOL_CALL_SESSION_MESSAGE_RESOLUTION_FIELD: {
-                "message_id": "not-a-message-id",
-                "resolution": "handled"
-            }
-        }),
-        json!({
-            crate::tool_runtime::sessions::TOOL_CALL_SESSION_MESSAGE_RESOLUTION_FIELD: {
-                "message_id": "wc_msg_beta",
-                "resolution": "   "
-            }
-        }),
-        json!({
-            crate::tool_runtime::sessions::TOOL_CALL_SESSION_MESSAGE_RESOLUTION_FIELD: {
-                "message_id": "wc_msg_beta",
-                "resolution": "handled",
-                "extra": true
-            }
-        }),
-    ] {
-        let mut malformed = malformed;
-        assert!(strip_stateless_session_message_resolution(&mut malformed).is_err());
-    }
-}
-
-#[test]
-fn stateless_context_request_is_deduped_open_ended_and_removed_before_parsing() {
-    let mut arguments = json!({
-        crate::tool_runtime::context_projection::TOOL_CALL_CONTEXT_REQUEST_FIELD: [
-            "project.instructions",
-            "future.material",
-            "project.instructions"
-        ]
-    });
-    let normalized = strip_stateless_context_request(&mut arguments).unwrap();
-    assert_eq!(
-        normalized,
-        vec![
-            "project.instructions".to_string(),
-            "future.material".to_string()
-        ]
-    );
-    assert!(arguments
-        .get(crate::tool_runtime::context_projection::TOOL_CALL_CONTEXT_REQUEST_FIELD)
-        .is_none());
-    crate::tool_runtime::ToolCall::from_tool_name("list_tools", arguments)
-        .expect("context_request wrapper metadata must be gone before concrete parsing");
-
-    for malformed in [
-        json!({crate::tool_runtime::context_projection::TOOL_CALL_CONTEXT_REQUEST_FIELD: "project.instructions"}),
-        json!({crate::tool_runtime::context_projection::TOOL_CALL_CONTEXT_REQUEST_FIELD: ["bad key"]}),
-        json!({crate::tool_runtime::context_projection::TOOL_CALL_CONTEXT_REQUEST_FIELD: [""]}),
-        json!({crate::tool_runtime::context_projection::TOOL_CALL_CONTEXT_REQUEST_FIELD:
-            (0..=crate::tool_runtime::context_projection::MAX_CONTEXT_REQUEST_ITEMS)
-                .map(|index| format!("future.material.{index}"))
-                .collect::<Vec<_>>()
-        }),
-    ] {
-        let mut malformed = malformed;
-        assert!(strip_stateless_context_request(&mut malformed).is_err());
-    }
-}
-
-#[test]
 fn stateless_invocation_metadata_stays_typed_and_business_arguments_stay_clean() {
     let mut arguments = json!({
         "project": "proj",
@@ -1498,6 +1522,71 @@ fn mcp_work_on_project_schema_exposes_managed_worktree_without_internal_operatio
     assert!(tools
         .iter()
         .all(|tool| tool["name"] != "prepare_managed_worktree"));
+}
+
+#[test]
+fn mcp_tools_list_compact_materializes_only_authorized_inputs() {
+    use webcodex_tool_contracts::registry::take_tool_materialization_counts_for_test as counts;
+    let admin = crate::auth::AuthContext {
+        scopes: vec![crate::auth::SCOPE_ADMIN.to_string()],
+        is_bootstrap: true,
+        ..crate::auth::AuthContext::new(crate::auth::AuthKind::Bootstrap)
+    };
+    let reader = crate::auth::AuthContext {
+        scopes: vec![crate::auth::SCOPE_PROJECT_READ.to_string()],
+        ..crate::auth::AuthContext::new(crate::auth::AuthKind::OAuth2Token)
+    };
+    for auth in [None, Some(&reader), Some(&admin)] {
+        for stateless in [false, true] {
+            for apps in [false, true] {
+                counts();
+                let mut compact =
+                    mcp_tools_list_payload_with_features_for_auth(true, apps, stateless, auth);
+                let (inputs, outputs) = counts();
+                let tools = compact["tools"].as_array().unwrap();
+                let custom_count = tools
+                    .iter()
+                    .filter(|tool| {
+                        matches!(
+                            tool["name"].as_str(),
+                            Some("work_result_thread_panel" | "search_mentions")
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    outputs, 0,
+                    "compact tools/list must never materialize discarded output schemas"
+                );
+                assert_eq!(
+                    inputs,
+                    tools.len() - custom_count,
+                    "only returned canonical inputs are materialized once"
+                );
+                let mut full =
+                    mcp_tools_list_payload_with_features_for_auth(false, apps, stateless, auth);
+                for tool in full["tools"].as_array_mut().unwrap() {
+                    tool.as_object_mut().unwrap().remove("outputSchema");
+                    crate::mcp::discovery::compact_tool(tool);
+                    if tool["name"] == "list_sessions" && apps && stateless {
+                        // The App-only discovery overlay has an existing explicit
+                        // compact description instead of the canonical full copy.
+                        let expected = tools
+                            .iter()
+                            .find(|entry| entry["name"] == "list_sessions")
+                            .unwrap();
+                        tool["description"] = expected["description"].clone();
+                    }
+                }
+                // App diagnostic fields are appended after the inner renderer;
+                // normalize both as the final tools/list adapter does.
+                for tool in compact["tools"].as_array_mut().unwrap() {
+                    crate::mcp::discovery::compact_tool(tool);
+                }
+                assert_eq!(compact, full, "compact keeps order, scope, inputs, annotations and App metadata: apps={apps}, stateless={stateless}");
+                counts();
+            }
+        }
+    }
 }
 
 #[test]
@@ -2226,9 +2315,29 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
         (
             "project_build",
             vec![
-                "Portable Rust/Go project build",
+                "Rust/Go/Python/Node builds",
+                "fixed argv, no installs",
+                "Python: pyproject.toml, configured interpreter -m build --no-isolation; rejects scope",
+                "Artifacts are observations, not correctness/freshness proof",
+                "declared npm/pnpm/yarn/bun build",
+                "no installs",
+                "Node: declared npm/pnpm/yarn/bun build; rejects scope/policy",
+                "scripts may write/use network",
                 "same durable Job",
-                "pending never authorizes retry or redispatch",
+                "never retry or redispatch",
+                "observe_jobs",
+            ],
+        ),
+        (
+            "project_validate",
+            vec![
+                "Validate Rust/Go/Python/Node",
+                "no installs",
+                "Only structured evidence proves counts",
+                "Vitest/Jest require project_validation_node_json_v1",
+                "Scripts may write/use network",
+                "same Job; observe_jobs, never retry",
+                "Scope/filter/policy: read_tool_manifest",
             ],
         ),
         (
@@ -2259,16 +2368,25 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
             "present_agent_continuation",
             vec![
                 "create_agent_identity",
-                "yield/end promptly",
+                "normal final assistant response",
+                "card/tool result alone does not finalize the turn",
                 "not wake readiness",
                 "production_auto_resume_available",
             ],
         ),
+        (
+            "present_job_terminal_continuation",
+            vec![
+                "normal final assistant response",
+                "card/tool result alone does not finalize the turn",
+                "never starts or retries execution",
+            ],
+        ),
     ] {
-        let descriptor = if matches!(name, "wait_for_job_terminal" | "present_agent_continuation") {
+        let descriptor = if name == "wait_for_job_terminal" {
             assert!(!tools.iter().any(|tool| tool["name"] == name));
-            // Keep testing dormant/gateway compact copy without asserting that
-            // these tools still occupy the ordinary direct inventory.
+            // Durable wait remains a gateway tool; its exact compact copy
+            // still needs the current-turn guidance.
             let definition = webcodex_tool_contracts::lookup_tool_definition(name).unwrap();
             let mut descriptor = json!({
                 "name": name,
@@ -2285,6 +2403,10 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
                 .clone()
         };
         let description = descriptor["description"].as_str().unwrap();
+        if name == "project_build" {
+            assert_eq!(description, "Rust/Go/Python/Node builds; fixed argv, no installs. Rust/Go: packages/all_packages, locked. Python: pyproject.toml, configured interpreter -m build --no-isolation; rejects scope. Node: declared npm/pnpm/yarn/bun build; rejects scope/policy; scripts may write/use network. Artifacts are observations, not correctness/freshness proof. Pending: same durable Job/continuation, never retry or redispatch; observe_jobs.");
+            assert!(!description.contains("artifact contract"));
+        }
         for phrase in phrases {
             assert!(description.contains(phrase), "{name}: {description}");
         }
@@ -2509,6 +2631,30 @@ async fn mcp_tools_list_stateless_serialized_size_budget() {
     // full renderings must preserve the exact same admitted inventory. Byte
     // ceilings remain intentional product budgets and still catch material
     // discovery-surface growth.
+    //
+    // The model-visible `project_format` gateway is an intentional first-party
+    // inventory addition. Measuring its exact compact serialized descriptor cost
+    // (plus array delimiter) and bounding the marginal allowance to <= 2000 bytes
+    // admits the new gateway while preserving baseline product ceilings for all
+    // other tools, ensuring any description/schema growth beyond 2k or unrelated
+    // tool surface expansion still fails.
+    fn project_format_marginal_allowance(model_tools: &[Value]) -> usize {
+        let Some(tool) = model_tools
+            .iter()
+            .find(|tool| tool["name"] == "project_format")
+        else {
+            return 0;
+        };
+        let descriptor_bytes = serde_json::to_vec(tool).unwrap().len();
+        let delimiter_bytes = if model_tools.len() > 1 { 1 } else { 0 };
+        let marginal_cost = descriptor_bytes + delimiter_bytes;
+        assert!(
+            marginal_cost <= 2000,
+            "project_format marginal cost {marginal_cost} bytes exceeds 2000 byte allowance ceiling"
+        );
+        marginal_cost
+    }
+
     for (label, auth, model_max_bytes) in [
         ("anonymous", None, 75_000),
         ("scoped", Some(&scoped), 78_000),
@@ -2560,9 +2706,15 @@ async fn mcp_tools_list_stateless_serialized_size_budget() {
                         .filter(|definition| definition.name.ends_with("_code_mode"))
                         .count()
                         * 4096;
+                let project_format_marginal_byte_budget = if compact {
+                    project_format_marginal_allowance(model_tools)
+                } else {
+                    0
+                };
                 let model_byte_budget = model_max_bytes
                     + if app_enabled { 4_000 } else { 0 }
-                    + experimental_code_mode_byte_budget;
+                    + experimental_code_mode_byte_budget
+                    + project_format_marginal_byte_budget;
                 // Raw transport includes private App bridge descriptors and Host
                 // presentation metadata. Keep a coarse overhead ceiling so transport
                 // cannot grow silently, but do not force model guidance to pay for it.

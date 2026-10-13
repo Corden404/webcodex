@@ -134,6 +134,8 @@ async fn model_ergonomics_normalization_reaches_api_and_mcp_action_audit_without
                     command_execution_state: Some(ShellCommandExecutionState::Completed),
                     validation_progress: None,
                     test_count_evidence: None,
+                    format_mutation: None,
+                    build_artifacts: None,
                     activity: None,
                     finished: true,
                 })

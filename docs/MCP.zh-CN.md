@@ -22,6 +22,14 @@ FORBIDDEN: This conversation does not support developer MCPs
 
 请独立检查 Runner 与项目状态。如果两者仍然可用，而且请求没有到达 WebCodex，请在 ChatGPT 允许 Developer MCP 的会话中重试。不要仅因出现这个 Host 侧错误就修改 WebCodex 配置。
 
+## ChatGPT Dot
+
+ChatGPT Dot 目前是 best-effort，取决于 ChatGPT 为该 Dot 提供的插件能力。WebCodex 不把 Dot 定义成不兼容。不同账号或 Dot 的表现可以不一致：有的能正常调用 WebCodex，有的能发现插件，随后却要求转交给本地 Codex 或本地任务。本项目还没有一份可以依赖的公开说明，用来确定 Dot 何时可以直接操作本机资源，因此这里不把其中某一种表现写成契约。
+
+如果插件可以发现，但调用没有发到 WebCodex，先删除该 Dot，再重新创建，并重新添加或授权 WebCodex 插件。差异可能来自插件状态、缓存，或创建 Dot 时保存的能力配置；重建有时会改变这一表现。保持现有的 ChatGPT 认证和权限设置；重建 Dot 不需要修改 WebCodex 凭据或配置。
+
+如果重建后同一现象仍然稳定出现，把复现步骤补充到 [issue #955](https://github.com/yyjeqhc/webcodex/issues/955)。这些步骤用来判断 WebCodex 自身是否还能改善这种情况。
+
 ## ChatGPT：临时 `share`
 
 显式 `share` 支持 Linux、macOS 与 Windows，并由当前前台进程持有临时单项目环境。Windows x64 可直接使用 managed 默认 Cloudflare Quick Tunnel；固定版本 Cloudflare 没有官方 Windows ARM64 artifact，因此 ARM64 需要受信任的显式/`PATH` `cloudflared`。原生 OpenAI Tunnel 支持 Windows x64/arm64。
@@ -151,8 +159,10 @@ Markdown bundle 已提交在单 script App 资源内，纯 Rust 编译不需要 
 该检查同时接入 `check:dist`。
 
 展示调用会保存这条窗口绑定，但不会启动 live Window activity；侧边栏入口和 App
-刷新调用也不会启动 live Window activity。当前界面资源是
-`ui://webcodex/work-result/v17`，旧版资源 URI 不再提供模板，避免缓存界面调用已退役的工具名。
+刷新调用也不会启动 live Window activity。新卡片使用当前 descriptor 公布的 Work Result
+资源 URI，其身份由[canonical App registry](../src/mcp/app_registry/builtin.rs)维护。
+刷新 Host schema 并重新打开缓存 reader，以加载当前 thread-panel、lazy-detail 和工具名
+契约；旧版资源 URI 不再提供模板，避免缓存界面调用已退役的工具名。
 
 界面展示入口保留默认的 model/App 可见性；App-only 桥接工具只返回数据，不声明
 `ui.resourceUri`。ChatGPT 刷新工具时会拒绝声明界面资源的私有工具。更新 Server
@@ -312,21 +322,33 @@ work_on_project
 
 `present_work_result` 是 substantial coding 的一次性可视化层，不是 correctness primitive。挂载后，卡片通过 App-only state read 持续显示 Progress、Workspace、Validation 与 Review，无需模型轮询。`finish_coding_task` 在 non-blocking closeout 时把 eligible final changes seal 到 presentation cache，同一张卡随后发现这份 immutable snapshot，并按文件 lazy 展开 diff。tiny/read-only 工作应跳过这张卡，同一 Session 不应重复 presentation。
 
-普通的有界 Project validation 优先使用 `project_validate`；项目自定义脚本与测试仍可能修改文件或访问网络。它只接受封闭的 `format_check` / `check` / `test` intent，以及可选的 `auto` / `rust` / `go` / `python` / `node` adapter hint；Runner 在自己注册的真实文件系统上解析最近且无歧义的 recipe，然后进入现有 structured validation Job。Rust 分别映射到 `cargo fmt -- --check`、`cargo check --all-targets`、`cargo test`；Go 映射到 `go vet ./...` 或 `go test -json ./...`。Go project validation 由 Runner 固定为 single-module 模式（`GO111MODULE=on`、`GOWORK=off`），因此 ambient module mode 或父目录 `go.work` 选择不会静默改变 gateway 的 workspace 语义；其 validation target identity 与 ambient Go specialist evidence 做 domain separation，因此不同 workspace 语义下产生的成功不会消解 gateway failure。独立的 `go_test` specialist 保持现有环境语义。可选 `scope` 只允许二选一的 portable package intent：有界 `packages`（1..8 项）把 Rust check/test 映射为重复 Cargo `-p` selector，把 Go check/test 映射为 project-relative package pattern；`all_packages=true` 则选择完整 project unit。Rust all-packages 只有在 Runner 证明 effective Cargo workspace root 与 registered Project root 完全一致后才映射为 Cargo `--workspace`，并把 Project 内 Cargo manifest graph 绑定到既有 re-plan fence；Go all-packages 保持 canonical `./...` single-module scope。带 scope 的格式检查会 fail closed。Python 使用 configured/profile/PATH 中已有的 Python 3 执行 pytest test（`python -m pytest --color=no -rA`），也支持项目本地 Ruff check/format_check（显式 target-version、禁用自动修复、缓存与字节码）；Python 的 scope 与 dependency policy 均 fail closed。Node 已支持 Runner 管理的脚本式 `check`（#995），并在 `package.json` 的 `scripts.test` 精确声明 `node --test`（或 `node --test --test-reporter=tap`）时支持独立的原生 TAP `test`。Node 测试由 Runner 使用固定 argv 直接启动，仅完整 TAP v13 汇总可证明测试数量，且需要独立能力 `project_validation_node_tap_v1`。Jest/Vitest、自定义 test 脚本、scope 和 filter 仍不支持。详见 [Node 原生 TAP 验证](implementation/node-native-tap-project-validation.md)。Python test 的 planning 与 Job 准入要求 `project_validation_python_pytest_v1`，Ruff check/format_check 则独立要求 `project_validation_python_ruff_v1`；所选工具缺失时明确 not-started，不自动安装或 fallback。环境、证据与同 Job 行为见 [Python/pytest validation](implementation/python-pytest-project-validation.md)。请求不会携带 arbitrary executable、argv、shell grammar、安装动作或显式修改源文件的意图；项目脚本和测试仍可能产生副作用；需要 ecosystem-specific 高级参数时继续使用现有 `cargo_*` / `go_test`。`project_validate` 依赖 additive `project_validation_v1` Runner capability；显式 `packages` 额外要求 `project_validation_package_scope_v1`，而 `all_packages=true` 要求 `project_all_packages_v1`；Go project-validation Job 准入还额外要求 `project_go_single_module_v1`，因此 Server 不会把 Go gateway plan 交给仍可能继承 ambient workspace 状态的旧 Runner。
+普通的有界 Project validation 优先使用 `project_validate`；项目自定义脚本与测试仍可能修改文件或访问网络。它只接受封闭的 `format_check` / `check` / `test` intent，以及可选的 `auto` / `rust` / `go` / `python` / `node` adapter hint；Runner 在自己注册的真实文件系统上解析最近且无歧义的 recipe，然后进入现有 structured validation Job。Rust 分别映射到 `cargo fmt -- --check`、`cargo check --all-targets`、`cargo test`；Go 映射到 `go vet ./...` 或 `go test -json ./...`。Go project validation 由 Runner 固定为 single-module 模式（`GO111MODULE=on`、`GOWORK=off`），因此 ambient module mode 或父目录 `go.work` 选择不会静默改变 gateway 的 workspace 语义；其 validation target identity 与 ambient Go specialist evidence 做 domain separation，因此不同 workspace 语义下产生的成功不会消解 gateway failure。独立的 `go_test` specialist 保持现有环境语义。可选 `scope` 只允许二选一的 portable package intent：有界 `packages`（1..8 项）把 Rust check/test 映射为重复 Cargo `-p` selector，把 Go check/test 映射为 project-relative package pattern；`all_packages=true` 则选择完整 project unit。Rust all-packages 只有在 Runner 证明 effective Cargo workspace root 与 registered Project root 完全一致后才映射为 Cargo `--workspace`，并把 Project 内 Cargo manifest graph 绑定到既有 re-plan fence；Go all-packages 保持 canonical `./...` single-module scope。带 scope 的格式检查会 fail closed。Python 使用 configured/profile/PATH 中已有的 Python 3 执行 pytest test（`python -m pytest --color=no -rA`），也支持项目本地 Ruff check/format_check（显式 target-version、禁用自动修复、缓存与字节码）；Python 的 scope 与 dependency policy 均 fail closed。Node 已支持 Runner 管理的脚本式 `check`（#995），并在 `package.json` 的 `scripts.test` 精确声明 `node --test`（或 `node --test --test-reporter=tap`）时支持独立的原生 TAP `test`。Node 测试由 Runner 使用固定 argv 直接启动，仅完整 TAP v13 汇总可证明测试数量，且需要独立能力 `project_validation_node_tap_v1`。复合/自定义 test 脚本、scope 和 filter 仍不支持；下面说明独立的原生 Vitest/Jest JSON profile。详见 [Node 原生 TAP 验证](implementation/node-native-tap-project-validation.md)。Python test 的 planning 与 Job 准入要求 `project_validation_python_pytest_v1`，Ruff check/format_check 则独立要求 `project_validation_python_ruff_v1`；所选工具缺失时明确 not-started，不自动安装或 fallback。环境、证据与同 Job 行为见 [Python/pytest validation](implementation/python-pytest-project-validation.md)。请求不会携带 arbitrary executable、argv、shell grammar、安装动作或显式修改源文件的意图；项目脚本和测试仍可能产生副作用；需要 ecosystem-specific 高级参数时继续使用现有 `cargo_*` / `go_test`。`project_validate` 依赖 additive `project_validation_v1` Runner capability；显式 `packages` 额外要求 `project_validation_package_scope_v1`，而 `all_packages=true` 要求 `project_all_packages_v1`；Go project-validation Job 准入还额外要求 `project_go_single_module_v1`，因此 Server 不会把 Go gateway plan 交给仍可能继承 ambient workspace 状态的旧 Runner。
 
 Cargo all-packages provenance 是有界的 package-selection witness，并非完整构建输入快照。它要求 workspace 完全位于 registered Project 内，或独立 package 的祖先目录不存在 `Cargo.toml` marker；对 Project 外的祖先只探测 marker，不读取 manifest 内容。此 scope 不接受外部 path dependency，因为外部 manifest 的 `package.workspace` 可以把 Project 外 package 加入 workspace。相关 manifest／member／dependency alias 仍会被 fence，无关的非 manifest 链接会被忽略。无法证明的 topology 或超出边界上限时返回 `validation_scope_unavailable` / `build_scope_unavailable`；显式 package scope 和现有 specialist tools 保持各自契约。
 
-普通的 portable Rust/Go 构建优先使用 `project_build`。它只接受精确 registered `project`、可选的 project-relative `cwd`、可选的 `auto` / `rust` / `go` adapter hint、portable `scope`（有界 `packages` 1..8 项，或 `all_packages=true`，二者不可同时出现）以及总 `timeout_secs`。Runner 解析最近且无歧义的 recipe 并拥有 canonical argv：Rust 的显式 packages 使用重复 `-p` selector，all-packages 只有在 effective Cargo workspace root 与 registered Project root 完全一致时才映射为 `cargo build --workspace`；Go 的显式 package pattern 直接传入，all-packages 映射为 `go build ./...`。Go project build 由 Runner 固定以 `GO111MODULE=on`、`GOWORK=off` 执行；完整 `go.work` workspace 语义不属于 v1 gateway，也不会从 Runner host 隐式继承。请求不能携带 executable、argv、shell、script、release/profile/target/features、原生 workspace/exclude flag、offline／network 策略或 artifact discovery contract；portable all-packages request 额外要求 additive `project_all_packages_v1` Runner capability；v1 检测到 Node/Python recipe 时 fail closed。
+普通的 portable Rust/Go/Python/Node 构建优先使用 `project_build`。它只接受精确 registered `project`、可选的 project-relative `cwd`、可选的 `auto` / `rust` / `go` / `python` / `node` adapter hint、portable `scope`（有界 `packages` 1..8 项，或 `all_packages=true`，二者不可同时出现）以及总 `timeout_secs`。Runner 解析最近且无歧义的 recipe 并拥有 canonical argv：Rust 的显式 packages 使用重复 `-p` selector，all-packages 只有在 effective Cargo workspace root 与 registered Project root 完全一致时才映射为 `cargo build --workspace`；Go 的显式 package pattern 直接传入，all-packages 映射为 `go build ./...`。Go project build 由 Runner 固定以 `GO111MODULE=on`、`GOWORK=off` 执行；完整 `go.work` workspace 语义不属于 v1 gateway，也不会从 Runner host 隐式继承。请求不能携带 executable、argv、shell、script、release/profile/target/features、原生 workspace/exclude flag、offline／network 策略或 artifact discovery contract；portable all-packages request 额外要求 additive `project_all_packages_v1` Runner capability。Python 要求 `pyproject.toml`，拒绝 package/all-packages scope，使用已有 configured/profile/PATH Python 解释器运行 `python -m build --no-isolation`。默认先构建 sdist，再从 sdist 构建 wheel；保留 frontend/backend dependency checks。依赖必须预先存在：adapter 不安装包、不创建环境。`dependency_policy.mode=locked` 保持同样的 no-install 语义。
+Node 构建优先使用 `project_build`。它只接受精确 registered `project`、可选的 project-relative `cwd`、可选的 `auto` / `rust` / `go` / `node` adapter hint、portable `scope`（有界 `packages` 1..8 项，或 `all_packages=true`，二者不可同时出现）以及总 `timeout_secs`。Runner 解析最近且无歧义的 recipe 并拥有 canonical argv：Rust 的显式 packages 使用重复 `-p` selector，all-packages 只有在 effective Cargo workspace root 与 registered Project root 完全一致时才映射为 `cargo build --workspace`；Go 的显式 package pattern 直接传入，all-packages 映射为 `go build ./...`。Go project build 由 Runner 固定以 `GO111MODULE=on`、`GOWORK=off` 执行；完整 `go.work` workspace 语义不属于 v1 gateway，也不会从 Runner host 隐式继承。请求不能携带 executable、argv、shell、script、release/profile/target/features、原生 workspace/exclude flag、offline／network 策略或 artifact discovery contract；portable all-packages request 额外要求 additive `project_all_packages_v1` Runner capability；v1 检测到 Python recipe 时 fail closed；Node 支持如下。
+
+Node 构建通过检测到的 npm/pnpm/yarn/bun 执行 `package.json` 中已有的 `build` script，复用 packageManager/lockfile 检测；缺失/冲突的 manager evidence 或缺失 script 均 fail closed。Node 拒绝 scope 与 dependency policy，并要求 `project_build_node_v1`；不会安装依赖或包管理器；Runner 覆盖 Corepack 网络/下载/auto-pin 配置，防止隐式引导包管理器。脚本及 lifecycle hooks 可能写文件或访问网络。成功只证明脚本完成；通过 `finish_coding_task(outputs=...)` 显式检查产物元数据，产物存在并不证明功能正确。
+
+Node `project_validate(action=test)` 还支持 `scripts.test` 精确为 `vitest`、`vitest run` 或 `jest` 的已安装本地框架。Runner 使用固定官方 JSON reporter 参数与每个 Job 独占的新建私有报告文件（上限 1 MiB）。只有完整且一致的报告才能证明已执行测试数；不会从 stdout/stderr 推测数量。聚合 evidence 保留后删除报告。缺失、超限、无效报告、超时与取消均不能证明数量。JSON Job admission 要求 `project_validation_node_json_v1`。复合或自定义脚本返回 `structured_test_report_unavailable`，仍可用普通 recipe 执行；Node scope/filter 仍不支持。
 
 两个 gateway 都可选接受 `dependency_policy: {"mode":"locked"}`。这是 portable 的依赖解析保证，而不是宣称不同生态的原生 flag 完全等价：Rust build/check/test 映射为 Cargo `--locked`，Go build/vet/test 映射为 `-mod=readonly`。它要求 adapter 不得为了让本次操作成功而修复或改写项目级依赖选择状态，但**不**表示关闭 registry/module/toolchain 网络访问；offline／network policy 由 #962 作为增量 lifecycle 扩展跟踪。`project_validate(action="format_check")` 会拒绝该 policy，而不是静默忽略。携带 policy 的 planning 与 typed Job admission 都要求 additive `project_dependency_policy_v1` Runner capability。locked validation 使用独立的 durable validation target identity；省略 policy 的请求保持原有 argv 与 identity。
 
-`project_build` 在 planning 与 typed Job admission 两处都要求 additive `project_build_v1` Runner capability；Go project-build Job 准入还额外要求 `project_go_single_module_v1`。Job 准入会重新规划 registered project/root、recipe、manifest/lock provenance、package scope 与 canonical invocation；若经过本地排队，worker 会在原生进程执行前再次核验同一个计划。计划 stale 时以 `not_started` 拒绝并释放 Job 槽位，不会静默重建或执行过期意图。长构建继续使用同一个 durable Job，并返回普通的 sparse pending continuation；pending 绝不授权 retry/redispatch。这个 closed gateway 限制的是 WebCodex 自己的命令权限，并不是 OS sandbox：Cargo/Go 构建逻辑以及项目 build script 仍可能产生自己的文件系统或网络副作用。超出 v1 contract 的构建继续显式使用 lower-level execution 工具。
+`project_build` 在 planning 与 typed Job admission 两处都要求 additive `project_build_v1` Runner capability；Go project-build Job 准入还额外要求 `project_go_single_module_v1`。显式 Python planning 和每次 Python Job 准入要求 additive `project_build_python_v1`，旧 Runner 缺省为 false。Job 准入会重新规划 registered project/root、recipe、manifest/lock provenance、package scope 与 canonical invocation；若经过本地排队，worker 会在原生进程执行前再次核验同一个计划。计划 stale 时以 `not_started` 拒绝并释放 Job 槽位，不会静默重建或执行过期意图。长构建继续使用同一个 durable Job，并返回普通的 sparse pending continuation；pending 绝不授权 retry/redispatch。这个 closed gateway 限制的是 WebCodex 自己的命令权限，并不是 OS sandbox：Cargo/Go/Python/Node 构建逻辑以及项目 build script 仍可能产生自己的文件系统或网络副作用。超出 v1 contract 的构建继续显式使用 lower-level execution 工具。 Python 终态成功可包含 `build_artifacts`：默认 `dist/` 目录内最多 16 个现存普通文件（总计不超过 256 MiB），通过已有 artifact reader 记录 Project-relative path、大小、SHA-256 和 MIME。这些观察可包含旧构建文件；不证明本 Job 创建文件、package correctness 或 source freshness。原生退出码为 0 但未观察到 sdist 和 wheel 时，报告 `build_artifacts_missing` 并保留原生退出码。恢复时历史缺失 metadata 仍为 unknown，已知观察由同一个 Job 保留。符号链接、逃逸或敏感输出路径 fail closed。文件内容通过现有 artifact tools 读取或导出。
 
 Adaptive Runtime 可以把常用工具直接暴露，把 long-tail 工具通过 `call_runtime_tool` 暴露。direct/gateway 只影响 model exposure，不改变 schema validation、OAuth scope、Project authority、permission policy、Runner capability、Session fence 或 tool effects。
 
 已删除的 ProjectConnector capability 名称（`task_start`、`files_read`、`edits_apply`、`task_finish` 等）不会作为 runtime 工具的 compatibility alias 保留。请使用当前 `tools/list` / `read_tool_manifest` 返回的 ToolRuntime 名称。
 
 ### 长任务使用 Job lifecycle
+
+Stateless MCP 2026 的执行工具可通过 `_wc.compact_execution=true` 显式启用紧凑执行结果。
+它将稳定的 `output.execution` 控制事实与 `output.details` 分开（`observe_jobs`
+按条目处理），同时保留日志、恢复和协作义务。只有 `outcome=passed` 才能证明执行成功；
+工具接受请求或成功返回观察结果本身不能证明成功。该选项不会等待或重试命令。
+支持的工具、gateway 放置位置、未知结果及 pending-chain 设计限制见
+[Host execution control](experiments/host-execution-control.md)。
 
 长时间 command 与 validation 使用 canonical WebCodex Job。发起调用返回 exact Job 后，用 `observe_jobs` 观察同一个 Job；只有 Job identity 确实丢失时才用 `list_jobs` 恢复，不要重复启动。Jobs 不再包装成 MCP Tasks，WebCodex 也不再 advertise 原 Connector-specific MCP Tasks extension。
 
@@ -382,10 +404,20 @@ stderr、provider stderr 或任意 provider prose。
 
 同一个 ToolRuntime 通过一套 Adaptive Runtime contract 服务单项目、project-scoped 的本地 `share` / `run` 和多项目 hosted Server。project-scoped credential 改变可见性与 authority，不改变 model-facing runtime shape。特定 protocol capability 与 MCP App 可以 admission 额外的 hidden presentation/resource operation，但不会形成第二套 runtime surface。
 
+Stateless MCP 2026 只通过一个可选且封闭的 `_wc` envelope 接收通用、不可信的调用元数据。
+根据工具，它可允许 `record`、`ack`、`ack_ref`、`resolve`、`reply`、`context`、`control`
+和 `compact_execution`。这些仅属于 adapter 元数据，不会成为 canonical ToolCall
+业务参数或授予权限。旧的根级 wrapper（如 `recording_session_id`、
+`ack_session_message_ids`、`ack_ref`、`session_message_resolution`、`window_reply`、
+`context_request` 和 `_control`）在 Stateless 2026 上会被拒绝；其他旧版/非 Stateless
+传输保留各自契约。`call_runtime_tool` 只在外层 gateway 接收 `_wc`；嵌套目标的
+`arguments` 必须是 canonical 业务参数，不能再次包含 `_wc`。
+
 ### 项目级验证
 
-`project_validate` 通过 Runner 上的现有适配器执行 Rust 的格式检查／检查／测试，
-以及 Go 的检查／测试、Python 的 pytest 测试。`scope.packages` 表示 Rust/Go 的有界包范围。
+适配器支持范围、能力准入和副作用以[当前 coding 验证说明](#project-scoped-ordinary-runtime)为准：
+Rust 格式检查／检查／测试、Go 检查／测试、Python pytest 测试和 Ruff 检查／格式检查，
+以及 Node 脚本式检查和受支持的原生 TAP 测试。`scope.packages` 仅用于 Rust/Go 的有界包范围。
 `action="test"` 可使用 `test.filter`：Rust 为一个 libtest 子串，Go 为原生 `-run`
 正则表达式（包含子测试的斜杠语义），Python 为原生 pytest `-k` 表达式，
 上限 200 UTF-8 bytes，拒绝控制字符及选项形状的前缀；并非跨语言统一查询语法。
@@ -402,8 +434,9 @@ Go/Python 保留有意义的空格；空字符串或省略表示不加过滤。
 规划与 Job 准入各检查一次；省略时保持原有行为。完整参数不会变成任意 argv／shell。
 长任务仍观察同一个 Job，不能因 Host 中断而重跑。
 
-构建产物、修改源码的格式化、lint、Node 与其他 Python 生产适配器，以及更广泛的
-workspace/exclude、offline／network 策略由 #962 跟踪；现有 cargo_*、go_test 与显式进程工具保留。
+Rust/Go 构建使用当前 `project_build`；项目级验证不会执行修改源码的格式化。
+更广泛的适配器、workspace/exclude 和 offline／network 策略仍由 #962 跟踪；
+不要将其视为已实现能力。现有 cargo_*、go_test 与显式进程工具保留。
 
 ### ChatGPT 文件桥接
 

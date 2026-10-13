@@ -83,9 +83,10 @@ use webcodex_core::runner_protocol::{
     RUNNER_CAPABILITY_FILE_WRITE, RUNNER_CAPABILITY_GIT, RUNNER_CAPABILITY_INTERNAL_POSIX_SCRIPT,
     RUNNER_CAPABILITY_LSP_CALL_HIERARCHY, RUNNER_CAPABILITY_LSP_READ_ONLY_NAVIGATION,
     RUNNER_CAPABILITY_PERSISTENT_SHELL, RUNNER_CAPABILITY_PROJECT_BUILD,
-    RUNNER_CAPABILITY_RUNNER_CONFIG_CONTROL, RUNNER_CAPABILITY_SHELL,
-    RUNNER_CAPABILITY_SKILL_MANAGEMENT, RUNNER_CAPABILITY_SKILL_RESOURCE_EXECUTION,
-    RUNNER_CAPABILITY_STRUCTURED_PROCESS_ARGV, RUNNER_CAPABILITY_STRUCTURED_SCRIPT_PAYLOAD,
+    RUNNER_CAPABILITY_PROJECT_FORMAT, RUNNER_CAPABILITY_RUNNER_CONFIG_CONTROL,
+    RUNNER_CAPABILITY_SHELL, RUNNER_CAPABILITY_SKILL_MANAGEMENT,
+    RUNNER_CAPABILITY_SKILL_RESOURCE_EXECUTION, RUNNER_CAPABILITY_STRUCTURED_PROCESS_ARGV,
+    RUNNER_CAPABILITY_STRUCTURED_SCRIPT_PAYLOAD,
 };
 
 /// Runner capability or owner-boundary requirement that must hold before a
@@ -100,9 +101,10 @@ pub enum RunnerCapabilityRequirement {
     /// General native process + argv execution. This must never be inferred
     /// from shell or structured-validation support.
     StructuredProcess,
-    /// Runner-owned portable Rust/Go project build planning + typed StartBuild.
+    /// Runner-owned portable Rust/Go/Python project build planning + typed StartBuild.
     /// Never inferred from generic process or validation support.
     ProjectBuild,
+    ProjectFormat,
     /// Runner-owned trusted Skill resource execution with package identity.
     /// Never infer this from generic structured process or Skill read support.
     SkillResourceExecution,
@@ -179,6 +181,7 @@ impl RunnerCapabilityRequirement {
             Self::Shell => RUNNER_CAPABILITY_SHELL,
             Self::StructuredProcess => RUNNER_CAPABILITY_STRUCTURED_PROCESS_ARGV,
             Self::ProjectBuild => RUNNER_CAPABILITY_PROJECT_BUILD,
+            Self::ProjectFormat => RUNNER_CAPABILITY_PROJECT_FORMAT,
             Self::SkillResourceExecution => RUNNER_CAPABILITY_SKILL_RESOURCE_EXECUTION,
             Self::DetachedProcess => RUNNER_CAPABILITY_DETACHED_PROCESS_JOBS,
             Self::StructuredScript => RUNNER_CAPABILITY_STRUCTURED_SCRIPT_PAYLOAD,
@@ -217,6 +220,7 @@ impl RunnerCapabilityRequirement {
             Self::Shell => &[RUNNER_CAPABILITY_SHELL],
             Self::StructuredProcess => &[RUNNER_CAPABILITY_STRUCTURED_PROCESS_ARGV],
             Self::ProjectBuild => &[RUNNER_CAPABILITY_PROJECT_BUILD],
+            Self::ProjectFormat => &[RUNNER_CAPABILITY_PROJECT_FORMAT],
             Self::SkillResourceExecution => &[RUNNER_CAPABILITY_SKILL_RESOURCE_EXECUTION],
             Self::DetachedProcess => &[RUNNER_CAPABILITY_DETACHED_PROCESS_JOBS],
             Self::StructuredScript => &[RUNNER_CAPABILITY_STRUCTURED_SCRIPT_PAYLOAD],
@@ -286,6 +290,8 @@ impl ToolVisibility {
 #[derive(Debug, Clone, Copy)]
 pub struct ToolModelSpecDeclaration {
     pub description: &'static str,
+    /// Internal task vocabulary for discovery, never a tool alias or authority.
+    pub discovery_keywords: &'static [&'static str],
 }
 
 /// Declarative privacy contract for the bounded Tool Audit / Session-ledger
@@ -724,6 +730,7 @@ pub enum ToolExecutionForm {
     TypedScript,
     ShellCommand,
     ProjectBuild,
+    ProjectFormat,
     StructuredValidation,
     PersistentShellCommand,
 }
@@ -735,6 +742,7 @@ impl ToolExecutionForm {
             Self::TypedScript => "typed_script",
             Self::ShellCommand => "shell_command",
             Self::ProjectBuild => "project_build",
+            Self::ProjectFormat => "project_format",
             Self::StructuredValidation => "structured_validation",
             Self::PersistentShellCommand => "persistent_shell_command",
         }
@@ -1034,6 +1042,15 @@ pub struct ToolDefinition {
 }
 
 impl ToolDefinition {
+    pub const fn with_discovery_keywords(mut self, keywords: &'static [&'static str]) -> Self {
+        let Some(mut spec) = self.model_spec else {
+            panic!("discovery keywords require a canonical model spec");
+        };
+        spec.discovery_keywords = keywords;
+        self.model_spec = Some(spec);
+        self
+    }
+
     pub const fn with_operator_extension_family(
         mut self,
         family: ToolOperatorExtensionFamily,
@@ -1201,7 +1218,10 @@ const fn def(
 
 const fn model_spec(definition: ToolDefinition, description: &'static str) -> ToolDefinition {
     ToolDefinition {
-        model_spec: Some(ToolModelSpecDeclaration { description }),
+        model_spec: Some(ToolModelSpecDeclaration {
+            description,
+            discovery_keywords: &[],
+        }),
         ..definition
     }
 }

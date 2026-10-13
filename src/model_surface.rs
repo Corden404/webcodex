@@ -10,9 +10,12 @@ use crate::tool_runtime::tool_definition::{
     adaptive_runtime_direct_tool_definitions, is_adaptive_runtime_direct_tool,
     is_model_visible_tool_name,
 };
-use crate::tool_runtime::{registered_tool_specs, ToolResult, ToolSpec};
+use crate::tool_runtime::ToolResult;
+#[cfg(test)]
+use crate::tool_runtime::{registered_tool_specs, ToolSpec};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use webcodex_tool_contracts::registry::{registered_tool_descriptors, ToolDescriptor};
 
 pub(crate) const ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME: &str = "call_runtime_tool";
 pub(crate) const TOOL_SURFACE_AVAILABILITY_DIRECT: &str = "direct";
@@ -434,7 +437,7 @@ pub(crate) fn project_tool_result_suggested_calls<F>(
     if let Some(error) = result.error.as_ref() {
         envelope["error"] = Value::String(error.clone());
     }
-    let schema = webcodex_tool_contracts::output_schema_for_tool(tool_name);
+    let schema = webcodex_tool_contracts::shared_output_schema_for_tool(tool_name);
     project_suggested_tool_calls_in_value(&mut envelope, &schema, route_for);
     result.output = envelope
         .as_object_mut()
@@ -448,22 +451,31 @@ pub(crate) fn effective_mcp_compact_schemas(configured_override: Option<bool>) -
     configured_override.unwrap_or(true)
 }
 
-/// Direct ToolSpecs ordered by rank declared on canonical ToolDefinitions.
-pub(crate) fn adaptive_runtime_direct_tool_specs() -> Vec<ToolSpec> {
-    let mut by_name: std::collections::HashMap<String, ToolSpec> = registered_tool_specs()
-        .into_iter()
-        .map(|spec| (spec.name.clone(), spec))
-        .collect();
+/// Schema-free direct inventory ordered by canonical ToolDefinition rank.
+pub(crate) fn adaptive_runtime_direct_tool_descriptors() -> Vec<ToolDescriptor> {
+    let mut by_name: std::collections::HashMap<String, ToolDescriptor> =
+        registered_tool_descriptors()
+            .into_iter()
+            .map(|spec| (spec.name.clone(), spec))
+            .collect();
     adaptive_runtime_direct_tool_definitions()
         .into_iter()
         .map(|definition| {
             by_name.remove(definition.name).unwrap_or_else(|| {
                 panic!(
-                    "{} adaptive_runtime direct tool is missing a registered ToolSpec",
+                    "{} adaptive_runtime direct tool is missing a registered descriptor",
                     definition.name
                 )
             })
         })
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn adaptive_runtime_direct_tool_specs() -> Vec<ToolSpec> {
+    adaptive_runtime_direct_tool_descriptors()
+        .into_iter()
+        .map(ToolDescriptor::into_spec)
         .collect()
 }
 
@@ -802,11 +814,11 @@ mod tests {
     #[test]
     fn continuation_follow_ups_use_current_routes_in_both_schema_and_value() {
         use webcodex_core::runtime_contract::GeneratedFollowUpKind::FallbackRecovery;
-        for (target, arguments, available) in [
+        for (target, arguments, expected_route) in [
             (
                 "wait_for_job_terminal",
                 json!({"job_id":"wc_job_exact", "idempotency_key":"wait-once"}),
-                true,
+                SuggestedToolCallRoute::Gateway(ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME),
             ),
             (
                 "wait_for_agent_events",
@@ -815,19 +827,19 @@ mod tests {
                     "expected_controller_generation":1, "events":[{"kind":"agent_task_terminal", "task_id":"wc_agent_task_qqqqqqqqqqqqqqqq"}],
                     "idempotency_key":"wait-once"
                 }),
-                true,
+                SuggestedToolCallRoute::Gateway(ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME),
             ),
             (
                 "present_job_terminal_continuation",
                 json!({"wait_id":"wc_job_wait_qqqqqqqqqqqqqqqq"}),
-                false,
+                SuggestedToolCallRoute::Direct,
             ),
             (
                 "present_agent_continuation",
                 json!({
                     "agent_id":"wc_dagent_qqqqqqqqqqqqqqqq", "endpoint_id":"wc_endpoint_qqqqqqqqqqqqqqqq", "expected_controller_generation":1
                 }),
-                false,
+                SuggestedToolCallRoute::Direct,
             ),
         ] {
             let input = webcodex_tool_contracts::input_schema_for_tool(target);
@@ -844,7 +856,8 @@ mod tests {
             project_suggested_tool_call_schema(&mut schema, &|name| {
                 suggested_tool_call_route(name, false)
             });
-            if available {
+            assert_eq!(suggested_tool_call_route(target, false), expected_route);
+            if matches!(expected_route, SuggestedToolCallRoute::Gateway(_)) {
                 assert_eq!(value["next"]["tool"], ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME);
                 assert_eq!(value["next"]["arguments"]["tool"], target);
                 assert_eq!(value["next"]["arguments"]["arguments"], arguments);
@@ -853,9 +866,12 @@ mod tests {
                     ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME
                 );
             } else {
-                assert!(value.get("next").is_none(), "{target}");
-                assert!(schema["properties"].get("next").is_none(), "{target}");
-                assert_eq!(schema["required"], json!([]));
+                assert_eq!(value["next"]["tool"], target);
+                assert_eq!(value["next"]["arguments"], arguments);
+                assert_eq!(
+                    schema["properties"]["next"]["properties"]["tool"]["const"],
+                    target
+                );
             }
             crate::tool_runtime::startup_brief::validate_schema_instance_for_test(&value, &schema)
                 .unwrap();
@@ -906,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_coding_task_nested_show_changes_recovery_projects_with_route() {
+    fn finish_coding_task_nested_read_workspace_changes_recovery_projects_with_route() {
         let canonical_schema =
             webcodex_tool_contracts::output_schema_for_tool("finish_coding_task");
         let canonical_call = json!({
@@ -925,7 +941,7 @@ mod tests {
             "success": true,
             "output": {
                 "changes": {
-                    "show_changes": {
+                    "read_workspace_changes": {
                         "diff_review_handoff": {"next_call": canonical_call.clone()}
                     },
                     "hunks_truncated": true
@@ -939,7 +955,7 @@ mod tests {
             &canonical_schema,
             &|target| suggested_tool_call_route(target, false),
         );
-        let current_call = &current_adaptive["output"]["changes"]["show_changes"]
+        let current_call = &current_adaptive["output"]["changes"]["read_workspace_changes"]
             ["diff_review_handoff"]["next_call"];
         assert_eq!(current_call["tool"], ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME);
         assert_eq!(current_call["follow_up_kind"], "mechanically_followable");
@@ -961,7 +977,7 @@ mod tests {
             &canonical_schema,
             &synthetic_gateway_route,
         );
-        let projected_call = &projected_value["output"]["changes"]["show_changes"]
+        let projected_call = &projected_value["output"]["changes"]["read_workspace_changes"]
             ["diff_review_handoff"]["next_call"];
         assert_eq!(projected_call["tool"], ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME);
         assert_eq!(projected_call["arguments"]["tool"], "read_git_diff_hunks");
@@ -973,8 +989,8 @@ mod tests {
         let mut projected_schema = canonical_schema;
         project_suggested_tool_call_schema(&mut projected_schema, &synthetic_gateway_route);
         let projected_call_schema = &projected_schema["properties"]["output"]["properties"]
-            ["changes"]["properties"]["show_changes"]["properties"]["diff_review_handoff"]
-            ["properties"]["next_call"];
+            ["changes"]["properties"]["read_workspace_changes"]["properties"]
+            ["diff_review_handoff"]["properties"]["next_call"];
         assert_eq!(
             projected_call_schema["properties"]["tool"]["const"],
             ADAPTIVE_RUNTIME_GATEWAY_TOOL_NAME

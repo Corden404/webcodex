@@ -1098,6 +1098,8 @@ pub(in crate::tool_runtime::tests) async fn seed_session_projection_job(
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -1146,6 +1148,8 @@ pub(in crate::tool_runtime::tests) async fn finish_session_projection_job(
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: true,
         })

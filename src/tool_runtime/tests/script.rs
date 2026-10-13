@@ -136,6 +136,8 @@ async fn update_script_job(
             command_execution_state: state,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: state.is_some(),
         })
