@@ -75,6 +75,48 @@ fn show_changes_command_is_read_only() {
 }
 
 #[test]
+fn workspace_diff_sensitive_guard_omits_binary_without_text_hunks() {
+    for secret in [".env", "zz.pem"] {
+        let tmp = tempfile::tempdir().unwrap();
+        init_git_repo(tmp.path());
+        for path in ["ordinary.bin", secret] {
+            fs::write(tmp.path().join(path), b"\0synthetic-before").unwrap();
+        }
+        git_test_command_ok(tmp.path(), "git add . && git commit -m fixture");
+        for path in ["ordinary.bin", secret] {
+            fs::write(tmp.path().join(path), b"\0synthetic-after").unwrap();
+        }
+        let (exit, stdout, stderr, _) =
+            run_command_sync(&show_changes_command(true, 20, 80), tmp.path(), 30);
+        assert_eq!(exit, 0, "{stderr}");
+        let frames = split_show_changes_stdout(&stdout, true);
+        assert!(
+            !frames.diff.contains(secret),
+            "protected binary diff was returned before parsing: {:?}",
+            frames.diff
+        );
+        assert!(
+            frames.diff.contains("Binary files a/ordinary.bin and b/ordinary.bin differ"),
+            "ordinary binary diff should remain visible: {:?}",
+            frames.diff
+        );
+        assert_eq!(frames.diff_policy_files_omitted, Some(1));
+        let output = bounded_show_changes_output_from_frames(
+            &frames, tmp.path(), true, 20, 80, &stderr,
+        );
+        assert_eq!(output["diff_policy_files_omitted"], 1);
+        assert_eq!(output["hunks_truncated"], true);
+        assert!(
+            output["truncation_reasons"].as_array().unwrap().contains(
+                &json!("diff_protected_paths_omitted")
+            ),
+            "{output}"
+        );
+        assert_show_changes_envelope_value_matches_schema(&output, "binary sensitive omission");
+    }
+}
+
+#[test]
 fn workspace_diff_sensitive_guard_filters_before_runner_capture() {
     let tmp = tempfile::tempdir().unwrap();
     init_git_repo(tmp.path());

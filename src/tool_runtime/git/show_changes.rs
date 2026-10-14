@@ -358,6 +358,16 @@ fn diff_path_policy_function() -> String {
         case "$pc" in __SECRET__) return 1 ;; esac;
       done;
       return 0;
+    }
+    # Binary or metadata-only patches lack ---/+++ headers. The fallback
+    # accepts an unambiguous same-path header only when both paths are allowed.
+    diff_header_allowed() {
+      dh=${1#diff --git };
+      case "$dh" in a/*' b/'*) ;; *) return 1 ;; esac;
+      dh_old=${dh%% b/*}; dh_new=${dh#* b/};
+      case "$dh_old" in a/*) ;; *) return 1 ;; esac;
+      [ "${dh_old#a/}" = "$dh_new" ] || return 1;
+      diff_path_allowed "$dh_old" && diff_path_allowed "b/$dh_new";
     }"#
     .replace("__PUBLIC__", &PUBLIC_DOTENV_TEMPLATE_COMPONENTS.join("|"))
     .replace("__SECRET__", &patterns)
@@ -407,7 +417,7 @@ pub(crate) fn show_changes_command(
              } | {
                hc=0; in_hunk=0; lc=0; diff_exit_raw=; diff_bytes=0; file_buf=; stop_emit=0;
                trunc_count=0; trunc_lines=0; trunc_bytes=0; trunc_bytes_in_hunk=0; have=0; pending=;
-               old_ok=0; new_ok=0; refused=0; policy_omitted=0;
+               old_ok=0; new_ok=0; refused=0; policy_omitted=0; header_verified=0;
                __PATH_POLICY__
                while IFS= read -r dl; do
                  next=$dl; dl=$pending; pending=$next;
@@ -436,7 +446,16 @@ pub(crate) fn show_changes_command(
                    *)
                      case "$dl" in
                        'diff --git '*)
-                         in_hunk=0; file_buf=; old_ok=0; new_ok=0; refused=0;
+                         # Handle previous no-hunk preamble before next file.
+                         if [ "$stop_emit" = 0 ] && [ "$refused" = 0 ] && [ -n "$file_buf" ]; then
+                           if [ "$header_verified" = 1 ] || { [ "$old_ok" = 1 ] && [ "$new_ok" = 1 ]; }; then
+                             printf '%s' "$file_buf"; diff_bytes=$((diff_bytes+${#file_buf}));
+                           else
+                             policy_omitted=$((policy_omitted+1));
+                           fi;
+                         fi;
+                         in_hunk=0; file_buf=; old_ok=0; new_ok=0; refused=0; header_verified=0;
+                         if diff_header_allowed "$dl"; then header_verified=1; fi;
                          if [ "$stop_emit" = 0 ]; then
                            line_len=$((${#dl}+1));
                            if [ "$((diff_bytes + line_len))" -gt __DIFF_BYTE_BUDGET__ ]; then trunc_bytes=1; stop_emit=1; else file_buf="$dl
@@ -461,7 +480,13 @@ pub(crate) fn show_changes_command(
                  esac;
                done;
                case "$pending" in diff_exit=*) diff_exit_raw=${pending#diff_exit=} ;; *) diff_exit_raw= ;; esac;
-               if [ "$stop_emit" = 0 ] && [ "$refused" = 0 ] && [ -n "$file_buf" ]; then printf '%s' "$file_buf"; diff_bytes=$((diff_bytes+${#file_buf})); fi;
+               if [ "$stop_emit" = 0 ] && [ "$refused" = 0 ] && [ -n "$file_buf" ]; then
+                 if [ "$header_verified" = 1 ] || { [ "$old_ok" = 1 ] && [ "$new_ok" = 1 ]; }; then
+                   printf '%s' "$file_buf"; diff_bytes=$((diff_bytes+${#file_buf}));
+                 else
+                   policy_omitted=$((policy_omitted+1));
+                 fi;
+               fi;
                diff_wire_bytes=$diff_bytes; diff_frame_bytes=$diff_wire_bytes;
                if [ "$diff_frame_bytes" -gt 0 ]; then diff_frame_bytes=$((diff_frame_bytes-1)); fi;
                dm=$(printf 'diff_exit=%s\ndiff_hunks_returned=%s\ndiff_hunks_truncated=%s\ndiff_trunc_hunk_count=%s\ndiff_trunc_hunk_lines=%s\ndiff_trunc_bytes=%s\ndiff_trunc_bytes_in_hunk=%s\ndiff_bytes=%s\ndiff_policy_files_omitted=%s' \
@@ -1564,7 +1589,7 @@ pub(crate) fn parse_show_changes_output_with_observation(
         warnings.push(json!({
             "kind": "diff_protected_paths_omitted",
             "reason_code": "diff_protected_paths_omitted",
-            "message": "protected file diffs were omitted",
+            "message": "protected or unverifiable file diffs were omitted",
         }));
     }
 
@@ -2228,7 +2253,7 @@ fn set_show_changes_verdict(output: &mut Value) {
         push_unique_reason(&mut warning_reasons, "diff_protected_paths_omitted");
         push_unique_action(
             &mut actions,
-            "protected file diffs were omitted; if further review is needed, call read_git_diff_hunks with explicitly selected ordinary paths",
+            "protected or unverifiable file diffs were omitted; if further review is needed, call read_git_diff_hunks with explicitly selected ordinary paths",
         );
     }
     // A whole-worktree handoff would include the refused files again. Preserve

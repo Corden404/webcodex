@@ -648,7 +648,7 @@ pub(super) fn output_schema_for_tool(name: &str) -> Option<Value> {
                 json!({
                     "type": "integer",
                     "minimum": 1,
-                    "description": "File diffs omitted because either path is protected or invalid. Present only when positive. Ordinary patches remain available; omitted content is not authorized for recovery."
+                    "description": "File diffs omitted because either path is protected, invalid, or cannot be verified for a no-hunk diff. Present only when positive. Ordinary patches remain available; omitted content is not authorized for recovery."
                 }),
             ),
             (
