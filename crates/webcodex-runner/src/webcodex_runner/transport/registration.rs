@@ -246,6 +246,15 @@ pub(crate) fn runner_register_capabilities(cfg: &RunnerConfig) -> RunnerCapabili
     capabilities.set(RunnerCapabilityId::StructuredGoTestJson, true);
     capabilities.set(RunnerCapabilityId::ProjectValidation, true);
     capabilities.set(RunnerCapabilityId::ProjectBuild, true);
+    capabilities.set(RunnerCapabilityId::ProjectBuildNode, true);
+    capabilities.set(RunnerCapabilityId::ProjectValidationNodeJson, true);
+    capabilities.set(RunnerCapabilityId::ProjectBuildPython, true);
+    // Complete format lifecycle with bounded planning, worker, guarded commit
+    // and durable mutation report is supported across native platforms.
+    capabilities.set(
+        RunnerCapabilityId::ProjectFormat,
+        cfg!(any(target_os = "linux", target_os = "macos", windows)),
+    );
     capabilities.set(RunnerCapabilityId::ProjectDependencyPolicy, true);
     // Go project gateways pin GO111MODULE=on and GOWORK=off after prepared shell/profile env is
     // applied. Keep this independent for mixed Server/Runner rolling upgrades.
@@ -312,6 +321,8 @@ pub(crate) fn runner_register_capabilities(cfg: &RunnerConfig) -> RunnerCapabili
     // MCP gateway support is fenced by the validated provider inventory in
     // registration rather than a separate capability bit. Older binaries omit
     // that inventory, so a newer Server will never target them.
+    // ResourceLink is an independently negotiated additive Runner result variant.
+    capabilities.set(RunnerCapabilityId::McpGatewayResourceLinks, true);
     // `job_state_reconciliation` is on by default. A hidden, test/ops-only env
     // knob lets an E2E exercise the valid generation-2 no-reconciliation mode
     // (it then has no job inventory and a disconnect falls straight to `lost`).

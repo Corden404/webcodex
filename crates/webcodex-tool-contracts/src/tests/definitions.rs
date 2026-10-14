@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn project_format_preserves_session_shell_and_write_guards() {
+    let definition = lookup_tool_definition("project_format").expect("project_format definition");
+    assert!(
+        definition.is_write_like(),
+        "formatter can mutate source files"
+    );
+    assert!(
+        definition.is_shell_like(),
+        "formatter and profile initialization launch native processes"
+    );
+    assert_eq!(definition.metadata().risk, ToolRisk::ProjectWrite);
+    assert_eq!(definition.permission_risk(), PERMISSION_RISK_WRITE);
+}
+
+#[test]
 fn tool_definition_source_has_no_module_wide_dead_code_allowance() {
     let source = include_str!("../tool_definition.rs");
     assert!(
@@ -10,14 +25,12 @@ fn tool_definition_source_has_no_module_wide_dead_code_allowance() {
 }
 
 #[test]
-fn tool_definitions_cover_known_names_and_public_specs() {
-    let definition_names = tool_definitions()
-        .map(|definition| definition.name)
-        .collect::<BTreeSet<_>>();
+fn tool_definition_helpers_preserve_order_lookup_and_hidden_partition() {
+    // Exact registration sets are owned by the exhaustive registration test;
+    // this test covers ordering and helper APIs rather than repeating set checks.
     let definition_order = tool_definitions()
         .map(|definition| definition.name)
         .collect::<Vec<_>>();
-    let known_names = known_tool_names().collect::<BTreeSet<_>>();
     let hidden_names = model_hidden_tool_names().collect::<BTreeSet<_>>();
     let definition_hidden_names = tool_definitions()
         .filter(|definition| definition.visibility.is_model_hidden())
@@ -29,18 +42,10 @@ fn tool_definitions_cover_known_names_and_public_specs() {
             "{name} missing ToolDefinition lookup"
         );
     }
-    assert_eq!(definition_names, known_names);
     assert_eq!(definition_order, known_tool_names().collect::<Vec<_>>());
     assert_eq!(hidden_names, definition_hidden_names);
 
     let specs = registered_tool_specs();
-    let spec_names = specs
-        .iter()
-        .map(|spec| spec.name.as_str())
-        .collect::<BTreeSet<_>>();
-    let visible_definition_names = model_visible_tool_definitions()
-        .map(|definition| definition.name)
-        .collect::<BTreeSet<_>>();
     let spec_order = specs
         .iter()
         .map(|spec| spec.name.clone())
@@ -48,7 +53,6 @@ fn tool_definitions_cover_known_names_and_public_specs() {
     let visible_definition_order = model_visible_tool_definitions()
         .map(|definition| definition.name.to_string())
         .collect::<Vec<_>>();
-    assert_eq!(spec_names, visible_definition_names);
     assert_eq!(visible_definition_order, spec_order);
     assert_eq!(registered_tool_names(), visible_definition_order);
 }
@@ -721,7 +725,14 @@ fn agent_continuation_setup_descriptions_are_self_guiding_without_direct_expansi
     assert!(present.contains(
         "create_agent_identity -> rotate_agent_continuation_endpoint -> present_agent_continuation"
     ));
-    assert!(present.contains("yield/end the current model turn promptly"));
+    assert!(present.contains("normal final assistant response"));
+    assert!(present.contains("let the current turn finalize promptly"));
+    assert!(present.contains("card/tool result alone does not end the assistant turn"));
+    assert!(present.contains("Do not wait for readiness in that presenting turn"));
+    let job = description("present_job_terminal_continuation");
+    assert!(job.contains("normal final assistant response"));
+    assert!(job.contains("card/tool result alone does not end the assistant turn"));
+    assert!(job.contains("Uncertain delivery is not permission to resend"));
     assert!(present.contains("production_auto_resume_available"));
     assert!(present.contains("not production auto-resume readiness"));
 
@@ -735,8 +746,8 @@ fn agent_continuation_setup_descriptions_are_self_guiding_without_direct_expansi
     assert_eq!(
         lookup_tool_definition("present_agent_continuation")
             .unwrap()
-            .adaptive_runtime_direct_rank(),
-        None
+            .adaptive_runtime_direct_reason(),
+        Some(crate::tool_definition::ToolDirectReason::Continuation)
     );
     assert_eq!(
         lookup_tool_definition("rotate_agent_continuation_endpoint")
@@ -759,7 +770,8 @@ fn retired_endpoint_name_is_absent_from_every_tool_surface() {
 }
 
 #[test]
-fn inactive_continuation_surface_preserves_domain_definitions() {
+fn continuation_presentations_are_direct_without_promoting_durable_waits() {
+    use crate::tool_definition::ToolDirectReason;
     for (name, visible, category, effect) in [
         (
             "wait_for_agent_events",
@@ -775,20 +787,30 @@ fn inactive_continuation_surface_preserves_domain_definitions() {
         ),
         (
             "present_agent_continuation",
-            false,
+            true,
             TOOL_CATEGORY_COMMUNICATION,
             ToolEffect::Observe,
         ),
         (
             "present_job_terminal_continuation",
-            false,
+            true,
             TOOL_CATEGORY_JOB,
             ToolEffect::Observe,
         ),
     ] {
         let definition = lookup_tool_definition(name).expect("retained continuation definition");
         assert_eq!(definition.visibility.is_model_visible(), visible, "{name}");
-        assert_eq!(definition.adaptive_runtime_direct, None, "{name}");
+        let presentation = name.starts_with("present_");
+        assert_eq!(
+            definition.adaptive_runtime_direct_reason(),
+            presentation.then_some(ToolDirectReason::Continuation),
+            "{name}"
+        );
+        assert_eq!(
+            definition.adaptive_runtime_direct_rank().is_some(),
+            presentation,
+            "{name}"
+        );
         assert_eq!(definition.category, category, "{name}");
         assert_eq!(definition.metadata.effect, effect, "{name}");
         assert!(
@@ -802,10 +824,10 @@ fn inactive_continuation_surface_preserves_domain_definitions() {
         );
         assert_eq!(
             definition.metadata.idempotency,
-            if visible {
-                ToolIdempotency::Keyed
-            } else {
+            if presentation {
                 ToolIdempotency::PureRead
+            } else {
+                ToolIdempotency::Keyed
             },
             "{name}"
         );
@@ -822,6 +844,11 @@ fn adaptive_direct_reason_is_independent_of_domain_and_authority() {
         ("import_host_files", ToolDirectReason::HostIntegration),
         ("present_work_result", ToolDirectReason::Presentation),
         ("present_goal_plan", ToolDirectReason::Presentation),
+        ("present_agent_continuation", ToolDirectReason::Continuation),
+        (
+            "present_job_terminal_continuation",
+            ToolDirectReason::Continuation,
+        ),
     ] {
         let definition = lookup_tool_definition(name).unwrap();
         assert_eq!(

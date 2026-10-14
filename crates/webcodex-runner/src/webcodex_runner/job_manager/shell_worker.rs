@@ -6,6 +6,50 @@ use super::lifecycle::{
 };
 use super::*;
 
+// Ordinary short shell/validation steps previously checked child exit only
+// every 250 ms, adding a full poll interval to many 10–100 ms commands.
+// Prefer a brief faster window per spawned step, then return to the existing
+// low-cost Runner cadence for long builds and interactive processes. Job timeout
+// and cancellation continue to use the original absolute lifecycle deadline.
+const LOCAL_SHELL_FAST_POLL_WINDOW: Duration = Duration::from_millis(750);
+const LOCAL_SHELL_FAST_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+fn local_shell_poll_interval(step_elapsed: Duration) -> Duration {
+    if step_elapsed < LOCAL_SHELL_FAST_POLL_WINDOW {
+        LOCAL_SHELL_FAST_POLL_INTERVAL
+    } else {
+        Duration::from_millis(JOB_UPDATE_INTERVAL_MS)
+    }
+}
+
+#[cfg(test)]
+mod fast_poll_tests {
+    use super::*;
+
+    #[test]
+    fn short_shell_steps_poll_quickly_and_long_steps_keep_the_existing_cadence() {
+        assert_eq!(JOB_UPDATE_INTERVAL_MS, 250);
+        assert_eq!(
+            local_shell_poll_interval(Duration::ZERO),
+            Duration::from_millis(25)
+        );
+        assert_eq!(
+            local_shell_poll_interval(Duration::from_millis(749)),
+            Duration::from_millis(25)
+        );
+        assert_eq!(
+            local_shell_poll_interval(Duration::from_millis(750)),
+            Duration::from_millis(JOB_UPDATE_INTERVAL_MS)
+        );
+        assert_eq!(
+            local_shell_poll_interval(Duration::from_secs(60)),
+            Duration::from_millis(JOB_UPDATE_INTERVAL_MS)
+        );
+        // No additional deadline is introduced. The per-Job timeout and stop
+        // checks continue before sleeping; long-running cadence is unchanged.
+    }
+}
+
 /// A fully prepared local Shell/validation plan, before any child is spawned.
 pub(super) struct PreparedShellJob {
     pub(super) job_id: String,
@@ -15,6 +59,7 @@ pub(super) struct PreparedShellJob {
     pub(super) timeout_secs: u64,
     pub(super) validation: bool,
     pub(super) capture_cargo_test_count: bool,
+    pub(super) node_report: Option<super::node_report::NodeReport>,
     pub(super) step_count: usize,
     pub(super) commands: VecDeque<std::process::Command>,
     pub(super) prepared_profile: Option<Arc<crate::webcodex_runner::shell::PreparedShellProfile>>,
@@ -30,6 +75,7 @@ impl JobManager {
             timeout_secs,
             validation,
             capture_cargo_test_count,
+            node_report,
             step_count,
             mut commands,
             prepared_profile,
@@ -188,6 +234,9 @@ impl JobManager {
             let mut test_count_accumulator = capture_cargo_test_count
                 .then(webcodex_core::cargo_test_count::CargoTestRunMetadataAccumulator::default);
             let (final_status, out, err, final_progress) = loop {
+                // Each validation step gets its own bounded fast-poll window.
+                // The Job-wide start instant remains the timeout authority.
+                let step_poll_started = Instant::now();
                 const OUTPUT_CHANNEL_CAPACITY: usize = 64;
                 let (tx, rx) = mpsc::sync_channel::<OutputChunk>(OUTPUT_CHANNEL_CAPACITY);
                 let mut readers = Vec::new();
@@ -298,7 +347,7 @@ impl JobManager {
                             );
                         }
                     }
-                    std::thread::sleep(Duration::from_millis(JOB_UPDATE_INTERVAL_MS));
+                    std::thread::sleep(local_shell_poll_interval(step_poll_started.elapsed()));
                 };
                 // A direct child can exit while a background descendant keeps
                 // stdout/stderr open. Give the tree a short window to exit on
@@ -451,7 +500,13 @@ impl JobManager {
             };
             let command_execution_state = (!validation)
                 .then(|| raw_shell_job_terminal_lifecycle(&final_status.0, final_status.1));
-            let test_count_evidence = finish_cargo_test_count_evidence(test_count_accumulator);
+            let test_count_evidence = node_report
+                .as_ref()
+                .map(|report| report.evidence(&final_status.0, final_status.1))
+                .or_else(|| finish_cargo_test_count_evidence(test_count_accumulator));
+            // Aggregate evidence is durable; raw report and private directory are
+            // cleaned before terminal delivery, including failure/timeout/stop.
+            drop(node_report);
             manager.update_and_send(
                 &job_id,
                 RunnerJobDelta {
@@ -465,6 +520,8 @@ impl JobManager {
                     stream_limit_bytes: None,
                     validation_progress: final_progress,
                     test_count_evidence,
+                    format_mutation: None,
+                    build_artifacts: None,
                     activity: None,
                     finished: true,
                 },

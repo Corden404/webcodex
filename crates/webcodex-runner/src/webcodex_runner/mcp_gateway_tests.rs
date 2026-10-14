@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tempfile::TempDir;
 use webcodex_core::mcp_gateway::{
     McpGatewayContent, McpGatewayResponsePayload, McpGatewaySchemaObservation,
-    MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES, MCP_GATEWAY_MAX_IMAGE_BYTES, MCP_GATEWAY_MAX_MESSAGE_BYTES,
+    MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES, MCP_GATEWAY_MAX_IMAGE_BASE64_BYTES,
+    MCP_GATEWAY_MAX_IMAGE_BYTES, MCP_GATEWAY_MAX_MESSAGE_BYTES,
     MCP_GATEWAY_MAX_PROVIDER_MESSAGE_BYTES, MCP_GATEWAY_MAX_RESULT_BYTES,
 };
 
@@ -109,6 +110,7 @@ impl Fixture {
         }
         let manager = McpGatewayManager::new(&McpGatewayConfig {
             request_timeout_secs: default_timeout_secs,
+            max_tool_description_bytes: 64 * 1024,
             providers: vec![McpGatewayProviderConfig {
                 id: "fake".to_string(),
                 name: "Fake provider".to_string(),
@@ -150,6 +152,14 @@ impl Fixture {
     }
 
     fn call(&self, provider: &McpGatewayProvider) -> McpGatewayResponse {
+        self.call_with_resource_links(provider, true)
+    }
+
+    fn call_with_resource_links(
+        &self,
+        provider: &McpGatewayProvider,
+        allow_resource_links: bool,
+    ) -> McpGatewayResponse {
         self.manager.handle(McpGatewayRequest::ToolsCall {
             provider_id: provider.provider_id.clone(),
             provider_instance_id: provider.provider_instance_id.clone(),
@@ -163,6 +173,7 @@ impl Fixture {
                 output_schema: None,
                 annotations: None,
             },
+            allow_resource_links,
         })
     }
 
@@ -438,6 +449,7 @@ fn replacement_config(
 ) -> McpGatewayConfig {
     McpGatewayConfig {
         request_timeout_secs,
+        max_tool_description_bytes: 64 * 1024,
         providers: vec![McpGatewayProviderConfig {
             id: id.to_string(),
             name: name.to_string(),
@@ -600,6 +612,58 @@ fn persistent_provider_initializes_once_and_serves_repeated_calls() {
 }
 
 #[test]
+fn tool_catalog_node_budget_is_applied_per_tool() {
+    let fixture = Fixture::new("wide_catalog", 3);
+    let provider = fixture.provider();
+    let response = fixture.list(&provider);
+    let Some(McpGatewayResponsePayload::Tools { tools }) = response.payload else {
+        panic!("bounded catalog missing: {:?}", response.error);
+    };
+    assert_eq!(tools.len(), 3);
+    // Each entry is bounded, but the complete catalog exceeds 4096 JSON nodes.
+    assert_eq!(
+        tools[1].input_schema["properties"]["choice"]["enum"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2100
+    );
+    assert_eq!(
+        tools[2].input_schema["properties"]["choice"]["enum"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2100
+    );
+    assert!(fixture.call(&provider).error.is_none());
+    assert_eq!(fixture.marker_count("call"), 1);
+    assert_eq!(fixture.marker_count("start"), 1);
+}
+
+#[test]
+fn tool_catalog_keeps_per_tool_nodes_total_bytes_and_envelope_depth_limits() {
+    for scenario in [
+        "tool_node_overflow",
+        "catalog_byte_overflow",
+        "catalog_metadata_depth",
+    ] {
+        let fixture = Fixture::new(scenario, 3);
+        let response = fixture.list(&fixture.provider());
+        assert_eq!(
+            response.dispatch_state,
+            McpGatewayDispatchState::Completed,
+            "{scenario}"
+        );
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code.as_str()),
+            Some("invalid_provider_tools"),
+            "{scenario}"
+        );
+        assert_eq!(fixture.marker_count("call"), 0);
+    }
+}
+
+#[test]
 fn large_tool_result_crosses_local_mcp_bridge_below_result_and_message_bounds() {
     assert_eq!(MCP_GATEWAY_MAX_RESULT_BYTES, 512 * 1024);
     assert_eq!(MCP_GATEWAY_MAX_MESSAGE_BYTES, 1024 * 1024);
@@ -623,6 +687,42 @@ fn large_tool_result_crosses_local_mcp_bridge_below_result_and_message_bounds() 
         192 * 1024
     );
     assert!(fixture.list(&provider).error.is_none());
+}
+
+#[test]
+fn resource_link_result_succeeds_with_standard_wire_fields() {
+    let fixture = Fixture::new("resource_link_result", 3);
+    let provider = fixture.provider();
+    assert!(fixture.list(&provider).error.is_none());
+    let response = fixture.call(&provider);
+    let Some(McpGatewayResponsePayload::ToolResult { result }) = response.payload else {
+        panic!("resource link tool result missing: {:?}", response.error);
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({
+            "content": [{"type": "resource_link", "uri": "file:///tmp/x", "name": "x"}],
+            "isError": false
+        })
+    );
+    assert_eq!(response.dispatch_state, McpGatewayDispatchState::Completed);
+    assert_eq!(fixture.marker_count("call"), 1);
+}
+
+#[test]
+fn old_server_request_never_returns_resource_link_variant_after_dispatch() {
+    let fixture = Fixture::new("resource_link_result", 3);
+    let provider = fixture.provider();
+    assert!(fixture.list(&provider).error.is_none());
+    let response = fixture.call_with_resource_links(&provider, false);
+    assert_eq!(response.dispatch_state, McpGatewayDispatchState::Completed);
+    assert_eq!(
+        response.error.as_ref().map(|error| error.code.as_str()),
+        Some("unsupported_provider_content")
+    );
+    assert_eq!(fixture.marker_count("call"), 1);
+    assert!(fixture.list(&provider).error.is_none());
+    assert_eq!(fixture.marker_count("start"), 1);
 }
 
 #[test]
@@ -673,7 +773,7 @@ fn image_result_crosses_expanded_provider_wire_bound_and_reuses_connection() {
 }
 
 #[test]
-fn mixed_text_image_text_result_preserves_order_and_structured_content() {
+fn mixed_text_image_resource_link_result_preserves_order_and_metadata() {
     let fixture = Fixture::new("mixed_content_result", 3);
     let provider = fixture.provider();
     assert!(fixture.list(&provider).error.is_none());
@@ -691,6 +791,19 @@ fn mixed_text_image_text_result_preserves_order_and_structured_content() {
                 data: "iVBORw0KGgo=".to_string(),
                 mime_type: "image/png".to_string(),
             },
+            serde_json::from_value(json!({
+                "type": "resource_link",
+                "uri": "blockbench://project/model.bbmodel",
+                "name": "model.bbmodel",
+                "title": "Model",
+                "description": "Current project",
+                "mimeType": "application/json",
+                "size": 1024,
+                "annotations": {"audience": ["user"], "priority": 0.5},
+                "icons": [{"src": "https://example.com/icon.png", "mimeType": "image/png"}],
+                "_meta": {"providerExtension": true}
+            }))
+            .unwrap(),
             McpGatewayContent::Text {
                 text: "after".to_string(),
             },
@@ -698,6 +811,33 @@ fn mixed_text_image_text_result_preserves_order_and_structured_content() {
     );
     assert_eq!(result.structured_content.unwrap()["kind"], "mixed");
     assert!(!result.is_error);
+}
+
+#[test]
+fn malformed_and_oversized_resource_links_fail_without_hidden_retry() {
+    for scenario in [
+        "missing_resource_link_uri",
+        "invalid_resource_link_metadata",
+        "oversized_resource_link",
+    ] {
+        let fixture = Fixture::new(scenario, 3);
+        let provider = fixture.provider();
+        assert!(fixture.list(&provider).error.is_none());
+        let response = fixture.call(&provider);
+        assert_eq!(
+            response.dispatch_state,
+            McpGatewayDispatchState::Completed,
+            "{scenario}"
+        );
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code.as_str()),
+            Some("invalid_provider_result"),
+            "{scenario}"
+        );
+        assert_eq!(fixture.marker_count("call"), 1, "{scenario}");
+        assert!(fixture.list(&provider).error.is_none(), "{scenario}");
+        assert_eq!(fixture.marker_count("start"), 1, "{scenario}");
+    }
 }
 
 #[test]
@@ -948,24 +1088,89 @@ fn provider_status_reaps_an_exited_connection_without_restarting_it() {
 }
 
 #[test]
-fn provider_callback_after_dispatch_remains_unsupported_and_unknown() {
+fn provider_callback_is_rejected_without_terminating_original_tool_call() {
     let fixture = Fixture::new("callback", 2);
     let provider = fixture.provider();
     assert!(fixture.list(&provider).error.is_none());
-
     let response = fixture.call(&provider);
-    assert_eq!(
-        response.dispatch_state,
-        McpGatewayDispatchState::OutcomeUnknown
-    );
-    assert_eq!(
-        response.error.as_ref().unwrap().code,
-        "provider_callbacks_unsupported"
-    );
-    let recovered = fixture.list(&provider);
-    assert!(recovered.error.is_none(), "{:?}", recovered.error);
-    assert_eq!(fixture.marker_count("start"), 2);
+    assert!(response.error.is_none(), "{:?}", response.error);
+    assert_eq!(fixture.marker_count("callback-rejected"), 1);
     assert_eq!(fixture.marker_count("call"), 1);
+    assert!(fixture.list(&provider).error.is_none());
+    assert_eq!(fixture.marker_count("start"), 1);
+}
+
+#[test]
+fn provider_ping_during_initialize_does_not_block_handshake() {
+    let fixture = Fixture::new("init_ping", 2);
+    let provider = fixture.provider();
+    assert!(fixture.list(&provider).error.is_none());
+    assert_eq!(fixture.marker_count("init-ping-ok"), 1);
+    assert_eq!(fixture.marker_count("start"), 1);
+}
+
+#[test]
+fn provider_ping_during_tool_execution_does_not_complete_or_replay_call() {
+    let fixture = Fixture::new("call_ping", 2);
+    let provider = fixture.provider();
+    assert!(fixture.list(&provider).error.is_none());
+    let response = fixture.call(&provider);
+    assert!(response.error.is_none(), "{:?}", response.error);
+    assert_eq!(fixture.marker_count("call-ping-ok"), 1);
+    assert_eq!(fixture.marker_count("call"), 1);
+    assert_eq!(fixture.marker_count("start"), 1);
+}
+
+#[test]
+fn provider_idle_ping_with_numeric_and_string_ids_is_answered() {
+    let fixture = Fixture::new("idle_ping", 2);
+    let provider = fixture.provider();
+    assert!(fixture.list(&provider).error.is_none());
+    // Wait for a protocol milestone before initiating another outbound request:
+    // JSON-RPC messages from opposite directions may legitimately interleave.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while fixture.marker_count("ping-ok") + fixture.marker_count("ping-bad") < 3
+        && Instant::now() < deadline
+    {
+        std::thread::yield_now();
+    }
+    assert_eq!(fixture.marker_count("ping-ok"), 3);
+    let second = fixture.list(&provider);
+    assert!(second.error.is_none(), "{:?}", second.error);
+    assert_eq!(fixture.marker_count("ping-bad"), 0);
+    assert_eq!(fixture.marker_count("start"), 1);
+}
+
+#[test]
+fn unsolicited_window_allows_long_lived_idle_ping_but_still_rejects_bursts() {
+    let mut window = UnsolicitedWindow::default();
+    let start = Instant::now();
+    // Low-frequency heartbeats must not accumulate toward a lifetime cap.
+    for step in 0..(MCP_GATEWAY_MAX_IGNORED_NOTIFICATIONS as u64 * 4) {
+        assert!(!window.exceeded(start + Duration::from_secs(step * 30)));
+    }
+    let burst = start + Duration::from_secs(5_000);
+    for _ in 0..MCP_GATEWAY_MAX_IGNORED_NOTIFICATIONS {
+        assert!(!window.exceeded(burst));
+    }
+    assert!(window.exceeded(burst));
+    window.reset();
+    assert!(!window.exceeded(burst));
+}
+
+#[test]
+fn provider_request_id_rejects_unbounded_or_non_integer_ids() {
+    assert_eq!(
+        provider_request_id(&json!({"jsonrpc":"2.0","method":"ping","id":"123"})),
+        Some(json!("123"))
+    );
+    for id in [
+        json!("x".repeat(MCP_GATEWAY_MAX_PROVIDER_REQUEST_ID_BYTES + 1)),
+        json!(1.5),
+        Value::Null,
+    ] {
+        assert!(provider_request_id(&json!({"jsonrpc":"2.0","method":"ping","id":id})).is_none());
+    }
 }
 
 #[test]
@@ -1114,6 +1319,95 @@ fn malformed_unknown_and_duplicate_responses_fail_closed() {
 }
 
 #[test]
+fn long_provider_description_is_listed_and_oversize_names_the_tool() {
+    let listed = Fixture::new("long_description", 2);
+    let response = listed.list(&listed.provider());
+    assert!(response.error.is_none(), "{:?}", response.error);
+    let Some(McpGatewayResponsePayload::Tools { tools }) = response.payload else {
+        panic!("expected tools, got {:?}", response.payload);
+    };
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "echo");
+    assert_eq!(tools[0].description.as_deref().map(str::len), Some(20_000));
+
+    let rejected = Fixture::new("bad_tools", 2);
+    let response = rejected.list(&rejected.provider());
+    let error = response.error.expect("oversize description is rejected");
+    assert_eq!(error.code, "invalid_provider_tools");
+    assert_eq!(response.dispatch_state, McpGatewayDispatchState::Completed);
+    assert!(error.message.contains("echo"), "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains(&MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES.to_string()),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn description_limit_reload_is_operator_owned_and_preserves_provider_identity() {
+    let fixture = Fixture::new("larger_description", 10);
+    let provider = fixture.provider();
+    let rejected = fixture.list(&provider);
+    assert_eq!(
+        rejected.error.as_ref().unwrap().code,
+        "invalid_provider_tools"
+    );
+    assert!(rejected.error.as_ref().unwrap().message.contains("65536"));
+    assert_eq!(fixture.marker_count("start"), 1);
+
+    let mut config =
+        replacement_config(&fixture, "fake", "Fake provider", "larger_description", 10);
+    config.max_tool_description_bytes = 128 * 1024;
+    let summary = fixture.manager.apply_config_candidate(&config).unwrap();
+    assert_eq!(summary.preserved, 1);
+    assert_eq!(summary.replaced, 0);
+    assert_eq!(
+        fixture.provider().provider_instance_id,
+        provider.provider_instance_id
+    );
+    let admitted = fixture.list(&provider);
+    assert!(admitted.error.is_none(), "{:?}", admitted.error);
+    let Some(McpGatewayResponsePayload::Tools { tools }) = admitted.payload else {
+        panic!("expected tools, got {:?}", admitted.payload);
+    };
+    assert_eq!(
+        tools[0].description.as_deref().map(str::len),
+        Some(96 * 1024)
+    );
+    assert_eq!(fixture.marker_count("start"), 1);
+    assert!(fixture.call(&provider).error.is_none());
+    assert_eq!(fixture.marker_count("call"), 1);
+
+    config.max_tool_description_bytes = 8 * 1024;
+    let summary = fixture.manager.apply_config_candidate(&config).unwrap();
+    assert_eq!(summary.preserved, 1);
+    let rejected_again = fixture.list(&provider);
+    assert_eq!(
+        rejected_again.error.as_ref().unwrap().code,
+        "invalid_provider_tools"
+    );
+    let detail = &rejected_again.error.as_ref().unwrap().message;
+    assert!(
+        detail.contains("echo") && detail.contains("8192"),
+        "{detail}"
+    );
+    assert_eq!(fixture.marker_count("start"), 1);
+    let blocked_call = fixture.call(&provider);
+    assert_eq!(
+        blocked_call.dispatch_state,
+        McpGatewayDispatchState::NotStarted
+    );
+    assert_eq!(blocked_call.error.unwrap().code, "invalid_provider_tools");
+    assert_eq!(
+        fixture.marker_count("call"),
+        1,
+        "policy reload must not replay an effect"
+    );
+}
+
+#[test]
 fn timeout_and_invalid_untrusted_outputs_are_bounded() {
     let timeout = Fixture::with_provider_timeout(
         "timeout",
@@ -1154,12 +1448,6 @@ fn timeout_and_invalid_untrusted_outputs_are_bounded() {
         ),
         (
             "resource_result",
-            "call",
-            "unsupported_provider_content",
-            McpGatewayDispatchState::Completed,
-        ),
-        (
-            "resource_link_result",
             "call",
             "unsupported_provider_content",
             McpGatewayDispatchState::Completed,

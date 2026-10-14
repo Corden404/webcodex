@@ -2,7 +2,10 @@
 
 [English](CODING_WORKFLOW.md) | [简体中文](CODING_WORKFLOW.zh-CN.md)
 
-This guide is for ordinary WebCodex coding/review work. It describes the model-facing workflow, not the internal continuity, audit, or transport protocols used to implement it.
+This guide is for coding/review through a connected WebCodex runtime. Its tool
+names and Workflow Sessions belong to that runtime. For local development of the
+WebCodex repository with another host's tools, follow [CONTRIBUTING.md](../CONTRIBUTING.md)
+and [AGENTS.md](../AGENTS.md). This guide does not require installing WebCodex to contribute.
 
 ## Normal loop
 
@@ -64,6 +67,8 @@ When a registered Project already exists and isolated work is needed, use `work_
 
 When `work_on_project`, `start_session`, `read_session_summary`, or an explicit handoff returns `session_ref`, prefer that short selector for later explicit Session selection. Business `session_id` and wrapper `recording_session_id` remain separate contracts, but either may explicitly carry the already-issued ref: Runtime canonicalizes it to the pinned `wc_sess_*` before the role-specific authorization and lifecycle/guard logic runs. The canonical identity remains valid and authoritative. The ref is principal-scoped convenience only; omission never infers a recorder and no sticky recorder context is created.
 
+On Stateless MCP, carry the chosen Session selector as `_wc.record` on each ordinary call intended for that Session's recorder provenance. A business `session_id` does not select the recorder, and calls that omit `_wc.record` are not backfilled into the Session ledger.
+
 ### Switch back to an exact workspace context
 
 For an already selected Active Session, `work_on_project(session_id="~s12", instruction="Continue the review")` is sufficient. Omit `project`, `client_id`, and `path`; the default `checkout` mode authorizes that exact Session, derives its bound Project, reauthorizes current Project access, and resumes the same Session. The result supplies `project_ref` for ordinary Project tools. Supplying an explicit Project is still supported and must match; `_wc.record` remains independent recorder provenance and never supplies the target.
@@ -86,7 +91,7 @@ wins for guidance only. MCP omission uses the current request's
 See [request-local client policy](MCP.md#request-local-client-policy); HTTP headers
 select transport timing independently from this tool argument. Non-MCP/internal
 omission falls back to `direct`.
-Workflow contract v28 returns shared `guidance`, `model_protocol` and review `roles`,
+The current workflow contract returns shared `guidance`, `model_protocol` and review `roles`,
 plus only the selected `tool_strategy`, when explicitly requested through
 `context_request=["webcodex.workflow"]`. The selection is request-local: choose again
 on exact resume without changing Session identity or business state. It is never
@@ -194,6 +199,10 @@ Use shell/process escape hatches only when the structured validation surface can
 Review the actual workspace/diff after editing and validation. Passing tests do not replace diff review, and a clean diff does not replace focused validation when behavior changed.
 
 `finish_coding_task` returns a bounded evidence summary for closeout. Treat it as advisory evidence, not as a decision that the work is correct or complete. The model still makes the final engineering judgment and reports the result to the user.
+
+Closeout (including `summary_only`), `read_session_handoff`, and a Session-linked Work Result expose an optional `acceptance` summary derived from the same observations. Its `state` is `ready_for_review`, `needs_evidence`, `failed`, or `not_applicable`; none means that natural-language requirements have been accepted. `reason_codes` identify missing/stale/unproven evidence, and `evidence_refs` name the existing workspace, validation, review or output evidence. Follow the existing next actions and read the exact Session evidence when details are needed. A changed handoff snapshot must be re-read before dependent work.
+
+Execution completion and successful historical checks do not prove current source correctness. Source fences currently report `unproven` or `stale`, so even a successful check still needs source/applicability review. Retained artifact metadata is a historical observation, not current file freshness or content correctness. Read-only work may legitimately require no tests: decide applicability explicitly, without running tests merely to change the badge. A card with no task Session reports `not_applicable`; it never infers a task from Project activity.
 
 ## Long-running work
 

@@ -6,8 +6,10 @@
 
 pub(crate) mod invocation;
 pub(crate) mod job_convergence;
+mod native_batch;
 #[cfg(test)]
 mod normalization_tests;
+pub(crate) mod output_transfer;
 
 use super::edit_tool_telemetry::{edit_tool_surface, EditToolSurface};
 use super::tool_definition::model_visible_tool_definitions;
@@ -99,6 +101,7 @@ pub(crate) struct ModelErgonomicsTimer {
     edit: Option<EditFacts>,
     canonical_execution_state: Option<String>,
     input_normalization_code: Option<ToolInputNormalizationCode>,
+    native_batch: Option<native_batch::NativeBatchFacts>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +119,7 @@ pub(crate) struct ModelErgonomicsCompletion {
     edit: Option<EditFacts>,
     canonical_execution_state: Option<String>,
     input_normalization_code: Option<ToolInputNormalizationCode>,
+    native_batch: Option<native_batch::NativeBatchFacts>,
     pub(crate) job_convergence: Option<job_convergence::JobConvergenceRecord>,
 }
 
@@ -132,6 +136,10 @@ pub(crate) struct ModelErgonomicsRecord {
     pub(crate) success: bool,
     pub(crate) duration_ms: u64,
     pub(crate) serialized_result_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_transfer: Option<output_transfer::OutputTransferFacts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) native_batch: Option<native_batch::NativeBatchFacts>,
     pub(crate) error_kind: Option<String>,
     pub(crate) failure_kind: Option<String>,
     pub(crate) recovery_kind: Option<String>,
@@ -287,6 +295,7 @@ impl ModelErgonomicsTimer {
             edit: None,
             canonical_execution_state: None,
             input_normalization_code: None,
+            native_batch: None,
             readiness_requested_jobs: (tool_name == "wait_for_job_readiness")
                 .then(|| {
                     arguments
@@ -296,6 +305,14 @@ impl ModelErgonomicsTimer {
                 })
                 .flatten(),
         })
+    }
+
+    /// Count the requested entries only after canonical admission. This never
+    /// observes child invocations or infers how many entries completed.
+    pub(crate) fn capture_admitted_call(&mut self, call: &super::ToolCall) {
+        self.native_batch = (call.tool_name() == self.tool_name)
+            .then(|| native_batch::from_admitted_call(call))
+            .flatten();
     }
 
     /// Preserve bounded canonical facts before the late model projection.
@@ -329,6 +346,7 @@ impl ModelErgonomicsTimer {
             edit: self.edit,
             canonical_execution_state: self.canonical_execution_state,
             input_normalization_code: self.input_normalization_code,
+            native_batch: self.native_batch,
             job_convergence: None,
         }
     }
@@ -350,6 +368,7 @@ impl ModelErgonomicsTimer {
             edit: self.edit,
             canonical_execution_state: self.canonical_execution_state,
             input_normalization_code: self.input_normalization_code,
+            native_batch: self.native_batch,
             job_convergence: None,
         }
     }
@@ -381,6 +400,13 @@ impl ModelErgonomicsCompletion {
         let success = structured_content.get("success")?.as_bool()?;
         let output = structured_content.get("output")?;
         let serialized_result_bytes = serialized_json_len(structured_content).ok()?;
+        // The opt-in Host view moves command diagnostics, not their meaning.
+        // Measure the actual returned envelope while classifying original faults.
+        let output = if output.get("execution").is_some() {
+            output.get("details").unwrap_or(output)
+        } else {
+            output
+        };
         Some(self.record_from_parts(success, output, Some(serialized_result_bytes)))
     }
 
@@ -445,6 +471,10 @@ impl ModelErgonomicsCompletion {
             duration_ms: self.duration_ms,
             serialized_result_bytes: serialized_result_bytes
                 .map(|bytes| bytes.min(u64::MAX as usize) as u64),
+            output_transfer: success
+                .then(|| output_transfer::from_model_result(self.tool_name, output))
+                .flatten(),
+            native_batch: self.native_batch,
             error_kind,
             failure_kind,
             recovery_kind,
@@ -735,6 +765,26 @@ mod tests {
         ModelErgonomicsTimer::start(tool_name)
             .expect("model-visible tool")
             .finish_after(Duration::from_millis(duration_ms))
+    }
+
+    #[test]
+    fn execution_control_telemetry_keeps_fault_classification_and_measures_actual_view() {
+        let completion = completion("run_process", 1);
+        let details = json!({"failure_kind":"command_exit_nonzero", "stdout_tail":"PRIVATE"});
+        let ordinary = json!({"success":false,"output":details,"error":"failed"});
+        let compact = json!({"success":false,"output":{
+            "execution":{"state":"completed","outcome":"failed","exit_code":1},
+            "details":details
+        },"error":"failed"});
+        let before = completion.record_for_structured_content(&ordinary).unwrap();
+        let after = completion.record_for_structured_content(&compact).unwrap();
+        assert_eq!(before.failure_kind, after.failure_kind);
+        assert_eq!(after.failure_kind.as_deref(), Some("command_exit_nonzero"));
+        assert_eq!(
+            after.serialized_result_bytes,
+            Some(serde_json::to_vec(&compact).unwrap().len() as u64)
+        );
+        assert!(!serde_json::to_string(&after).unwrap().contains("PRIVATE"));
     }
 
     #[test]

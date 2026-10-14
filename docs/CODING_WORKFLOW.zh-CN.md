@@ -2,7 +2,10 @@
 
 [English](CODING_WORKFLOW.md) | [简体中文](CODING_WORKFLOW.zh-CN.md)
 
-本文面向普通 WebCodex coding/review 工作，只说明模型真正需要遵循的流程，不展开内部 continuity、audit 或 transport 协议。
+本文面向通过已连接的 WebCodex runtime 完成的 coding/review 工作；文中的工具名称和
+Workflow Session 属于该 runtime。使用其他 Host 的工具在本地开发 WebCodex 仓库时，
+请遵循 [CONTRIBUTING.md](../CONTRIBUTING.zh-CN.md) 和 [AGENTS.md](../AGENTS.md)，
+无需为了贡献代码而先安装 WebCodex。
 
 ## 普通循环
 
@@ -28,6 +31,9 @@ Bootstrap 或 discovery 返回 `project_ref` 后，普通 Project-scoped tool ca
 当已经有 registered Project、又需要隔离工作区时，直接使用 `work_on_project(project=<canonical id 或 project_ref>, mode="worktree", ...)`。不要重新推导 `client_id`、source absolute path，也不要猜 managed destination。Server 会在本次调用重新授权 source Project，Runner 负责派生并拥有 managed placement、持久化 source/base provenance，并返回新的 canonical Project 与短 ref。source Project → managed Project 是 fresh-Session transition，因此不要携带 source Project 的 Session；后续使用返回的 managed `project_ref` 与 Session 继续。兼容入口 `client_id + path + mode="worktree"` 仍受普通 path authority 约束；当已有 Project identity 时，它不是推荐流程。Managed storage 的实际目录布局属于实现细节，模型不应记忆或猜测。
 
 当 `work_on_project`、`start_session`、`read_session_summary` 或显式 handoff 返回 `session_ref` 时，后续显式 Session 选择可优先复用这个短 selector。Business `session_id` 与 wrapper `recording_session_id` 仍是两套独立语义，但都可以显式携带已签发的 ref：Runtime 会先把它还原为钉住的 canonical `wc_sess_*`，再执行各自原有的授权、生命周期或 guard 逻辑。Canonical identity 仍是持久化、审计、诊断和内部关联的权威身份。`session_ref` 只是按 principal 隔离的便利选择器；省略 recorder 时不会自动推断，也不会形成隐式或粘滞的 recorder context。
+
+使用 Stateless MCP 时，每次希望把 recorder provenance 归入所选 Session 的普通调用，都应显式携带 `_wc.record`。业务 `session_id` 不会选择 recorder；省略该字段的调用不会补录到 Session ledger。
+
 默认情况下，它还会返回一个很小且有界的 `extensions` selection catalog：Skill metadata 来自 canonical 的 project / Runner-configured `skills.roots` / Runner-managed Skill Store 三类来源；Plugin metadata 只包含 configured working directory 与当前 Project root 匹配、且已 ready/committed 的 provider。该 metadata 不授予任何 authority，也不会自动读取 Skill body 或创建 Plugin binding；模型选择后使用 `read_skill_file` 读取 Skill 文本，`run_skill_resource` 只执行可信 Runner-configured live `scripts/` resource（由 `expected_definition_revision` fence definition）或 Runner-installed managed resource（另由 `expected_package_revision` fence package），Plugin 则走 `plugin_tool describe -> call`。Configured resource bytes 会一直保持 live 到实际执行时，并不会预先被 package revision 固定。只有当前模型上下文仍明确保留这些 discovery metadata 时，才应设置 `include_extension_catalog=false`。
 
 ### 切回明确的工作上下文
@@ -46,7 +52,7 @@ Fresh work 仍须明确 `project` 或 `client_id + path`。`mode="worktree"` 始
 使用当次请求的 `X-WebCodex-MCP-Profile`，header 省略才使用部署默认
 `WEBCODEX_MCP_HOST_PROFILE`。HTTP header 独立决定返回/等待策略，见
 [MCP 客户端策略](MCP.zh-CN.md#同一-server-的客户端策略)。非 MCP/internal
-调用省略时仍回退到 `direct`。Workflow contract v28 保持共享的 `guidance`、
+调用省略时仍回退到 `direct`。当前 workflow contract 保持共享的 `guidance`、
 `model_protocol` 和 review `roles`，并在显式 `context_request=["webcodex.workflow"]`
 时通过 `tool_strategy` 返回本次请求选中的 effective 策略。
 
@@ -166,6 +172,10 @@ Formatting 属于收尾，不是每次编辑后的 validation。普通循环是�
 编辑和 validation 之后，必须检查真实 workspace/diff。Tests 通过不能替代 diff review；反过来，diff 看起来合理也不能替代行为变化所需的 focused validation。
 
 `finish_coding_task` 返回有界 closeout evidence。把它当成 advisory summary，不要把它当成“任务已经正确完成”的 authority。最终工程判断仍由模型完成并向用户报告。
+
+Closeout（含 `summary_only`）、`read_session_handoff` 和绑定 Session 的 Work Result 会提供从同一组观察推导的可选 `acceptance` 摘要。`state` 为 `ready_for_review`、`needs_evidence`、`failed` 或 `not_applicable`，均不表示自然语言需求已验收。`reason_codes` 说明缺失、过期或尚未证明的证据；`evidence_refs` 指向已有 workspace、validation、review 或 outputs 类证据。沿用现有下一步动作，需要细节时读取精确 Session 的证据。交接快照发生变化时，先重新读取再继续依赖该快照的工作。
+
+执行结束及历史检查通过不能证明当前源码正确。现有源码 fence 返回 `unproven` 或 `stale`，所以检查成功后仍需复核源码状态与检查适用性。保留的产物元数据是历史观察，不证明当前文件新鲜度或内容正确。只读任务可以合理地无需测试：明确判断适用性，不要只为改变状态标记而运行测试。没有任务 Session 的卡片返回 `not_applicable`，不会从 Project 活动推断任务。
 
 ## 长时间运行的工作
 

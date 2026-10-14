@@ -116,6 +116,7 @@ mod internal;
 mod output;
 mod preparation;
 mod process;
+pub(crate) use process::run_python_build_with_start_hook;
 mod process_tree;
 mod profiles;
 mod run;
@@ -126,10 +127,10 @@ mod search;
 #[cfg(windows)]
 pub(crate) use commands::shell_quote_powershell;
 pub(crate) use commands::{
-    configured_explicit_shell_command, configured_node_project_check_job_command,
+    configured_explicit_shell_command, configured_node_project_job_command,
     configured_prepared_shell_job_command, configured_pytest_job_command,
     configured_ruff_job_command, configured_shell_job_command, configured_validation_job_command,
-    explicit_shell_available, shell_quote,
+    explicit_shell_available, probe_ruff_formatter, shell_quote,
 };
 use commands::{
     configured_prepared_shell_command, configured_process_command, configured_process_path,
@@ -157,7 +158,8 @@ use output::IncrementalUtf8Validator;
 use output::{read_bounded_pipe_tail, BoundedPipeTail};
 use preparation::{run_prepare_command, stderr_tail};
 pub(crate) use process::{
-    prepare_detached_process_launch, run_process_with_profiles_and_execution_state,
+    prepare_detached_process_launch, run_format_candidate,
+    run_process_with_profiles_and_execution_state,
     run_process_with_profiles_and_execution_state_with_internal_env_and_start_hook,
     run_process_with_profiles_and_execution_state_with_start_hook,
 };
@@ -167,7 +169,9 @@ use process_tree::{
 };
 #[cfg(test)]
 use profiles::powershell_profile_prepare_script;
-pub(crate) use profiles::resolve_prepared_shell_profile;
+pub(crate) use profiles::{
+    resolve_prepared_shell_profile, resolve_prepared_shell_profile_with_deadline,
+};
 #[cfg(test)]
 use run::run_shell_impl;
 pub(crate) use run::run_shell_with_profiles_and_execution_state;
@@ -186,12 +190,15 @@ pub(crate) use scripts::{
 };
 #[cfg(windows)]
 #[cfg(test)]
-use search::native_single_file_search_spec;
+use search::native_search_spec;
 #[cfg(windows)]
 use search::resolve_windows_internal_posix_interpreter;
 #[cfg(windows)]
-pub(crate) use search::run_windows_native_single_file_search_with_profiles;
+pub(crate) use search::run_windows_native_search_with_profiles;
 
 #[cfg(test)]
 #[path = "shell_tests.rs"]
 mod runner_lifecycle_tests;
+
+#[cfg(test)]
+pub(crate) use commands::configured_node_project_check_job_command;

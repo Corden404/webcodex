@@ -13,6 +13,7 @@ pub(crate) mod execution_io;
 #[cfg(windows)]
 pub(crate) mod exit_diagnostics;
 pub(crate) mod external_tools;
+pub(crate) mod file_access;
 pub(crate) mod file_dispatch;
 pub(crate) mod files;
 pub(crate) mod job_manager;
@@ -27,6 +28,9 @@ pub(crate) mod plugin;
 pub(crate) mod project_build;
 #[cfg(test)]
 mod project_build_tests;
+pub(crate) mod project_format;
+#[cfg(test)]
+mod project_format_tests;
 pub(crate) mod projects;
 pub(crate) mod runner_instructions;
 pub(crate) mod runner_skills;
@@ -94,7 +98,7 @@ pub(crate) use runner_skills::{
     handle_runner_skill_request, run_skill_resource_with_profiles_and_execution_state,
 };
 #[cfg(windows)]
-pub(crate) use shell::run_windows_native_single_file_search_with_profiles;
+pub(crate) use shell::run_windows_native_search_with_profiles;
 #[cfg(test)]
 pub(crate) use shell::{
     cwd_allowed, run_shell, run_shell_with_profiles, PreparedShellProfileCache,

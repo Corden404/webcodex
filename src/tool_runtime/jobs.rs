@@ -445,6 +445,10 @@ pub(crate) fn structured_validation_evidence(
         errors_count: None,
     };
     match profile.map(|adapter| adapter.tool_identity()) {
+        Some("node:vitest:test" | "node:jest:test") => {
+            evidence.tests_detected = Some(false);
+            evidence.test_count_evidence_reason = Some("no_complete_summary");
+        }
         Some("python:pytest:test" | "node:tap:test") => {
             let summary = evidence
                 .diagnostics
@@ -611,9 +615,11 @@ pub(crate) fn validation_job_projection_with_policy(
     }
     let process_passed = lifecycle == Some(RunnerJobLifecycle::Completed) && exit_code == Some(0);
     let mut evidence = structured_validation_evidence(tool, kind, stdout, stderr, truncated);
-    if tool == "cargo_test" && kind == "test" {
+    if matches!(tool, "cargo_test" | "node:vitest:test" | "node:jest:test") && kind == "test" {
         if let Some(authoritative) = authoritative_test_count.filter(|evidence| evidence.is_valid())
         {
+            evidence.tests_passed = authoritative.tests_passed.or(evidence.tests_passed);
+            evidence.tests_failed = authoritative.tests_failed.or(evidence.tests_failed);
             evidence.tests_detected = Some(authoritative.tests_detected);
             evidence.tests_run_count = authoritative.tests_run_count;
             evidence.zero_tests_run = authoritative.tests_run_count.map(|count| count == 0);
@@ -672,7 +678,10 @@ pub(crate) fn validation_job_projection_with_policy(
         && !report_contradictory
         && !ruff_contradictory
         && !profile_mismatch
-        && !(tool == "node:tap:test" && evidence.tests_run_count.is_none());
+        && !(matches!(
+            tool,
+            "node:tap:test" | "node:vitest:test" | "node:jest:test"
+        ) && evidence.tests_run_count.is_none());
     let mut value = json!({
         "tool": tool,
         "kind": kind,
@@ -734,7 +743,14 @@ fn apply_cargo_test_execution_policy(
     require_tests: Option<bool>,
     no_run: Option<bool>,
 ) {
-    if !matches!(tool, "cargo_test" | "python:pytest:test" | "node:tap:test") {
+    if !matches!(
+        tool,
+        "cargo_test"
+            | "python:pytest:test"
+            | "node:tap:test"
+            | "node:vitest:test"
+            | "node:jest:test"
+    ) {
         return;
     }
     if let Some(require_tests) = require_tests {
@@ -856,7 +872,7 @@ fn model_facing_structured_execution_metadata(
 /// Build a bounded job summary `Value` for an agent-known job. Never includes
 /// stdout/stderr bodies.
 pub(crate) fn agent_job_summary_value(job: &ShellJobInfo) -> Value {
-    json!({
+    let mut summary = json!({
         "job_id": job.job_id,
         "kind": job.kind,
         "status": job.status,
@@ -883,7 +899,19 @@ pub(crate) fn agent_job_summary_value(job: &ShellJobInfo) -> Value {
             job.recovery_state.as_deref(),
             job.recovery_reason_code.as_deref(),
         ),
-    })
+    });
+    if let Some(artifacts) = &job.build_artifacts {
+        summary["build_artifacts"] = json!(artifacts);
+    }
+    if let Some(kind) = super::project_build::artifact_observation_failure_kind(job) {
+        summary["failure_kind"] = json!(kind);
+    }
+    if job.kind == "project_format" {
+        summary["state_changed"] = json!(job.format_mutation.unwrap_or_default().state_changed());
+        summary["failure_kind"] =
+            json!(super::project_format::project_format_safe_failure_kind(job));
+    }
+    summary
 }
 
 impl ToolRuntime {
@@ -1850,7 +1878,7 @@ impl ToolRuntime {
                 ) {
                     validation["validation_target_id"] = json!(target_id);
                 }
-                ToolResult::ok(json!({
+                let mut output = json!({
                     "job_id": job.job_id,
                     "project": job.project_id,
                     "status": job.status,
@@ -1907,7 +1935,21 @@ impl ToolRuntime {
                     "command_summary": command_summary,
                     "detected_summary": detected_summary,
                     "validation": validation,
-                }))
+                });
+                if let Some(artifacts) = &job.build_artifacts {
+                    output["build_artifacts"] = json!(artifacts);
+                }
+                if let Some(kind) = super::project_build::artifact_observation_failure_kind(&job) {
+                    output["failure_kind"] = json!(kind);
+                }
+                if job.kind == "project_format" {
+                    output["state_changed"] =
+                        json!(job.format_mutation.unwrap_or_default().state_changed());
+                    output["failure_kind"] = json!(
+                        super::project_format::project_format_safe_failure_kind(&job)
+                    );
+                }
+                ToolResult::ok(output)
             }
             Err(error) => agent_job_log_error_result(&job_id, error),
         }
@@ -2715,6 +2757,8 @@ mod recovery_projection_tests {
     #[test]
     fn authoritative_cargo_test_count_survives_truncated_logs_and_still_fails_closed() {
         let complete = ShellJobTestCountEvidence {
+            tests_passed: None,
+            tests_failed: None,
             tests_detected: true,
             tests_run_count: Some(120),
             status: CargoTestCountEvidenceStatus::CompleteSummary,
@@ -2742,6 +2786,8 @@ mod recovery_projection_tests {
         );
 
         let below_minimum = ShellJobTestCountEvidence {
+            tests_passed: None,
+            tests_failed: None,
             tests_detected: true,
             tests_run_count: Some(5),
             status: CargoTestCountEvidenceStatus::CompleteSummary,
@@ -2767,6 +2813,8 @@ mod recovery_projection_tests {
         );
 
         let incomplete = ShellJobTestCountEvidence {
+            tests_passed: None,
+            tests_failed: None,
             tests_detected: true,
             tests_run_count: None,
             status: CargoTestCountEvidenceStatus::IncompleteStream,
@@ -2924,6 +2972,8 @@ mod recovery_projection_tests {
             result: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             validation: None,
             recovery_state: None,
@@ -2976,6 +3026,8 @@ mod recovery_projection_tests {
             result: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             validation: None,
             recovery_state: Some("lost_after_reconcile".to_string()),

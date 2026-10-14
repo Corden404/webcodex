@@ -531,11 +531,29 @@ impl ToolRuntime {
             existing_suggested_actions: output.get("suggested_next_actions"),
         });
 
+        let retained_outputs = super::task_outputs::retained_task_outputs(
+            &projection_closeout_session,
+        )
+        .and_then(|value| {
+            serde_json::from_value::<webcodex_core::task_outputs::TaskOutputs>(value).ok()
+        });
+        output["acceptance"] = super::acceptance_evidence::acceptance_evidence(
+            &facts,
+            super::acceptance_evidence::AcceptanceContext {
+                outputs: retained_outputs.as_ref(),
+                outputs_historical: true,
+                history_partial: projection_closeout_session.events_truncated
+                    || projection_closeout_session.retention_truncated,
+                snapshot_changed: session_changed_during_snapshot
+                    || external_observations_changed_during_snapshot,
+            },
+        );
         if !diagnostic {
             let mut handoff = json!({
                 "session_id": output["session_id"],
                 "project": output["project"],
                 "handoff_brief": output["handoff_brief"],
+                "acceptance": output["acceptance"],
             });
             if let Some(session_ref) = output.get("session_ref") {
                 handoff["session_ref"] = session_ref.clone();
@@ -548,7 +566,29 @@ impl ToolRuntime {
             }
             return ToolResult::ok(handoff);
         }
-        let compact = compact_handoff_output(&output, &facts);
+        let snapshot_changed =
+            session_changed_during_snapshot || external_observations_changed_during_snapshot;
+        if snapshot_changed {
+            // Keep the diagnostic actions aligned with the bounded brief. The
+            // captured facts remain useful history, but cannot authorize a next
+            // task step until the exact Session has been observed again.
+            let recovery_actions = output["handoff_brief"]["next_actions"].clone();
+            output["suggested_next_actions"] = recovery_actions.clone();
+            if let Some(actions) =
+                output.pointer_mut("/continuation_feedback/attempt/suggested_next_actions")
+            {
+                *actions = recovery_actions;
+            }
+        }
+        let mut compact = compact_handoff_output(&output, &facts);
+        if snapshot_changed {
+            // These optional aggregate completion conclusions require a coherent
+            // snapshot. Preserve facts, blockers, history and integrity without
+            // presenting the stale closeout decision as a current verdict.
+            let compact = compact.as_object_mut().expect("handoff projection object");
+            compact.remove("verdict");
+            compact.remove("task_outcome");
+        }
         for (key, value) in compact.as_object().unwrap() {
             if !include_validation && key == "validation" {
                 continue;

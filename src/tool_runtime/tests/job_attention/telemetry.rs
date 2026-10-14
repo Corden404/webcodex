@@ -446,6 +446,8 @@ async fn job_convergence_terminal_delivery_uses_existing_server_timestamp() {
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: true,
         })

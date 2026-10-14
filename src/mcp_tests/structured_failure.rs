@@ -285,6 +285,13 @@ async fn gateway_and_app_canonical_failures_use_request_presentation() {
 }
 
 async fn register_failure_runner(runtime: &ToolRuntime) {
+    register_failure_runner_with_resource_links(runtime, false).await;
+}
+
+async fn register_failure_runner_with_resource_links(
+    runtime: &ToolRuntime,
+    allow_resource_links: bool,
+) {
     runtime
         .runner_registry
         .register(crate::test_support::current_runner_registration(
@@ -317,6 +324,7 @@ async fn register_failure_runner(runtime: &ToolRuntime) {
                     structured_process_argv: true,
                     apply_text_edit_local_guard_without_sha: true,
                     apply_text_edit_occurrence: true,
+                    mcp_gateway_resource_links: allow_resource_links,
                     ..Default::default()
                 },
             },
@@ -474,7 +482,10 @@ async fn http_openai_mcp_passthrough_preserves_provider_error() {
             } else {
                 assert!(matches!(
                     request.mcp_gateway,
-                    Some(McpGatewayRequest::ToolsCall { .. })
+                    Some(McpGatewayRequest::ToolsCall {
+                        allow_resource_links: false,
+                        ..
+                    })
                 ));
                 McpGatewayResponsePayload::ToolResult {
                     result: provider_result.clone(),
@@ -526,13 +537,13 @@ async fn http_openai_mcp_passthrough_preserves_provider_error() {
 
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
-async fn http_mcp_passthrough_preserves_mixed_image_content_order() {
+async fn http_mcp_passthrough_preserves_mixed_image_and_resource_link_content() {
     let _env = crate::auth::AuthEnvGuard::new();
     _env.enable_direct_shared_key();
     _env.disable_open_anonymous();
     let (_tmp, db) = test_db();
     let runtime = Arc::new(test_runtime());
-    register_failure_runner(&runtime).await;
+    register_failure_runner_with_resource_links(&runtime, true).await;
     let service = Service::new(build_test_router(
         test_config(Some("secret")),
         db,
@@ -547,6 +558,19 @@ async fn http_mcp_passthrough_preserves_mixed_image_content_order() {
                 data: "iVBORw0KGgo=".into(),
                 mime_type: "image/png".into(),
             },
+            serde_json::from_value(json!({
+                "type": "resource_link",
+                "uri": "blockbench://project/model.bbmodel",
+                "name": "model.bbmodel",
+                "title": "Model",
+                "description": "Current project",
+                "mimeType": "application/json",
+                "size": 1024,
+                "annotations": {"audience": ["user"], "priority": 0.5},
+                "icons": [{"src": "https://example.com/icon.png", "mimeType": "image/png"}],
+                "_meta": {"providerExtension": true}
+            }))
+            .unwrap(),
             McpGatewayContent::Text {
                 text: "after".into(),
             },
@@ -581,7 +605,10 @@ async fn http_mcp_passthrough_preserves_mixed_image_content_order() {
             } else {
                 assert!(matches!(
                     request.mcp_gateway,
-                    Some(McpGatewayRequest::ToolsCall { .. })
+                    Some(McpGatewayRequest::ToolsCall {
+                        allow_resource_links: true,
+                        ..
+                    })
                 ));
                 McpGatewayResponsePayload::ToolResult {
                     result: provider_result.clone(),
@@ -629,7 +656,8 @@ async fn http_mcp_passthrough_preserves_mixed_image_content_order() {
             assert_eq!(body["result"]["content"][1]["type"], "image");
             assert_eq!(body["result"]["content"][1]["data"], "iVBORw0KGgo=");
             assert_eq!(body["result"]["content"][1]["mimeType"], "image/png");
-            assert_eq!(body["result"]["content"][2]["text"], "after");
+            assert_eq!(body["result"]["content"][2]["type"], "resource_link");
+            assert_eq!(body["result"]["content"][3]["text"], "after");
             assert_eq!(
                 body["result"]["structuredContent"],
                 json!({"kind": "mixed"})
@@ -796,5 +824,81 @@ async fn http_mcp_execution_compaction_keeps_sparse_serialization() {
             &crate::tool_runtime::registry::output_schema_for_tool(tool),
         )
         .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn http_mcp_execution_control_direct_gateway_success_and_failure() {
+    for gateway in [false, true] {
+        for exit_code in [0, 1] {
+            let (_tmp, db) = test_db();
+            let runtime = Arc::new(test_runtime());
+            register_failure_runner(&runtime).await;
+            let service = Service::new(build_test_router(
+                test_config(Some("secret")),
+                db,
+                runtime.clone(),
+            ));
+            let runner = async {
+                let request = wait_for_failure_request(&runtime).await;
+                assert_eq!(request.kind, "run_process");
+                runtime
+                    .runner_registry
+                    .complete(RunnerResultPayload {
+                        result: RunnerResultRequest {
+                            client_id: "failure-runner".into(),
+                            runner_instance_id: "inst".into(),
+                            request_id: request.request_id,
+                            exit_code: Some(exit_code),
+                            stdout: Some("control output witness".into()),
+                            stderr: Some("diagnostic witness".into()),
+                            stdout_truncated: false,
+                            stderr_truncated: false,
+                            duration_ms: Some(1),
+                            error: None,
+                        },
+                        command_execution_state: Some(ShellCommandExecutionState::Completed),
+                        mcp_gateway: None,
+                        plugin_gateway: None,
+                        coding_agent: None,
+                    })
+                    .await
+                    .unwrap();
+            };
+            let arguments = json!({"project":"agent:failure-runner:probe","executable":"probe",
+                "args":[],"timeout_secs":30,"sync_wait_secs":30});
+            let mut params = if gateway {
+                adaptive_runtime_gateway_params("run_process", arguments)
+            } else {
+                json!({"name":"run_process","arguments":arguments})
+            };
+            params["arguments"]["_wc"] = json!({"compact_execution":true});
+            let ((status, body), ()) = tokio::join!(
+                http_call(&service, params, client_meta("openai-mcp", "2"), true),
+                runner
+            );
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let result = &body["result"]["structuredContent"];
+            assert_eq!(result["success"], exit_code == 0, "{body}");
+            assert_eq!(
+                result["output"]["execution"]["outcome"],
+                if exit_code == 0 { "passed" } else { "failed" },
+                "{body}"
+            );
+            assert_eq!(result["output"]["execution"]["exit_code"], exit_code);
+            assert_eq!(
+                result["output"]["details"]["stdout_tail"],
+                "control output witness"
+            );
+            assert_eq!(
+                result["output"]["details"]["stderr_tail"],
+                "diagnostic witness"
+            );
+            if exit_code != 0 {
+                let error = result["error"].as_str().unwrap();
+                assert!(error.contains("output.details.stdout_tail"), "{error}");
+                assert!(!error.contains("diagnostic witness"));
+            }
+        }
     }
 }

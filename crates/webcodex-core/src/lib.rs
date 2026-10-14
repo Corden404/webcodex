@@ -20,9 +20,13 @@ pub mod model_reference;
 pub mod plugin;
 pub mod project_build;
 pub mod project_context_contract;
+pub mod project_format;
+#[cfg(test)]
+mod project_format_tests;
 pub mod project_instructions;
 pub mod project_listing;
 mod project_operation;
+pub mod project_search;
 pub mod runner_instruction;
 pub mod runner_job_lifecycle;
 pub mod runner_job_receipt;

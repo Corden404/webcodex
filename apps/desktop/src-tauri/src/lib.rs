@@ -9,6 +9,7 @@ mod desktop_locale;
 mod desktop_shell;
 mod diagnostics;
 mod error;
+mod lifecycle_log;
 mod managed_instructions;
 mod mcp_providers;
 mod models;
@@ -157,7 +158,9 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             commands::repair_environment_user_credential,
             commands::activate_local_project,
             commands::prepare_project_unregister,
+            commands::prepare_projects_unregister,
             commands::unregister_project,
+            commands::unregister_projects,
             commands::configure_remote_setup,
             commands::start_quick_share,
             commands::stop_quick_share,
@@ -200,7 +203,11 @@ fn handle_run_event(app_handle: &tauri::AppHandle, event: tauri::RunEvent) {
         }
         tauri::RunEvent::ExitRequested { api, code, .. } => {
             let shell = app_handle.state::<desktop_shell::DesktopShellState>();
-            if shell.prevent_implicit_exit(code) {
+            let prevented = shell.prevent_implicit_exit(code);
+            app_handle
+                .state::<AppState>()
+                .record_lifecycle(lifecycle_log::LifecycleEvent::ExitRequested { code, prevented });
+            if prevented {
                 api.prevent_exit();
             } else {
                 shell.mark_exit_requested();
@@ -209,6 +216,9 @@ fn handle_run_event(app_handle: &tauri::AppHandle, event: tauri::RunEvent) {
             }
         }
         tauri::RunEvent::Exit => {
+            app_handle
+                .state::<AppState>()
+                .record_lifecycle(lifecycle_log::LifecycleEvent::DesktopExiting);
             platform::stop_session_shutdown(app_handle);
             let state = app_handle.state::<AppState>();
             tauri::async_runtime::block_on(state.shutdown());

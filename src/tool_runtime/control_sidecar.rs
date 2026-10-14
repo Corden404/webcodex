@@ -217,19 +217,34 @@ pub(crate) fn supports_control_sidecars(tool: &str) -> bool {
         )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlSidecarParseError {
+    NotAdmitted,
+    InvalidOperations,
+}
+
+impl ControlSidecarParseError {
+    // The adapter owns the field path; diagnostics must never include raw payloads.
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::NotAdmitted => "is unavailable on this tool or adapter",
+            Self::InvalidOperations => "requires closed before/communication/after_success objects with bounded canonical operations",
+        }
+    }
+}
+
 pub(crate) fn parse_control_sidecars(
     value: Value,
-    _tool: &str,
     admitted: bool,
-) -> Result<Option<ControlSidecars>, &'static str> {
+) -> Result<Option<ControlSidecars>, ControlSidecarParseError> {
     if !admitted {
-        return Err("_control is unavailable on this tool or adapter");
+        return Err(ControlSidecarParseError::NotAdmitted);
     }
     // Do not interpolate serde errors: unknown fields/variants can contain
     // private continuation material supplied by a malformed caller.
-    serde_json::from_value(value).map(Some).map_err(|_| {
-        "_control requires closed before/communication/after_success objects with bounded canonical operations"
-    })
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|_| ControlSidecarParseError::InvalidOperations)
 }
 
 #[cfg(test)]
@@ -237,9 +252,9 @@ pub(crate) fn strip_control_sidecars(
     arguments: &mut Value,
     tool: &str,
     admitted: bool,
-) -> Result<Option<ControlSidecars>, &'static str> {
+) -> Result<Option<ControlSidecars>, ControlSidecarParseError> {
     if !admitted || !supports_control_sidecars(tool) {
-        return Err("_control is unavailable on this tool or adapter");
+        return Err(ControlSidecarParseError::NotAdmitted);
     }
 
     let Some(value) = arguments
@@ -248,7 +263,7 @@ pub(crate) fn strip_control_sidecars(
     else {
         return Ok(None);
     };
-    parse_control_sidecars(value, tool, admitted)
+    parse_control_sidecars(value, admitted)
 }
 fn phase_schema(kinds: &[&str]) -> Value {
     let mut properties = serde_json::Map::new();
@@ -645,7 +660,12 @@ impl ControlExecution {
                 json!({"error_kind": kind}),
             ));
         }
-        let result = outcome.result.as_mut().unwrap();
+        self.decorate_result(outcome.result.as_mut().unwrap());
+    }
+
+    /// Attach the already-completed control receipt before model budgeting.
+    /// This only projects retained facts; it never executes a control phase.
+    pub(crate) fn decorate_result(self, result: &mut ToolResult) {
         let main = self
             .main
             .unwrap_or_else(|| main_projection(result, self.main_dispatched));
@@ -841,5 +861,25 @@ mod tests {
         let schema = output_schema();
         let control = json!({"main": {"success": true, "execution_state": "succeeded", "state_changed": null}, "after_success": projection});
         webcodex_tool_contracts::test_support::validate_schema_instance(&control, &schema).unwrap();
+    }
+
+    #[test]
+    fn project_format_pending_main_execution_state_becomes_started() {
+        let result = ToolResult::ok(json!({
+            "execution_state": "pending",
+            "state_changed": null,
+            "job_id": "job-format-pending",
+            "continuation": {
+                "tool": "observe_jobs",
+                "arguments": {
+                    "items": [{ "job_id": "job-format-pending" }]
+                }
+            }
+        }));
+        assert_eq!(main_execution_state(&result, true), "started");
+        assert_eq!(
+            main_execution_state(&result, false),
+            "definitely_not_started"
+        );
     }
 }

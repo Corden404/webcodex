@@ -2615,11 +2615,15 @@ impl RunnerRegistry {
         access: Option<&crate::RunnerAccess>,
     ) -> Result<(String, oneshot::Receiver<ShellRunResponse>), String> {
         payload.validate()?;
+        let requires_node =
+            payload.adapter == webcodex_core::project_build::ProjectBuildAdapter::Node;
         let requires_all_packages = payload
             .scope
             .as_ref()
             .is_some_and(webcodex_core::project_build::ProjectBuildScope::selects_all_packages);
         let requires_dependency_policy = payload.dependency_policy.is_some();
+        let requires_python =
+            payload.adapter == webcodex_core::project_build::ProjectBuildAdapter::Python;
         let request_id = next_request_id();
         let (tx, rx) = oneshot::channel();
         let request = encode_runner_operation(
@@ -2636,6 +2640,26 @@ impl RunnerRegistry {
             return Err(capability_upgrade_error(
                 &client_id,
                 RunnerFeature::ProjectBuild,
+            ));
+        }
+        if requires_node
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectBuildNode)
+        {
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectBuildNode,
+            ));
+        }
+        if requires_python
+            && !runner
+                .runner_features
+                .supports(RunnerFeature::ProjectBuildPython)
+        {
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectBuildPython,
             ));
         }
         if requires_all_packages
@@ -2669,6 +2693,57 @@ impl RunnerRegistry {
         )?;
         notify_runner_locked(&inner, &client_id);
         Ok((request_id, rx))
+    }
+
+    /// Read-only planning plus an instance fence for the later mutating Job.
+    pub async fn enqueue_project_format_plan(
+        &self,
+        client_id: String,
+        payload: webcodex_core::project_format::ProjectFormatRequest,
+        access: Option<&crate::RunnerAccess>,
+    ) -> Result<(String, String, oneshot::Receiver<ShellRunResponse>), String> {
+        payload.validate().map_err(str::to_string)?;
+        let request_id = next_request_id();
+        let (tx, rx) = oneshot::channel();
+        let request = encode_runner_operation(
+            &request_id,
+            &client_id,
+            "tool_runtime".into(),
+            RunnerOperation::PlanProjectFormat(payload.clone()),
+        )?;
+        let mut inner = self.inner.lock().await;
+        self.prune_expired_shared_key_runners_locked(&mut inner, now_ts());
+        if !inner.has_receipt_store() {
+            return Err("format_execution_unavailable".into());
+        }
+        let runner = inner.runners.get(&client_id).ok_or("unknown Runner")?;
+        assert_runner_access(access, runner)?;
+        if !runner
+            .runner_features
+            .supports(RunnerFeature::ProjectFormat)
+        {
+            return Err(capability_upgrade_error(
+                &client_id,
+                RunnerFeature::ProjectFormat,
+            ));
+        }
+        if !runner.projects.iter().any(|project| {
+            project.id == payload.project_id && !project.disabled && project.allow_patch
+        }) {
+            return Err("format_project_unavailable".into());
+        }
+        let instance = runner.runner_instance_id.clone();
+        enqueue_pending_request_locked(
+            self.telemetry.as_ref(),
+            &mut inner,
+            &client_id,
+            request_id.clone(),
+            request,
+            Some(tx),
+            None,
+        )?;
+        notify_runner_locked(&inner, &client_id);
+        Ok((request_id, instance, rx))
     }
 
     /// Resolve a declarative project validation plan on the authorized Runner.

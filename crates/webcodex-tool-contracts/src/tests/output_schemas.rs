@@ -86,6 +86,45 @@ fn project_build_schema_accepts_same_job_queued_handoff() {
 }
 
 #[test]
+fn project_format_output_schema_admits_pending_job_handoff() {
+    let schema = output_schema_for_tool("project_format");
+    let states = schema["properties"]["output"]["properties"]["execution_state"]["enum"]
+        .as_array()
+        .expect("project_format lifecycle states");
+    assert!(states.contains(&json!("pending")));
+}
+
+#[test]
+fn project_format_schema_accepts_common_kernel_rejection_fields() {
+    let schema = output_schema_for_tool("project_format");
+    let denied = json!({
+        "success": false,
+        "output": {
+            "state_changed": false,
+            "execution_state": "not_started",
+            "failure_kind": "permission_denied",
+            "error_kind": "permission_denied",
+            "permission_reason": "session_guard",
+            "session_id": "wc_sess_example",
+        },
+        "error": "Project formatting was not admitted."
+    });
+    test_support::validate_schema_instance(&denied, &schema)
+        .expect("shared kernel denial metadata must fit the project_format output schema");
+}
+
+#[test]
+fn project_format_schema_rejects_unknown_success_payload_fields() {
+    let schema = output_schema_for_tool("project_format");
+    let unexpected = json!({
+        "success": true,
+        "output": {"state_changed": false, "unrecognized_metadata": "not part of the formatter contract"},
+        "error": null
+    });
+    assert!(test_support::validate_schema_instance(&unexpected, &schema).is_err());
+}
+
+#[test]
 fn suggested_tool_call_schema_recognizer_is_strict_and_structural() {
     let valid_generated = json!({
         "follow_up_kind": "mechanically_followable",
@@ -314,6 +353,22 @@ fn observation_schemas_do_not_repeat_static_continuation_semantics() {
         .iter()
         .find(|variant| variant["properties"].get("suggested_call").is_some())
         .expect("observe_jobs full batch output");
+    // Both the full batch and model-facing sparse batch have closed wait
+    // objects, so newly emitted wait context must be described by both.
+    let wait_variants = variants
+        .iter()
+        .filter(|variant| variant["properties"].get("wait").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(wait_variants.len(), 2);
+    for variant in wait_variants {
+        let wait_properties = &variant["properties"]["wait"]["properties"];
+        for field in ["update_kind"] {
+            assert!(
+                wait_properties.get(field).is_some(),
+                "observe_jobs wait schema must advertise {field} in every projection"
+            );
+        }
+    }
     let item_output = &full["properties"]["items"]["items"]["properties"]["output"]["anyOf"][0];
     assert!(
         item_output["properties"]
@@ -676,6 +731,46 @@ fn job_terminal_continuation_output_schemas_are_sparse_and_private_app_payload_i
     assert_eq!(automatic_message["maxLength"], 1024);
     let serialized = serde_json::to_string(&prepare).unwrap();
     assert!(!serialized.contains("binding_id"));
+}
+
+#[test]
+fn agent_task_coding_state_schemas_share_run_vocabulary_but_remain_nullable() {
+    let run = output_schema_for_tool("observe_coding_agent");
+    let run_fields = &run["properties"]["output"]["properties"];
+    for tool in [
+        "start_agent_task_coding_run",
+        "reconcile_agent_task_coding_run",
+    ] {
+        let schema = output_schema_for_tool(tool);
+        let fields = &schema["properties"]["output"]["properties"];
+        for (field, run_field) in [
+            ("run_state", "state"),
+            ("execution_state", "execution_state"),
+        ] {
+            let expected = json!({"anyOf": [run_fields[run_field], {"type": "null"}]});
+            assert_eq!(fields[field], expected, "{tool}.{field}");
+            crate::test_support::validate_schema_instance(&Value::Null, &fields[field]).unwrap();
+            for wire in run_fields[run_field]["enum"].as_array().unwrap() {
+                crate::test_support::validate_schema_instance(wire, &fields[field]).unwrap();
+            }
+            for invalid in [json!("unknown"), json!(0), json!({})] {
+                assert!(
+                    crate::test_support::validate_schema_instance(&invalid, &fields[field])
+                        .is_err(),
+                    "{tool}.{field} accepted {invalid}"
+                );
+            }
+        }
+        // Task binding has a non-null terminal object with nullable evidence;
+        // the direct CodingAgent API instead makes the whole object nullable.
+        let terminal = &fields["terminal"];
+        assert_eq!(terminal["type"], "object");
+        assert_eq!(terminal["additionalProperties"], false);
+        assert_eq!(
+            terminal["properties"]["completed_at"]["anyOf"],
+            json!([{"type": "integer"}, {"type": "null"}])
+        );
+    }
 }
 
 #[test]
@@ -1123,6 +1218,10 @@ fn observe_jobs_failure_item_schema_closes_recovery_metadata() {
         "error": null
     });
     validate(&result).unwrap();
+
+    let mut invalid_update_kind = result.clone();
+    invalid_update_kind["output"]["wait"]["update_kind"] = json!("not_an_update_kind");
+    assert!(validate(&invalid_update_kind).is_err());
 
     let mut duplicate_kind = result.clone();
     duplicate_kind["output"]["items"][0]["recovery_kind"] = json!("reobserve");
@@ -2996,7 +3095,7 @@ fn finish_coding_task_output_schema_describes_ledger_validation_summary() {
     assert_permission_summary_schema_fields(&output_props["permissions"]);
     assert_job_lifecycle_summary_schema_fields(&output_props["jobs"]);
     assert_review_evidence_schema_fields(&output_props["review_evidence"]);
-    let nested_show_changes = &output_props["changes"]["properties"]["show_changes"];
+    let nested_show_changes = &output_props["changes"]["properties"]["read_workspace_changes"];
     let nested_recovery =
         &nested_show_changes["properties"]["diff_review_handoff"]["properties"]["next_call"];
     assert_eq!(

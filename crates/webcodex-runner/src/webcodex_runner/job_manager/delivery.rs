@@ -62,6 +62,8 @@ pub(super) struct PendingJobUpdateDelivery {
     pub(super) command_execution_state: Option<ShellCommandExecutionState>,
     pub(super) validation_progress: Option<ShellJobValidationProgress>,
     pub(super) test_count_evidence: Option<ShellJobTestCountEvidence>,
+    pub(super) format_mutation: Option<webcodex_core::project_format::ProjectFormatMutationReport>,
+    pub(super) build_artifacts: Option<Vec<webcodex_core::project_build::ProjectBuildArtifact>>,
     pub(super) activity: Option<ShellJobActivity>,
     pub(super) finished: bool,
     /// Sequence-only liveness marker. Delivery must not project the current
@@ -82,6 +84,8 @@ impl PendingJobUpdateDelivery {
             command_execution_state: update.command_execution_state,
             validation_progress: update.validation_progress.clone(),
             test_count_evidence: update.test_count_evidence.clone(),
+            format_mutation: update.format_mutation,
+            build_artifacts: update.build_artifacts.clone(),
             activity: update.activity,
             finished: update.finished,
             liveness_only: false,
@@ -98,6 +102,8 @@ impl PendingJobUpdateDelivery {
             command_execution_state: None,
             validation_progress: job.snapshot.validation_progress.clone(),
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
             liveness_only: true,
@@ -237,6 +243,8 @@ pub(super) fn job_update_from_delivery(
             command_execution_state: None,
             validation_progress: pending.validation_progress.clone(),
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         };
@@ -252,6 +260,8 @@ pub(super) fn job_update_from_delivery(
     update.command_execution_state = pending.command_execution_state;
     update.validation_progress = pending.validation_progress.clone();
     update.test_count_evidence = pending.test_count_evidence.clone();
+    update.format_mutation = pending.format_mutation;
+    update.build_artifacts = pending.build_artifacts.clone();
     update.activity = pending.activity;
     update.finished = pending.finished;
     update
@@ -571,6 +581,8 @@ impl JobManager {
                         command_execution_state: snapshot.command_execution_state,
                         validation_progress: snapshot.validation_progress.clone(),
                         test_count_evidence: snapshot.test_count_evidence.clone(),
+                        format_mutation: snapshot.format_mutation,
+                        build_artifacts: snapshot.build_artifacts.clone(),
                         activity: snapshot.activity,
                         finished: runner_job_is_terminal(&snapshot.status),
                         liveness_only: false,

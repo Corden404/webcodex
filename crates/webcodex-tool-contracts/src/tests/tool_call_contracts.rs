@@ -1474,26 +1474,9 @@ fn from_tool_name_unknown_tool_lists_available_tools_and_hint() {
 }
 
 #[test]
-fn known_tool_names_matches_spec_count() {
-    let specs = registered_tool_specs();
-    for spec in &specs {
-        assert!(
-            is_known_tool_name(&spec.name),
-            "{} spec must be known to ToolCall",
-            spec.name
-        );
-        assert!(
-            !is_model_hidden_tool_name(&spec.name),
-            "{} must not be model-hidden when exposed in registered tool specs",
-            spec.name
-        );
-    }
-    assert_eq!(
-        specs.len(),
-        known_tool_names().count() - model_hidden_tool_names().count(),
-        "registered tool specs should cover every model-visible known runtime tool; \
-         hidden tools are parser-known but carry no ToolSpec"
-    );
+fn known_tool_dispatch_preserves_recognition_and_hidden_guidance() {
+    // Set equality and visible/hidden partitioning are checked exhaustively by
+    // canonical_registration_sets_are_exact_including_hidden_variants.
     // Every known name must be recognized (i.e. must NOT yield the
     // "unknown tool" error). Unit tools parse with null args; non-unit
     // tools fail with a missing-field error, which is still a recognition
@@ -2265,7 +2248,7 @@ fn retired_start_coding_task_is_a_canonical_unknown_tool() {
 
 #[test]
 fn present_agent_continuation_parses_ref_or_explicit_tuple_without_session() {
-    assert!(!registered_tool_specs()
+    assert!(registered_tool_specs()
         .iter()
         .any(|spec| spec.name == "present_agent_continuation"));
     let schema = input_schema_for_tool("present_agent_continuation");

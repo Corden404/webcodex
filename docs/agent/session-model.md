@@ -192,6 +192,12 @@ evidence. `include_workspace`, `include_validation`, `include_checkpoints`, and
 `limit` continue to select bounded observations; omitted/unavailable evidence is
 reported truthfully in the brief. There is no implicit handoff or ACK baseline.
 
+Task context also carries source-referenced relevant files, failure locations,
+recorded decisions/progress, advisory next steps, and an exact continuation entry.
+The [bounded task-context contract](../implementation/task-context-recovery.md)
+defines its 4 KiB envelope, task-boundary identity and conservative repeated-failure
+diagnostic. These recovery pointers do not become execution or completion proof.
+
 Handoff assembly captures an internal Session snapshot fence before gathering
 workspace/Job/Session evidence and compares it again afterwards. The Session fence
 has exactly two independent mutation dimensions: `events_observed` for ledger event
@@ -201,7 +207,11 @@ bounded external-report snapshot and compares that retained projection again aft
 the other recovery reads. A Session fence change reports
 `session_changed_during_snapshot`; an accepted external-report change reports
 `external_observations_changed_during_snapshot`. Either makes `basis.complete=false`
-so the caller can explicitly re-observe before dependent work. This detects evidence
+and returns an explicit exact-handoff reread action before dependent work. An
+Active Session's progress is `insufficient_evidence` until a fresh observation;
+Job attention and the captured task/evidence sections remain observations, not
+permission to restart execution. The caller re-reads latest instructions,
+decisions, progress and validation. This detects evidence
 races without claiming atomicity across independent Runner workspace or Job reads,
 and without promoting external reports into Session revision or native execution
 truth. No handoff generation or replacement model-context revision is introduced or

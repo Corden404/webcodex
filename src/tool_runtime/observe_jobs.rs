@@ -131,6 +131,28 @@ fn observed_has_meaningful_change(observed: &[ObservedJob]) -> bool {
         .any(|item| item.result.output["meaningful_changed"].as_bool() == Some(true))
 }
 
+/// Only classify updated waits: all other lanes already have an exact
+/// canonical wait.outcome. Inspect the full batch before output truncation so
+/// omitted triggering Jobs cannot rewrite the classification.
+fn updated_wake_kind(items: &[Value], wake_reason: WakeReason) -> Option<&'static str> {
+    if !matches!(wake_reason, WakeReason::Updated) {
+        return None;
+    }
+    if items.iter().any(|item| {
+        item["success"].as_bool() == Some(true)
+            && item["output"]["meaningful_changed"].as_bool() == Some(true)
+    }) {
+        Some("meaningful_change")
+    } else if items.iter().any(|item| {
+        item["success"].as_bool() == Some(true)
+            && item["output"]["heartbeat_changed"].as_bool() == Some(true)
+    }) {
+        Some("heartbeat")
+    } else {
+        Some("change")
+    }
+}
+
 fn bounded_error(error: Option<&str>) -> String {
     let error = error.unwrap_or("Job observation failed");
     let mut chars = error.chars();
@@ -468,14 +490,106 @@ fn add_actionable_batch_continuation(
     root.remove("next_index");
 }
 
+// A success ToolResult serializes as {"success":true,"output":<JSON>}.
+// Measure its canonical envelope using the actual ToolResult serializer and
+// replace the literal null payload with the borrowed output's exact JSON size.
+// Unlike ToolResult::ok(output.clone()), this never copies Job stdout/stderr.
 fn serialized_batch_fits(output: &Value) -> bool {
-    serialized_json_len(&ToolResult::ok(output.clone()))
-        .map(|bytes| {
-            bytes
-                <= MAX_OBSERVE_JOBS_AGGREGATE_RESULT_BYTES
-                    .saturating_sub(MODEL_RESULT_ENVELOPE_RESERVE_BYTES)
+    let size = (|| {
+        let envelope_bytes = serialized_json_len(&ToolResult::ok(Value::Null)).ok()?;
+        let output_bytes = serialized_json_len(output).ok()?;
+        envelope_bytes.checked_sub(4)?.checked_add(output_bytes)
+    })();
+    size.is_some_and(|bytes| {
+        bytes
+            <= MAX_OBSERVE_JOBS_AGGREGATE_RESULT_BYTES
+                .saturating_sub(MODEL_RESULT_ENVELOPE_RESERVE_BYTES)
+    })
+}
+
+// Candidate packing uses a fixed JSON envelope and comma-delimited items
+// array. Measure each item exactly once as it is considered, then measure only
+// this tiny envelope with an empty items array to avoid re-serializing already
+// accepted Job stdout/stderr for every candidate. Unknown envelope metadata
+// remains included; invalid or overflowing input fails closed.
+fn serialized_batch_fits_with_item_sizes(
+    output: &Value,
+    serialized_item_bytes: Option<usize>,
+) -> bool {
+    let Some(serialized_item_bytes) = serialized_item_bytes else {
+        // Preserve the generic canonical behavior for malformed/unsupported
+        // result shapes; accepted Job batches always supply cached sizes.
+        return serialized_batch_fits(output);
+    };
+    let Some(root) = output.as_object() else {
+        return serialized_batch_fits(output);
+    };
+    let Some(items) = root.get("items").and_then(Value::as_array) else {
+        return serialized_batch_fits(output);
+    };
+    let mut empty_batch = serde_json::Map::new();
+    for (key, value) in root {
+        empty_batch.insert(
+            key.clone(),
+            if key == "items" {
+                Value::Array(Vec::new())
+            } else {
+                value.clone()
+            },
+        );
+    }
+    let size = (|| {
+        let base_envelope = serialized_json_len(&ToolResult::ok(Value::Null))
+            .ok()?
+            .checked_sub(4)?;
+        let batch_json = serialized_json_len(&Value::Object(empty_batch)).ok()?;
+        let item_array_bytes = if items.is_empty() {
+            2
+        } else {
+            serialized_item_bytes
+                .checked_add(items.len().checked_sub(1)?)?
+                .checked_add(2)?
+        };
+        // The literal empty array contributes two bytes to batch_json.
+        base_envelope
+            .checked_add(batch_json.checked_sub(2)?)?
+            .checked_add(item_array_bytes)
+    })();
+    size.is_some_and(|bytes| {
+        bytes
+            <= MAX_OBSERVE_JOBS_AGGREGATE_RESULT_BYTES
+                .saturating_sub(MODEL_RESULT_ENVELOPE_RESERVE_BYTES)
+    })
+}
+
+fn refresh_batch_counts(output: &mut Value) {
+    let items = output["items"]
+        .as_array()
+        .expect("observe_jobs batch_output always contains an items array");
+    let returned_count = items.len();
+    let succeeded_count = items
+        .iter()
+        .filter(|item| item["success"].as_bool() == Some(true))
+        .count();
+    let changed_count = items
+        .iter()
+        .filter(|item| {
+            item["success"].as_bool() == Some(true)
+                && item["output"]["changed"].as_bool() == Some(true)
         })
-        .unwrap_or(false)
+        .count();
+    let terminal_count = items
+        .iter()
+        .filter(|item| {
+            item["success"].as_bool() == Some(true)
+                && item["output"]["terminal"].as_bool() == Some(true)
+        })
+        .count();
+    output["returned_count"] = json!(returned_count);
+    output["succeeded_count"] = json!(succeeded_count);
+    output["failed_count"] = json!(returned_count - succeeded_count);
+    output["changed_count"] = json!(changed_count);
+    output["terminal_count"] = json!(terminal_count);
 }
 
 fn apply_output_budget(
@@ -484,26 +598,44 @@ fn apply_output_budget(
     wake_reason: WakeReason,
     waited_ms: u64,
 ) -> Result<Value, String> {
-    let mut returned = Vec::with_capacity(completed.len());
+    let mut output = batch_output(
+        requested_count,
+        Vec::new(),
+        wake_reason,
+        waited_ms,
+        false,
+        None,
+    );
     let mut next_index = None;
+    let mut accepted_item_bytes = Some(0usize);
 
     for item in completed {
-        let index = item["index"].as_u64().unwrap_or(returned.len() as u64) as usize;
-        let mut candidate_items = returned.clone();
-        candidate_items.push(item.clone());
-        let candidate = batch_output(
-            requested_count,
-            candidate_items,
-            wake_reason,
-            waited_ms,
-            false,
-            None,
-        );
-        if serialized_batch_fits(&candidate) {
-            returned.push(item);
+        let item_bytes = serialized_json_len(&item).ok();
+        let candidate_item_bytes = accepted_item_bytes
+            .and_then(|total| item_bytes.and_then(|size| total.checked_add(size)));
+        let index = item["index"]
+            .as_u64()
+            .unwrap_or(output["items"].as_array().expect("canonical batch").len() as u64)
+            as usize;
+        output["items"]
+            .as_array_mut()
+            .expect("canonical batch")
+            .push(item);
+        refresh_batch_counts(&mut output);
+        if serialized_batch_fits_with_item_sizes(&output, candidate_item_bytes) {
+            accepted_item_bytes = candidate_item_bytes;
             continue;
         }
+        let item = output["items"]
+            .as_array_mut()
+            .expect("canonical batch")
+            .pop()
+            .expect("just appended a candidate");
+        refresh_batch_counts(&mut output);
 
+        // Test whether this bounded individual observation could fit alone.
+        // This branch is taken only when the cumulative prefix does not fit;
+        // the ordinary append/probe path does not copy a single Job log.
         let single = batch_output(
             requested_count,
             vec![item.clone()],
@@ -519,18 +651,25 @@ fn apply_output_budget(
 
         let budget_failure =
             output_budget_failure_item(index, item["job_id"].as_str().unwrap_or_default().into());
-        let mut candidate_items = returned.clone();
-        candidate_items.push(budget_failure.clone());
-        let candidate = batch_output(
-            requested_count,
-            candidate_items,
-            wake_reason,
-            waited_ms,
-            false,
-            None,
-        );
-        if !serialized_batch_fits(&candidate) {
-            if returned.is_empty() {
+        let budget_failure_bytes = serialized_json_len(&budget_failure).ok();
+        let failure_candidate_bytes = accepted_item_bytes
+            .and_then(|total| budget_failure_bytes.and_then(|size| total.checked_add(size)));
+        output["items"]
+            .as_array_mut()
+            .expect("canonical batch")
+            .push(budget_failure);
+        refresh_batch_counts(&mut output);
+        if !serialized_batch_fits_with_item_sizes(&output, failure_candidate_bytes) {
+            output["items"]
+                .as_array_mut()
+                .expect("canonical batch")
+                .pop();
+            refresh_batch_counts(&mut output);
+            if output["items"]
+                .as_array()
+                .expect("canonical batch")
+                .is_empty()
+            {
                 return Err(
                     "observe_jobs could not encode a bounded output-budget failure item".into(),
                 );
@@ -538,17 +677,32 @@ fn apply_output_budget(
             next_index = Some(index);
             break;
         }
-        returned.push(budget_failure);
+        accepted_item_bytes = failure_candidate_bytes;
     }
 
-    Ok(batch_output(
-        requested_count,
-        returned,
-        wake_reason,
-        waited_ms,
-        next_index.is_some(),
-        next_index,
-    ))
+    output["output_truncated"] = json!(next_index.is_some());
+    if let Some(index) = next_index {
+        output["next_index"] = json!(index);
+    }
+    Ok(output)
+}
+
+/// Annotate only an updated wait with what woke it. Unlike the original
+/// requested_secs/wake_on echoes, this tells a client whether a hidden Job
+/// produced a meaningful update versus a heartbeat while preserving the
+/// canonical bounded output and continuation.
+fn apply_output_budget_with_update_kind(
+    requested_count: usize,
+    completed: Vec<Value>,
+    wake_reason: WakeReason,
+    waited_ms: u64,
+) -> Result<Value, String> {
+    let detail = updated_wake_kind(&completed, wake_reason);
+    let mut output = apply_output_budget(requested_count, completed, wake_reason, waited_ms)?;
+    if let (Some(kind), Some(wait)) = (detail, output["wait"].as_object_mut()) {
+        wait.insert("update_kind".to_string(), json!(kind));
+    }
+    Ok(output)
 }
 
 fn copy_non_null(
@@ -637,11 +791,17 @@ fn sparse_success_item(item: &Value) -> Option<Value> {
         "activity",
         "detected_summary",
         "validation",
+        "build_artifacts",
         "manage_ssh_resource",
         "logs_omitted",
         "suggested_call",
     ] {
         copy_non_null(observation, &mut sparse, key);
+    }
+
+    if observation.contains_key("state_changed") || observation.contains_key("failure_kind") {
+        copy_present(observation, &mut sparse, "state_changed");
+        copy_present(observation, &mut sparse, "failure_kind");
     }
 
     if log_delta_status != "unchanged" {
@@ -1302,7 +1462,64 @@ impl ToolRuntime {
             }
         }
 
-        match apply_output_budget(requested_count, completed, wake_reason, waited_ms) {
+        // Instrument the full canonical batch before the output budget truncates
+        // model-facing results. This is low-cardinality telemetry, not Job output.
+        let successful = completed
+            .iter()
+            .filter(|item| item["success"].as_bool() == Some(true))
+            .collect::<Vec<_>>();
+        let wake_on_label = match wake_on {
+            ObserveJobsWakeOn::Change => "change",
+            ObserveJobsWakeOn::MeaningfulChange => "meaningful_change",
+            ObserveJobsWakeOn::Terminal => "terminal",
+            ObserveJobsWakeOn::AllTerminal => "all_terminal",
+        };
+        super::runtime_metrics::observe_job_observation(
+            self.metrics.as_ref(),
+            super::runtime_metrics::JobObservationMetricObservation {
+                elapsed_ms: waited_ms,
+                effective_wait_secs: wait_secs,
+                wake_on: wake_on_label,
+                wake_reason: wake_reason.as_str(),
+                item_count: completed.len() as u64,
+                changed_count: successful
+                    .iter()
+                    .filter(|item| item["output"]["changed"].as_bool() == Some(true))
+                    .count() as u64,
+                meaningful_changed_count: successful
+                    .iter()
+                    .filter(|item| item["output"]["meaningful_changed"].as_bool() == Some(true))
+                    .count() as u64,
+                heartbeat_changed_count: successful
+                    .iter()
+                    .filter(|item| item["output"]["heartbeat_changed"].as_bool() == Some(true))
+                    .count() as u64,
+                terminal_count: successful
+                    .iter()
+                    .filter(|item| item["output"]["terminal"].as_bool() == Some(true))
+                    .count() as u64,
+                returned_bytes: successful
+                    .iter()
+                    .map(|item| {
+                        item["output"]["stdout_returned_bytes"]
+                            .as_u64()
+                            .unwrap_or(0)
+                            .saturating_add(
+                                item["output"]["stderr_returned_bytes"]
+                                    .as_u64()
+                                    .unwrap_or(0),
+                            )
+                    })
+                    .sum(),
+            },
+        );
+
+        match apply_output_budget_with_update_kind(
+            requested_count,
+            completed,
+            wake_reason,
+            waited_ms,
+        ) {
             Ok(mut output) => {
                 add_actionable_batch_continuation(&mut output, &original_items, tail_lines);
                 ToolResult::ok(output)
@@ -1348,6 +1565,10 @@ pub(super) fn sparsify_job_readiness_model_result(result: &mut ToolResult) {
     output.remove("mode");
     output.remove("waited_ms");
 }
+
+#[cfg(test)]
+#[path = "observe_jobs_budget_tests.rs"]
+mod budget_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1623,6 +1844,96 @@ mod tests {
             serde_json::to_vec(&ToolResult::ok(output)).unwrap().len()
                 <= MAX_OBSERVE_JOBS_AGGREGATE_RESULT_BYTES
         );
+    }
+
+    #[test]
+    fn updated_wait_classifies_meaningful_change_heartbeat_and_plain_change() {
+        let make = |meaningful: bool, heartbeat: bool| {
+            vec![json!({
+                "index": 0,
+                "job_id": "job-0",
+                "success": true,
+                "output": {
+                    "changed": true,
+                    "meaningful_changed": meaningful,
+                    "heartbeat_changed": heartbeat,
+                    "terminal": false,
+                },
+                "error_kind": null,
+                "error": null,
+            })]
+        };
+        for (meaningful, heartbeat, expected) in [
+            (true, true, "meaningful_change"),
+            (false, true, "heartbeat"),
+            (false, false, "change"),
+        ] {
+            let output = apply_output_budget_with_update_kind(
+                1,
+                make(meaningful, heartbeat),
+                WakeReason::Updated,
+                750,
+            )
+            .unwrap();
+            assert_eq!(output["wait"]["outcome"], "updated");
+            assert_eq!(output["wait"]["update_kind"], expected);
+            assert!(output["wait"].get("wake_on").is_none());
+            assert!(output["wait"].get("requested_secs").is_none());
+            assert_eq!(output["wait"]["waited_ms"], 750);
+        }
+    }
+
+    #[test]
+    fn updated_kind_accounts_for_triggering_job_omitted_by_output_budget() {
+        let large = |index| {
+            json!({
+                "index": index,
+                "job_id": format!("job-{index}"),
+                "success": true,
+                "output": {"changed": true, "terminal": false, "stdout_tail": "x".repeat(300_000)},
+                "error_kind": null,
+                "error": null,
+            })
+        };
+        let triggering = json!({
+            "index": 2,
+            "job_id": "job-2",
+            "success": true,
+            "output": {"changed": true, "meaningful_changed": true, "terminal": false},
+            "error_kind": null,
+            "error": null,
+        });
+        let output = apply_output_budget_with_update_kind(
+            3,
+            vec![large(0), large(1), triggering],
+            WakeReason::Updated,
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(output["output_truncated"], true);
+        assert_eq!(output["returned_count"], 1);
+        assert_eq!(output["next_index"], 1);
+        assert_eq!(output["wait"]["update_kind"], "meaningful_change");
+        assert_eq!(output["wait"]["outcome"], "updated");
+        assert!(
+            serde_json::to_vec(&ToolResult::ok(output)).unwrap().len()
+                <= MAX_OBSERVE_JOBS_AGGREGATE_RESULT_BYTES
+        );
+    }
+
+    #[test]
+    fn non_updated_wait_lanes_do_not_emit_redundant_update_kind() {
+        for reason in [
+            WakeReason::Immediate,
+            WakeReason::Timeout,
+            WakeReason::Terminal,
+            WakeReason::ItemError,
+        ] {
+            let output = apply_output_budget_with_update_kind(0, vec![], reason, 17).unwrap();
+            assert!(output["wait"].get("update_kind").is_none());
+            assert!(output["wait"].get("wake_on").is_none());
+            assert!(output["wait"].get("requested_secs").is_none());
+        }
     }
 
     #[test]

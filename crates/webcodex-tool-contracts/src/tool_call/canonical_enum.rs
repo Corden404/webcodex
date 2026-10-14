@@ -1514,8 +1514,28 @@ pub enum ToolCall {
         sync_wait_secs: Option<u64>,
     },
 
+    /// Format an explicit bounded set of source files in one Runner Project.
+    ProjectFormat {
+        /// Exact registered Runner Project.
+        project: String,
+        #[serde(default)]
+        session_id: Option<String>,
+        /// Optional Project-relative recipe selection directory.
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        adapter: Option<webcodex_core::project_format::ProjectFormatAdapter>,
+        /// Ordered Project-relative files, all under one recipe root. No globbing.
+        #[schemars(length(min = 1, max = 8))]
+        files: Vec<String>,
+        /// Total Job budget, 1..120 seconds. Pending continues the original Job.
+        #[serde(default)]
+        #[schemars(range(min = 1, max = 120))]
+        timeout_secs: Option<u64>,
+    },
+
     /// Run one portable project build. The Runner resolves the nearest supported
-    /// Rust/Go recipe, plans canonical argv, and admits one typed build Job.
+    /// Rust/Go/Python recipe, plans canonical argv, and admits one typed build Job.
     ProjectBuild {
         /// Exact registered Runner Project.
         project: String,
@@ -1524,7 +1544,7 @@ pub enum ToolCall {
         /// Project-relative directory; Runner resolves the nearest recipe root.
         #[serde(default)]
         cwd: Option<String>,
-        /// Omission means auto. Rust and Go are supported; Node/Python return unavailable.
+        /// Omission means auto. Supports Rust, Go, Python packaging and manifest-declared Node build scripts.
         #[serde(default)]
         adapter: Option<webcodex_core::project_build::ProjectBuildAdapter>,
         /// Optional portable scope: bounded explicit packages or all_packages=true, never both.
@@ -4198,7 +4218,7 @@ pub enum ToolCall {
         /// Optional exact model-visible runtime tool name for one-tool contract discovery.
         #[serde(default)]
         tool_name: Option<String>,
-        /// Literal tool-name/category/description keywords.
+        /// Natural-language task or exact tool name; ranks admitted tools only.
         #[serde(default)]
         #[schemars(length(max = 200))]
         query: Option<String>,

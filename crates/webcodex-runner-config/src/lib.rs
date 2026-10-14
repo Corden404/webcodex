@@ -289,6 +289,10 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             structured_go_test_json: false,
             project_validation_v1: false,
             project_build_v1: false,
+            project_build_node_v1: false,
+            project_validation_node_json_v1: false,
+            project_build_python_v1: false,
+            project_format_v1: false,
             project_dependency_policy_v1: false,
             // Go project single-module semantics are implemented and advertised
             // by the running binary, never inferred from generated static config.
@@ -392,6 +396,9 @@ pub fn generated_runner_config_toml(opts: &RunnerInitOptions) -> Result<String, 
             // Native Tool Plugins are likewise advertised only by a Runner
             // binary that implements the typed local Plugin lifecycle.
             native_tool_plugins: false,
+            // Only an implementing binary may advertise the additive MCP
+            // resource-link result wire; static generated config stays false.
+            mcp_gateway_resource_links: false,
             // Managed SSH resource lifecycle is likewise a running-binary
             // capability and is never implied by generated static SSH config.
             managed_ssh_resources: false,

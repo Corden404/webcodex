@@ -3,6 +3,7 @@
 //! Both protocol adapters call `ToolRuntime::dispatch()`.
 //! No HTTP framework types here — pure Rust input/output.
 
+mod acceptance_evidence;
 pub mod activity;
 pub(crate) mod admin_dashboard;
 mod agent_task;
@@ -83,6 +84,7 @@ pub(crate) mod permissions;
 mod presentation;
 mod process;
 mod project_build;
+mod project_format;
 mod project_resolution;
 mod projection_text;
 pub(crate) mod window_collaboration;
@@ -203,14 +205,11 @@ pub(crate) use model_references::SessionSelectorError;
 #[cfg(test)]
 pub(crate) use project_resolution::ProjectResolverErrorKind;
 pub(crate) use project_resolution::{runner_project_runtime_id, ProjectResolverError};
-pub(crate) use registry::{
-    agent_continuation_app_tool_specs, artifact_app_tool_specs, goal_plan_app_tool_specs,
-    job_terminal_continuation_app_tool_specs, registered_tool_specs,
-    stateless_operator_extension_tool_specs, work_result_app_tool_specs,
-};
 #[cfg(test)]
 pub(crate) use registry::{
-    memory_management_tool_specs, memory_runtime_tool_specs, skill_management_tool_specs,
+    goal_plan_app_tool_specs, memory_management_tool_specs, memory_runtime_tool_specs,
+    registered_tool_specs, skill_management_tool_specs, stateless_operator_extension_tool_specs,
+    work_result_app_tool_specs,
 };
 pub(crate) use session_context::{add_session_hint, unknown_session_result};
 pub(crate) use session_shell::SessionShellRegistry;
@@ -221,5 +220,6 @@ pub(crate) use surface::registered_tool_categories;
 mod tests;
 
 mod edit_outcome;
+pub(crate) mod execution_control;
 mod execution_outcome;
 mod external_observations;

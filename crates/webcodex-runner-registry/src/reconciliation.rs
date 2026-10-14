@@ -275,6 +275,33 @@ fn validate_snapshot(
             return Err("job inventory command_execution_state is inconsistent".to_string());
         }
     }
+    webcodex_core::project_build::validate_build_artifact_report(
+        snapshot
+            .context
+            .structured_execution
+            .as_ref()
+            .map(|m| m.execution_source.as_str())
+            .unwrap_or("shell"),
+        &snapshot.status,
+        snapshot.exit_code,
+        snapshot.command_execution_state,
+        snapshot.build_artifacts.as_deref(),
+    )
+    .map_err(str::to_string)?;
+    webcodex_core::project_format::validate_mutation_report(
+        snapshot
+            .context
+            .structured_execution
+            .as_ref()
+            .map(|m| m.execution_source.as_str())
+            .unwrap_or("shell"),
+        &snapshot.status,
+        snapshot.exit_code,
+        snapshot.command_execution_state,
+        snapshot.format_mutation,
+        snapshot.error.as_deref(),
+    )
+    .map_err(str::to_string)?;
     validate_context(client_id, projects, require_project_membership, snapshot)?;
     validate_stream_snapshot(&snapshot.stdout, "stdout")?;
     validate_stream_snapshot(&snapshot.stderr, "stderr")?;
@@ -284,8 +311,10 @@ fn validate_snapshot(
             .validation
             .as_ref()
             .is_some_and(|metadata| {
-                metadata.adapter == "cargo_test"
-                    && metadata.kind == "test"
+                matches!(
+                    metadata.adapter.as_str(),
+                    "cargo_test" | "node:vitest:test" | "node:jest:test"
+                ) && metadata.kind == "test"
                     && metadata.no_run != Some(true)
             });
         if !cargo_test || !lifecycle.is_terminal() || !evidence.is_valid() {
@@ -741,6 +770,8 @@ pub(crate) fn record_from_snapshot(
         validation: context.validation.clone(),
         validation_progress: snapshot.validation_progress.clone(),
         test_count_evidence: snapshot.test_count_evidence.clone(),
+        format_mutation: snapshot.format_mutation,
+        build_artifacts: snapshot.build_artifacts.clone(),
         activity: snapshot.activity,
         visibility: super::state::ShellJobVisibility::Public,
         last_update_seq: snapshot.update_seq,
@@ -779,6 +810,8 @@ fn apply_snapshot(
     job.structured_execution = snapshot.context.structured_execution.clone();
     job.validation_progress = snapshot.validation_progress.clone();
     job.test_count_evidence = snapshot.test_count_evidence.clone();
+    job.format_mutation = snapshot.format_mutation;
+    job.build_artifacts = snapshot.build_artifacts.clone();
     job.activity = snapshot.activity;
     job.validation = snapshot.context.validation.clone();
     replace_log_from_snapshot(&mut job.stdout, &snapshot.stdout);
@@ -1098,6 +1131,8 @@ pub(super) fn reconcile_inventory_locked(
                 ) {
                     existing.validation = snapshot.context.validation.clone();
                     existing.test_count_evidence = snapshot.test_count_evidence.clone();
+                    existing.format_mutation = snapshot.format_mutation;
+                    existing.build_artifacts = snapshot.build_artifacts.clone();
                     notify_job_update(existing);
                     summary.updated += 1;
                 }

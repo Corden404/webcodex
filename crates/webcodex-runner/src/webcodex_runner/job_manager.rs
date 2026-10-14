@@ -299,6 +299,8 @@ fn test_job_snapshot(job_id: &str) -> ShellJobSnapshot {
         stderr: ShellJobStreamSnapshot::default(),
         validation_progress: None,
         test_count_evidence: None,
+        format_mutation: None,
+        build_artifacts: None,
         activity: None,
     }
 }
@@ -335,6 +337,8 @@ struct RunnerJobDelta {
     stream_limit_bytes: Option<usize>,
     validation_progress: Option<ShellJobValidationProgress>,
     test_count_evidence: Option<ShellJobTestCountEvidence>,
+    format_mutation: Option<webcodex_core::project_format::ProjectFormatMutationReport>,
+    build_artifacts: Option<Vec<webcodex_core::project_build::ProjectBuildArtifact>>,
     activity: Option<ShellJobActivity>,
     finished: bool,
 }
@@ -366,6 +370,7 @@ mod input;
 mod interactive;
 mod lifecycle;
 mod local_shell;
+mod node_report;
 mod process;
 #[cfg(test)]
 use retained::{append_runner_stream, trim_runner_stream_to};

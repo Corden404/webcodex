@@ -15,7 +15,11 @@ pub const MCP_GATEWAY_MAX_PROVIDER_ID_BYTES: usize = 64;
 pub const MCP_GATEWAY_MAX_PROVIDER_NAME_BYTES: usize = 128;
 pub const MCP_GATEWAY_MAX_TOOL_COUNT: usize = 128;
 pub const MCP_GATEWAY_MAX_TOOL_NAME_BYTES: usize = 128;
-pub const MCP_GATEWAY_MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
+/// Composite third-party tools keep operational documentation in `description`.
+/// `DEFAULT` is a Runner operator setting; `MAX` is the protocol hard cap on
+/// both Runner and Server. The complete tools/list message remains bounded.
+pub const MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES: usize = 64 * 1024;
+pub const MCP_GATEWAY_MAX_DESCRIPTION_BYTES: usize = 256 * 1024;
 pub const MCP_GATEWAY_MAX_SCHEMA_BYTES: usize = 64 * 1024;
 pub const MCP_GATEWAY_MAX_ARGUMENT_BYTES: usize = 64 * 1024;
 pub const MCP_GATEWAY_MAX_STRUCTURED_CONTENT_BYTES: usize = 512 * 1024;
@@ -40,6 +44,10 @@ pub const MCP_GATEWAY_MAX_JSON_DEPTH: usize = 16;
 pub const MCP_GATEWAY_MAX_JSON_NODES: usize = 4_096;
 pub const MCP_GATEWAY_MAX_JSON_STRING_BYTES: usize = 512 * 1024;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum McpGatewayRequest {
@@ -57,6 +65,9 @@ pub enum McpGatewayRequest {
         name: String,
         arguments: Value,
         expected_schema: McpGatewaySchemaObservation,
+        /// An older Server never opts in to resource_link on this closed result wire.
+        #[serde(default, skip_serializing_if = "is_false")]
+        allow_resource_links: bool,
     },
 }
 
@@ -169,6 +180,25 @@ pub enum McpGatewayContent {
         data: String,
         #[serde(rename = "mimeType")]
         mime_type: String,
+    },
+    #[serde(rename = "resource_link")]
+    ResourceLink {
+        uri: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, rename = "mimeType", skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annotations: Option<serde_json::Map<String, Value>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icons: Option<Vec<serde_json::Map<String, Value>>>,
+        #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<serde_json::Map<String, Value>>,
     },
 }
 
@@ -320,6 +350,7 @@ pub fn validate_request(request: &McpGatewayRequest) -> Result<(), String> {
             name,
             arguments,
             expected_schema,
+            ..
         } => {
             validate_provider_id(provider_id)?;
             validate_provider_instance_id(provider_instance_id)?;
@@ -400,6 +431,17 @@ pub fn validate_providers(providers: &[McpGatewayProvider]) -> Result<(), String
 }
 
 pub fn validate_tools(tools: &[McpGatewayTool]) -> Result<(), String> {
+    validate_tools_with_description_limit(tools, MCP_GATEWAY_MAX_DESCRIPTION_BYTES)
+}
+
+/// Runner-owned local policy may narrow, but never raise, this protocol limit.
+pub fn validate_tools_with_description_limit(
+    tools: &[McpGatewayTool],
+    max_description_bytes: usize,
+) -> Result<(), String> {
+    if !(1..=MCP_GATEWAY_MAX_DESCRIPTION_BYTES).contains(&max_description_bytes) {
+        return Err("invalid MCP description bound".to_string());
+    }
     if tools.len() > MCP_GATEWAY_MAX_TOOL_COUNT {
         return Err(format!(
             "tool count exceeds maximum {}",
@@ -419,10 +461,10 @@ pub fn validate_tools(tools: &[McpGatewayTool]) -> Result<(), String> {
             validate_text_controls(title, "tool title")?;
         }
         if let Some(description) = tool.description.as_deref() {
-            if description.len() > MCP_GATEWAY_MAX_DESCRIPTION_BYTES {
+            if description.len() > max_description_bytes {
                 return Err(format!(
-                    "tool description exceeds maximum {} bytes",
-                    MCP_GATEWAY_MAX_DESCRIPTION_BYTES
+                    "tool '{}' description exceeds maximum {} bytes",
+                    tool.name, max_description_bytes
                 ));
             }
             validate_text_controls(description, "tool description")?;
@@ -544,6 +586,36 @@ pub fn validate_tool_result(result: &McpGatewayToolResult) -> Result<(), String>
                         MCP_GATEWAY_MAX_IMAGE_BYTES
                     ));
                 }
+            }
+            McpGatewayContent::ResourceLink {
+                uri,
+                name,
+                title,
+                description,
+                mime_type,
+                ..
+            } => {
+                for text in [
+                    Some(uri),
+                    Some(name),
+                    title.as_ref(),
+                    description.as_ref(),
+                    mime_type.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    validate_text_controls(text, "tool result resource link")?;
+                }
+                // Links and their metadata share the existing non-image budget.
+                // Forward the URI as data; the gateway does not dereference it.
+                let value = serde_json::to_value(content)
+                    .map_err(|_| "tool result resource link could not be serialized".to_string())?;
+                validate_json_value(
+                    &value,
+                    MCP_GATEWAY_MAX_RESULT_BYTES,
+                    "tool result resource link",
+                )?;
             }
         }
     }
@@ -859,6 +931,45 @@ mod tests {
     }
 
     #[test]
+    fn resource_link_metadata_shares_non_image_and_json_structure_bounds() {
+        let raw = json!({
+            "content": [{
+                "type": "resource_link", "uri": "blockbench://project/model.bbmodel",
+                "name": "model.bbmodel", "description": "x".repeat(300 * 1024),
+                "_meta": {"providerExtension": true}
+            }],
+            "isError": false
+        });
+        let result: McpGatewayToolResult = serde_json::from_value(raw.clone()).unwrap();
+        validate_tool_result(&result).unwrap();
+        assert_eq!(serde_json::to_value(&result).unwrap(), raw);
+
+        let mut aggregate = result.clone();
+        aggregate.content.push(McpGatewayContent::Text {
+            text: "x".repeat(300 * 1024),
+        });
+        assert!(validate_tool_result(&aggregate)
+            .unwrap_err()
+            .contains("non-image"));
+
+        let mut deep = raw.clone();
+        let mut metadata = json!({});
+        for _ in 0..=MCP_GATEWAY_MAX_JSON_DEPTH {
+            metadata = json!({"next": metadata});
+        }
+        deep["content"][0]["_meta"] = metadata;
+        let result = serde_json::from_value(deep).unwrap();
+        assert!(validate_tool_result(&result).unwrap_err().contains("depth"));
+
+        let mut wide = raw;
+        wide["content"][0]["_meta"] = json!({"values": vec![0; MCP_GATEWAY_MAX_JSON_NODES]});
+        let result = serde_json::from_value(wide).unwrap();
+        assert!(validate_tool_result(&result)
+            .unwrap_err()
+            .contains("node count"));
+    }
+
+    #[test]
     fn mixed_text_image_and_structured_content_preserve_order_and_budget() {
         let result = McpGatewayToolResult {
             content: vec![
@@ -906,6 +1017,39 @@ mod tests {
     }
 
     #[test]
+    fn resource_link_wire_opt_in_defaults_off_for_older_servers() {
+        let legacy = json!({
+            "operation": "tools_call",
+            "provider_id": "p",
+            "provider_instance_id": "i",
+            "name": "t",
+            "arguments": {},
+            "expected_schema": {"inputSchema": {"type": "object"}}
+        });
+        let request: McpGatewayRequest = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(matches!(
+            request,
+            McpGatewayRequest::ToolsCall {
+                allow_resource_links: false,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(request).unwrap(), legacy);
+
+        let mut enabled = legacy;
+        enabled["allow_resource_links"] = json!(true);
+        let request: McpGatewayRequest = serde_json::from_value(enabled.clone()).unwrap();
+        assert!(matches!(
+            request,
+            McpGatewayRequest::ToolsCall {
+                allow_resource_links: true,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(request).unwrap(), enabled);
+    }
+
+    #[test]
     fn tools_call_wire_has_no_caller_meta_but_tool_descriptor_meta_is_preserved() {
         let request = McpGatewayRequest::ToolsCall {
             provider_id: "provider".to_string(),
@@ -917,8 +1061,10 @@ mod tests {
                 output_schema: None,
                 annotations: None,
             },
+            allow_resource_links: false,
         };
         let encoded = serde_json::to_value(&request).unwrap();
+        assert!(encoded.get("allow_resource_links").is_none());
         assert!(encoded.get("_meta").is_none());
         let mut injected = encoded;
         injected["_meta"] = json!({"progressToken": "outer"});
@@ -958,5 +1104,35 @@ mod tests {
             "isError": false
         });
         assert!(serde_json::from_value::<McpGatewayToolResult>(raw).is_err());
+    }
+
+    #[test]
+    fn composite_tool_description_above_four_kib_remains_listed() {
+        let tool = |name: &str, bytes: usize| McpGatewayTool {
+            name: name.to_string(),
+            title: None,
+            description: Some("x".repeat(bytes)),
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            annotations: None,
+            meta: None,
+        };
+        validate_tools(&[tool("timeline", 20_000), tool("echo", 32)])
+            .expect("a 20000-byte composite description stays inside the gateway bound");
+        validate_tools_with_description_limit(&[tool("timeline", 96 * 1024)], 128 * 1024)
+            .expect("an explicit higher operator limit remains within the wire hard cap");
+        assert!(validate_tools_with_description_limit(
+            &[tool("timeline", 96 * 1024)],
+            MCP_GATEWAY_DEFAULT_DESCRIPTION_BYTES
+        )
+        .unwrap_err()
+        .contains("65536"));
+        let error = validate_tools(&[tool("timeline", MCP_GATEWAY_MAX_DESCRIPTION_BYTES + 1)])
+            .expect_err("one byte past the description bound is rejected");
+        assert!(error.contains("timeline"), "{error}");
+        assert!(
+            error.contains(&MCP_GATEWAY_MAX_DESCRIPTION_BYTES.to_string()),
+            "{error}"
+        );
     }
 }

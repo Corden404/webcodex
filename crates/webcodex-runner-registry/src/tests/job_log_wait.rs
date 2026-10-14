@@ -45,6 +45,8 @@ fn wait_job_update(
         command_execution_state: None,
         validation_progress: None,
         test_count_evidence: None,
+        format_mutation: None,
+        build_artifacts: None,
         activity: None,
         finished,
     }
@@ -422,6 +424,67 @@ async fn job_log_wait_wakes_all_waiters_without_holding_registry_mutex() {
 }
 
 #[tokio::test]
+async fn job_log_wait_heartbeat_wakes_all_waiters_without_becoming_meaningful() {
+    let registry = RunnerRegistry::default();
+    let job = start_wait_job(&registry).await;
+    registry
+        .update_job(wait_job_update(
+            "inst-wait",
+            &job.job_id,
+            1,
+            "running",
+            Some("baseline\n"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let token = registry
+        .get_job(&job.job_id)
+        .await
+        .unwrap()
+        .observation_token
+        .unwrap();
+    let mut tasks = Vec::new();
+    for _ in 0..2 {
+        let registry = registry.clone();
+        let job_id = job.job_id.clone();
+        let token = token.clone();
+        tasks.push(tokio::spawn(async move {
+            registry
+                .job_log_for_auth(None, &job_id, None, None, None, Some(&token), Some(5))
+                .await
+                .unwrap()
+                .5
+        }));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    registry
+        .update_job(wait_job_update(
+            "inst-wait",
+            &job.job_id,
+            2,
+            "running",
+            None,
+            false,
+        ))
+        .await
+        .unwrap();
+    for task in tasks {
+        let wait = task.await.unwrap();
+        assert_eq!(wait.wait_outcome, JobLogWaitOutcome::Updated);
+        // A missed notify still yields Updated after the five-second fallback;
+        // require both waiters to return well before that timeout.
+        assert!(
+            wait.waited_ms < 4_000,
+            "heartbeat waiter was not promptly notified: {wait:?}"
+        );
+        assert!(wait.changed);
+        assert!(!wait.meaningful_changed);
+        assert!(wait.heartbeat_changed);
+    }
+}
+
+#[tokio::test]
 async fn job_log_wait_stale_or_replayed_sequence_does_not_change_token() {
     let registry = RunnerRegistry::default();
     let job = start_wait_job(&registry).await;
@@ -487,6 +550,8 @@ async fn job_log_wait_sequenced_update_changes_token_even_when_snapshot_is_same(
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -523,6 +588,8 @@ async fn job_log_wait_sequenced_update_changes_token_even_when_snapshot_is_same(
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -632,6 +699,8 @@ async fn job_log_wait_unsequenced_update_between_calls_and_noop_update() {
         command_execution_state: None,
         validation_progress: None,
         test_count_evidence: None,
+        format_mutation: None,
+        build_artifacts: None,
         activity: None,
         finished: false,
     };
@@ -731,6 +800,8 @@ async fn job_log_wait_activity_only_legacy_transition_advances_revision_and_wake
         command_execution_state: None,
         validation_progress: None,
         test_count_evidence: None,
+        format_mutation: None,
+        build_artifacts: None,
         activity: None,
         finished: false,
     };
@@ -908,6 +979,8 @@ async fn agent_job_log_observation_is_baseline_then_independent_deltas() {
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -1105,6 +1178,8 @@ async fn agent_job_log_replays_partial_lines_until_each_stream_completes() {
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: false,
         })
@@ -1142,6 +1217,8 @@ async fn agent_job_log_replays_partial_lines_until_each_stream_completes() {
             command_execution_state: None,
             validation_progress: None,
             test_count_evidence: None,
+            format_mutation: None,
+            build_artifacts: None,
             activity: None,
             finished: true,
         })
