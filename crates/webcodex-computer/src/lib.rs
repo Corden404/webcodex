@@ -2226,6 +2226,22 @@ mod element_registry_tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn computer_windows_combobox_read_does_not_grant_text_input_or_focus() {
+        let mut combo = fingerprint("Theme");
+        combo.role = "AXComboBox".into();
+        assert!(platform::uia_observes_value(&combo));
+        assert!(!is_supported_text_input_fingerprint(&combo));
+        assert!(!platform::uia_semantic_text_input_role(&combo.role));
+        assert!(!platform::uia_semantic_focus_role(&combo.role));
+        combo.protected = true;
+        assert!(!platform::uia_observes_value(&combo));
+        combo.protected = false;
+        combo.role = "AXButton".into();
+        assert!(!platform::uia_observes_value(&combo));
+    }
+
     fn record(surface_id: &str, label: &str, path: Vec<usize>) -> ElementRecord {
         let fingerprint = fingerprint(label);
         ElementRecord {

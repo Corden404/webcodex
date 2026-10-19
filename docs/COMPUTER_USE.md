@@ -198,6 +198,8 @@ The Windows Runner revalidates the exact xcap-observed HWND/PID before obtaining
 
 ### Windows UIA parity W2 — exact window activation
 
+Windows tree observation reads ComboBox current values independently of text-input eligibility. It prefers the native `ValuePattern`; when unavailable, a single native `SelectionPattern` selection supplies its bounded display name. Missing or ambiguous selection remains unknown. Protected controls suppress values. This read-only observation does not admit ComboBox focus, text input, selection or pointer effects.
+
 Windows uses `control_computer(action=activate_window)` while retaining the precise `computer_activate_window` Runner effect and independent `computer_window_activate` capability. The caller supplies only an exact previously observed `surface_id`; there is no app-name, PID, title, executable-path, command, or fallback target.
 
 Immediately before the effect the Runner revalidates the xcap surface identity, exact native HWND/PID, and UIA root. Non-Window UIA roots fail closed before any effect. An already-foreground non-minimized window is a no-op success. A minimized exact window is restored with `ShowWindowAsync(SW_RESTORE)` plus a bounded local-state wait so a stalled foreign UI thread cannot block the Runner; then the exact UIA Window root receives `IUIAutomationElement::SetFocus`. Success still requires `GetForegroundWindow()` to equal the exact HWND. Once either restore or UIA focus has been attempted, any native error, timeout, or mismatched foreground postcondition is `outcome_unknown` and requires fresh observation before any retry.

@@ -347,6 +347,21 @@ $form.Controls.SetChildIndex($script:twinPrimary, $primaryIndex)
 $form.Controls.SetChildIndex($script:twinSecondary, $secondaryIndex)
 })
 $button.Add_Click({ param($sender, $eventArgs) $sender.Text = 'clicked' })
+$combo = New-Object System.Windows.Forms.ComboBox
+$combo.Name = 'ThemeChoice'
+$combo.AccessibleName = 'Theme choice'
+$combo.DropDownStyle = 'DropDownList'
+$combo.Location = New-Object System.Drawing.Point(210, 200)
+[void]$combo.Items.Add('White')
+[void]$combo.Items.Add('Black')
+$combo.SelectedIndex = 1
+$form.Controls.Add($combo)
+$editableCombo = New-Object System.Windows.Forms.ComboBox
+$editableCombo.Name = 'EditableTheme'
+$editableCombo.AccessibleName = 'Editable theme'
+$editableCombo.Location = New-Object System.Drawing.Point(350, 200)
+$editableCombo.Text = 'White'
+$form.Controls.Add($editableCombo)
 $form.Controls.Add($input)
 $form.Controls.Add($button)
 $form.Controls.Add($status)
@@ -444,6 +459,29 @@ impl Drop for WindowsControlFixture {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[test]
+#[ignore = "requires an interactive Windows desktop; launches a private WinForms fixture"]
+fn computer_windows_combobox_values_live() {
+    let mut fixture = WindowsControlFixture::start();
+    let window = fixture.wait_for_window(WINDOWS_CONTROL_FIXTURE_TITLE, "combo read fixture");
+    let record = surface_record(window);
+    let tree = platform::accessibility_tree("surface_combo", &record, 1, 64).unwrap();
+    for (label, expected) in [("Theme choice", "Black"), ("Editable theme", "White")] {
+        let node = tree.output["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["role"] == "AXComboBox" && node["title"] == label)
+            .expect("fixture combo is present");
+        assert_eq!(node["value"], expected, "{label}");
+        let id = node["element_id"].as_str().unwrap();
+        let element = tree.elements.iter().find(|(key, _)| key == id).unwrap();
+        let state = platform::element_state("surface_combo", id, 1, &record, &element.1).unwrap();
+        assert_eq!(state["can_focus"], false);
+        assert_eq!(state["can_input_text"], false);
     }
 }
 

@@ -439,6 +439,61 @@ fn uia_text_value(
 }
 
 #[cfg(windows)]
+pub(crate) fn uia_observes_value(fingerprint: &ElementFingerprint) -> bool {
+    !fingerprint.protected
+        && (is_supported_text_input_fingerprint(fingerprint) || fingerprint.role == "AXComboBox")
+}
+
+#[cfg(windows)]
+fn uia_observed_value(
+    context: &UiaContext,
+    element: &IUIAutomationElement,
+    fingerprint: &ElementFingerprint,
+) -> Result<Option<String>, String> {
+    if !uia_observes_value(fingerprint) {
+        return Ok(None);
+    }
+    if let Some(value) = uia_text_value(context, element)? {
+        return Ok(Some(value));
+    }
+    if fingerprint.role != "AXComboBox" {
+        return Ok(None);
+    }
+    let Some(selection) = optional_uia_pattern::<IUIAutomationSelectionPattern>(
+        context,
+        element,
+        UIA_SelectionPatternId,
+    )?
+    else {
+        return Ok(None);
+    };
+    context.deadline.ensure_remaining()?;
+    let selected = unsafe { selection.GetCurrentSelection() }
+        .map_err(|error| uia_error("IUIAutomationSelectionPattern::GetCurrentSelection", &error))?;
+    context.deadline.ensure_remaining()?;
+    let count = unsafe { selected.Length() }
+        .map_err(|error| uia_error("IUIAutomationElementArray::Length", &error))?;
+    if count != 1 {
+        return Ok(None);
+    }
+    context.deadline.ensure_remaining()?;
+    let selected = unsafe { selected.GetElement(0) }
+        .map_err(|error| uia_error("IUIAutomationElementArray::GetElement", &error))?;
+    context.deadline.ensure_remaining()?;
+    if unsafe { selected.CurrentIsPassword() }
+        .map_err(|error| uia_error("IUIAutomationElement::CurrentIsPassword", &error))?
+        .as_bool()
+    {
+        return Ok(None);
+    }
+    context.deadline.ensure_remaining()?;
+    uia_string(
+        unsafe { selected.CurrentName() },
+        "IUIAutomationElement::CurrentName",
+    )
+}
+
+#[cfg(windows)]
 fn uia_children(
     context: &UiaContext,
     element: &IUIAutomationElement,
@@ -653,11 +708,7 @@ pub(crate) fn accessibility_tree(
         let description = fingerprint.description.clone();
         let placeholder = fingerprint.placeholder.clone();
         let protected = fingerprint.protected;
-        let value = if protected || !is_supported_text_input_fingerprint(&fingerprint) {
-            None
-        } else {
-            uia_text_value(&context, &current)?
-        };
+        let value = uia_observed_value(&context, &current, &fingerprint)?;
         context.deadline.ensure_remaining()?;
         let enabled = unsafe { current.CurrentIsEnabled() }
             .map_err(|error| uia_error("IUIAutomationElement::CurrentIsEnabled", &error))?
