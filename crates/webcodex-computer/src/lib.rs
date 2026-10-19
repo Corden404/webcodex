@@ -81,6 +81,8 @@ fn validate_key_input(key: &str, modifiers: &[String]) -> Result<(), String> {
 }
 const MAX_ACCESSIBILITY_DEPTH: usize = 8;
 const MAX_ACCESSIBILITY_NODES: usize = 256;
+#[cfg(any(test, target_os = "macos", windows))]
+const MAX_ACCESSIBILITY_PATH_DEPTH: usize = 32;
 pub const DEFAULT_ACCESSIBILITY_DEPTH: usize = 6;
 pub const DEFAULT_ACCESSIBILITY_NODES: usize = 128;
 const RGBA_BYTES_PER_PIXEL: u64 = 4;
@@ -259,6 +261,29 @@ impl ElementRecord {
     fn contains_protected_content(&self) -> bool {
         self.lineage.iter().any(|fingerprint| fingerprint.protected)
     }
+}
+
+// Relative tree depth remains 0..8. Repeated scoped observations also bound
+// retained absolute lineage and the native work needed to re-resolve a handle.
+#[cfg(any(test, target_os = "macos", windows))]
+fn accessibility_tree_seed(
+    root: Option<&ElementRecord>,
+) -> Result<(Vec<usize>, Vec<ElementFingerprint>, bool), String> {
+    let Some(root) = root else {
+        return Ok((Vec::new(), Vec::new(), false));
+    };
+    if root.path.len() > MAX_ACCESSIBILITY_PATH_DEPTH
+        || root.lineage.len() != root.path.len() + 1
+        || root
+            .path
+            .iter()
+            .any(|index| *index >= MAX_ACCESSIBILITY_NODES)
+    {
+        return Err("stale_element: subtree root exceeds bounded correlation".into());
+    }
+    let ancestors = root.lineage[..root.path.len()].to_vec();
+    let protected = ancestors.iter().any(|node| node.protected);
+    Ok((root.path.clone(), ancestors, protected))
 }
 
 fn validate_input_text(text: &str) -> Result<usize, String> {
@@ -1370,6 +1395,16 @@ impl ComputerRuntime {
         max_depth: usize,
         max_nodes: usize,
     ) -> Result<Value, String> {
+        self.accessibility_tree_scoped(surface_id, None, max_depth, max_nodes)
+    }
+
+    pub fn accessibility_tree_scoped(
+        &self,
+        surface_id: &str,
+        root_element_id: Option<&str>,
+        max_depth: usize,
+        max_nodes: usize,
+    ) -> Result<Value, String> {
         if surface_id.is_empty() || surface_id.len() > MAX_SURFACE_ID_BYTES {
             return Err("invalid_request: surface_id is invalid".to_string());
         }
@@ -1385,10 +1420,42 @@ impl ComputerRuntime {
             .get(surface_id)
             .cloned()
             .ok_or_else(|| "stale_surface: unknown or stale surface_id".to_string())?;
+        let scope = root_element_id
+            .map(|id| {
+                if !id.starts_with("element_")
+                    || id.len() <= "element_".len()
+                    || id.len() > MAX_ELEMENT_ID_BYTES
+                {
+                    return Err("invalid_request: root_element_id is invalid".to_string());
+                }
+                let (element, generation) = self
+                    .elements
+                    .lock()
+                    .map_err(|_| {
+                        "computer_state_error: element registry lock poisoned".to_string()
+                    })?
+                    .get_with_generation(id)
+                    .ok_or_else(|| {
+                        "stale_element: unknown, evicted, or stale subtree root".to_string()
+                    })?;
+                if element.surface_id != surface_id {
+                    return Err(
+                        "stale_element: subtree root belongs to a different surface".to_string()
+                    );
+                }
+                Ok((element, generation))
+            })
+            .transpose()?;
+        let tree = match scope.as_ref() {
+            Some((root, _)) => {
+                platform::accessibility_tree_scoped(surface_id, &record, max_depth, max_nodes, root)
+            }
+            None => platform::accessibility_tree(surface_id, &record, max_depth, max_nodes),
+        }?;
         let AccessibilityTreeResult {
             mut output,
             elements,
-        } = platform::accessibility_tree(surface_id, &record, max_depth, max_nodes)?;
+        } = tree;
         let surface_registry = self
             .surfaces
             .lock()
@@ -1408,6 +1475,16 @@ impl ComputerRuntime {
             .elements
             .lock()
             .map_err(|_| "computer_state_error: element registry lock poisoned".to_string())?;
+        if let (Some(id), Some(expected)) = (root_element_id, scope.as_ref()) {
+            if element_registry.get_with_generation(id).as_ref() != Some(expected) {
+                return Err(
+                    "stale_element: subtree root generation changed during observation".into(),
+                );
+            }
+            // Wire-only scope receipt: the Server verifies and removes it before
+            // projecting the canonical fresh tree to the model.
+            object.insert("root_element_id".into(), json!(id));
+        }
         let observation_generation = element_registry.replace_surface(surface_id, elements)?;
         object.insert(
             "observation_generation".to_string(),
@@ -2240,6 +2317,34 @@ mod element_registry_tests {
         combo.protected = false;
         combo.role = "AXButton".into();
         assert!(!platform::uia_observes_value(&combo));
+    }
+
+    #[test]
+    fn computer_subtree_seed_bounds_absolute_lineage_and_inherits_protection() {
+        assert_eq!(
+            accessibility_tree_seed(None).unwrap(),
+            (vec![], vec![], false)
+        );
+        let mut root = record(
+            "surface_test",
+            "group",
+            vec![0; MAX_ACCESSIBILITY_PATH_DEPTH],
+        );
+        let (path, ancestors, protected) = accessibility_tree_seed(Some(&root)).unwrap();
+        assert_eq!(path.len(), MAX_ACCESSIBILITY_PATH_DEPTH);
+        assert_eq!(ancestors.len(), path.len());
+        assert!(!protected);
+        root.lineage[0].protected = true;
+        assert!(accessibility_tree_seed(Some(&root)).unwrap().2);
+        root.path.push(0);
+        root.lineage.push(fingerprint("child"));
+        assert!(accessibility_tree_seed(Some(&root)).is_err());
+        root.path = vec![MAX_ACCESSIBILITY_NODES];
+        root.lineage = vec![fingerprint("root"); 2];
+        assert!(accessibility_tree_seed(Some(&root)).is_err());
+        root.path = vec![0];
+        root.lineage.pop();
+        assert!(accessibility_tree_seed(Some(&root)).is_err());
     }
 
     fn record(surface_id: &str, label: &str, path: Vec<usize>) -> ElementRecord {
@@ -3264,6 +3369,16 @@ mod platform {
             "unsupported_platform: computer accessibility observation is unavailable on this platform"
                 .to_string(),
         )
+    }
+
+    pub(super) fn accessibility_tree_scoped(
+        surface_id: &str,
+        surface: &SurfaceRecord,
+        max_depth: usize,
+        max_nodes: usize,
+        _root: &ElementRecord,
+    ) -> Result<AccessibilityTreeResult, String> {
+        accessibility_tree(surface_id, surface, max_depth, max_nodes)
     }
 
     pub(super) fn element_state(

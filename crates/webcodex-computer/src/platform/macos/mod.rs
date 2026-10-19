@@ -69,8 +69,8 @@ mod display;
 mod input;
 
 pub(crate) use accessibility::{
-    accessibility_status, accessibility_tree, activate_window, control, element_state,
-    scroll_to_element,
+    accessibility_status, accessibility_tree, accessibility_tree_scoped, activate_window, control,
+    element_state, scroll_to_element,
 };
 use accessibility::{
     ax_attribute_settable, checked_surface_pid, exact_ax_window, optional_ax_bool,

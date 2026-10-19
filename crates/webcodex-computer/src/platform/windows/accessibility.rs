@@ -676,15 +676,41 @@ pub(crate) fn accessibility_tree(
     max_depth: usize,
     max_nodes: usize,
 ) -> Result<AccessibilityTreeResult, String> {
+    accessibility_tree_impl(surface_id, surface, max_depth, max_nodes, None)
+}
+
+#[cfg(windows)]
+pub(crate) fn accessibility_tree_scoped(
+    surface_id: &str,
+    surface: &SurfaceRecord,
+    max_depth: usize,
+    max_nodes: usize,
+    root: &ElementRecord,
+) -> Result<AccessibilityTreeResult, String> {
+    accessibility_tree_impl(surface_id, surface, max_depth, max_nodes, Some(root))
+}
+
+#[cfg(windows)]
+fn accessibility_tree_impl(
+    surface_id: &str,
+    surface: &SurfaceRecord,
+    max_depth: usize,
+    max_nodes: usize,
+    scope: Option<&ElementRecord>,
+) -> Result<AccessibilityTreeResult, String> {
     let context = UiaContext::new()?;
-    let root = exact_uia_window(&context, surface)?;
+    let (path, lineage, inherited_protected) = crate::accessibility_tree_seed(scope)?;
+    let root = match scope {
+        Some(element) => resolve_uia_element(&context, surface, element)?,
+        None => exact_uia_window(&context, surface)?,
+    };
     let mut queue = VecDeque::from([(
         root,
         None::<String>,
         0usize,
-        Vec::<usize>::new(),
-        Vec::<ElementFingerprint>::new(),
-        false,
+        path,
+        lineage,
+        inherited_protected,
     )]);
     let mut nodes = Vec::with_capacity(max_nodes.min(64));
     let mut elements: Vec<(String, ElementRecord)> = Vec::with_capacity(max_nodes.min(64));
@@ -721,7 +747,8 @@ pub(crate) fn accessibility_tree(
 
         let reserved = nodes.len() + queue.len() + 1;
         let remaining = max_nodes.saturating_sub(reserved);
-        let inspect_limit = if depth < max_depth {
+        let can_descend = depth < max_depth && path.len() < crate::MAX_ACCESSIBILITY_PATH_DEPTH;
+        let inspect_limit = if can_descend {
             remaining.saturating_add(1).max(1)
         } else {
             1
@@ -729,7 +756,7 @@ pub(crate) fn accessibility_tree(
         let (children, has_more_children) = uia_children(&context, &current, inspect_limit)?;
         let child_count = children.len() + usize::from(has_more_children);
 
-        if depth < max_depth {
+        if can_descend {
             if children.len() > remaining || has_more_children {
                 truncated = true;
             }

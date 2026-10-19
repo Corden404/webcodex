@@ -113,8 +113,8 @@ mod display;
 mod input;
 
 pub(crate) use accessibility::{
-    accessibility_status, accessibility_tree, activate_window, control, element_state,
-    scroll_to_element, uia_semantic_text_input_role, win_hwnd,
+    accessibility_status, accessibility_tree, accessibility_tree_scoped, activate_window, control,
+    element_state, scroll_to_element, uia_semantic_text_input_role, win_hwnd,
 };
 use accessibility::{
     exact_uia_window, resolve_uia_element, uia_element_has_exact_focus, uia_error,

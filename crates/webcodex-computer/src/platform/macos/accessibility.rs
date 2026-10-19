@@ -512,18 +512,44 @@ pub(crate) fn accessibility_tree(
     max_depth: usize,
     max_nodes: usize,
 ) -> Result<AccessibilityTreeResult, String> {
+    accessibility_tree_impl(surface_id, surface, max_depth, max_nodes, None)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn accessibility_tree_scoped(
+    surface_id: &str,
+    surface: &SurfaceRecord,
+    max_depth: usize,
+    max_nodes: usize,
+    root: &ElementRecord,
+) -> Result<AccessibilityTreeResult, String> {
+    accessibility_tree_impl(surface_id, surface, max_depth, max_nodes, Some(root))
+}
+
+#[cfg(target_os = "macos")]
+fn accessibility_tree_impl(
+    surface_id: &str,
+    surface: &SurfaceRecord,
+    max_depth: usize,
+    max_nodes: usize,
+    scope: Option<&ElementRecord>,
+) -> Result<AccessibilityTreeResult, String> {
     if !unsafe { AXIsProcessTrusted() } {
         return Err("permission_denied: macOS Accessibility permission is not granted".to_string());
     }
     let deadline = AxObservationDeadline::new();
-    let root = exact_ax_window(surface, &deadline)?;
+    let (path, lineage, inherited_protected) = crate::accessibility_tree_seed(scope)?;
+    let root = match scope {
+        Some(element) => resolve_correlated_element(surface, element, &deadline)?,
+        None => exact_ax_window(surface, &deadline)?,
+    };
     let mut queue = VecDeque::from([(
         root,
         None::<String>,
         0usize,
-        Vec::<usize>::new(),
-        Vec::<ElementFingerprint>::new(),
-        false,
+        path,
+        lineage,
+        inherited_protected,
     )]);
     let mut nodes = Vec::with_capacity(max_nodes.min(64));
     let mut elements: Vec<(String, ElementRecord)> = Vec::with_capacity(max_nodes.min(64));
@@ -559,7 +585,8 @@ pub(crate) fn accessibility_tree(
         let enabled = optional_ax_bool(&deadline, &element, "AXEnabled")?;
         let focused = optional_ax_bool(&deadline, &element, "AXFocused")?;
         let child_count = ax_array_count(&deadline, &element, "AXChildren")?;
-        if depth < max_depth && child_count > 0 {
+        if depth < max_depth && path.len() < crate::MAX_ACCESSIBILITY_PATH_DEPTH && child_count > 0
+        {
             let reserved = nodes.len() + queue.len() + 1;
             let remaining = max_nodes.saturating_sub(reserved);
             let take = child_count.min(remaining);

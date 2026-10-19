@@ -196,9 +196,13 @@ The Windows Runner revalidates the exact xcap-observed HWND/PID before obtaining
 
 `observe_computer(action=find_elements)` remains a Control-side adapter over the canonical bounded tree, so Windows support adds no finder-specific Runner protocol. `observe_computer(action=element_state)` re-resolves the exact UIA lineage before returning normalized state. W1 deliberately reports all mutation `can_*` affordances false because the corresponding Windows effect capabilities remain independently unavailable until later parity slices.
 
-### Windows UIA parity W2 — exact window activation
-
 Windows tree observation reads ComboBox current values independently of text-input eligibility. It prefers the native `ValuePattern`; when unavailable, a single native `SelectionPattern` selection supplies its bounded display name. Missing or ambiguous selection remains unknown. Protected controls suppress values. This read-only observation does not admit ComboBox focus, text input, selection or pointer effects.
+
+Both `accessibility_tree` and `find_elements` accept an optional `root_element_id` from the latest observation on that exact surface. The existing `computer_accessibility_tree` Runner operation re-resolves the complete window-to-element lineage before a scoped read. Relative depth remains at most 8 and returned nodes at most 256; absolute lineage is capped at 32 edges, and existing native deadlines include root resolution. The returned tree starts at relative depth zero, retains full private lineage and inherited protection, and replaces all prior element IDs on that surface. Concurrent retirement of the supplied root discards the result. No cursor store or new authority is introduced.
+
+For a truncated search, acquire a fresh tree, choose a visible branch and pass its current `element_id` as `root_element_id` to a tree/search call. Only IDs from the latest observation remain usable; reusing the previous root after a successful scoped read is stale. `count=0` with `truncated=true` remains inconclusive. This supports deeper/narrower branch reads, not pagination through unseen siblings beyond the node cap. Unscoped calls retain their existing wire shape. Scoped calls require an updated Runner: it echoes the exact requested root in a wire-only receipt which the Server verifies and removes before projecting results. Missing/mismatched receipts are rejected rather than accepting an old Runner's unscoped tree.
+
+### Windows UIA parity W2 — exact window activation
 
 Windows uses `control_computer(action=activate_window)` while retaining the precise `computer_activate_window` Runner effect and independent `computer_window_activate` capability. The caller supplies only an exact previously observed `surface_id`; there is no app-name, PID, title, executable-path, command, or fallback target.
 
