@@ -523,7 +523,59 @@ pub(crate) fn accessibility_tree_scoped(
     max_nodes: usize,
     root: &ElementRecord,
 ) -> Result<AccessibilityTreeResult, String> {
+    // A still-valid child path is not identity evidence for an anonymous group.
+    // Apply the same admission as element_state before touching native state.
+    validate_element_state_target(root)?;
     accessibility_tree_impl(surface_id, surface, max_depth, max_nodes, Some(root))
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod scoped_root_tests {
+    use super::*;
+
+    #[test]
+    fn anonymous_scoped_root_is_rejected_before_native_access() {
+        // Invalid native identity makes this run without Accessibility permission
+        // or a live window. Admission must fail before any native lookup.
+        let surface = SurfaceRecord {
+            native_id: 0,
+            pid: 0,
+            identity_hash: [0; 32],
+            application: "unused".into(),
+            title: "Window".into(),
+            width: 1,
+            height: 1,
+        };
+        for empty in [None, Some(String::new())] {
+            let anonymous = ElementFingerprint {
+                role: "AXGroup".into(),
+                subrole: None,
+                identifier: empty.clone(),
+                title: empty.clone(),
+                description: empty.clone(),
+                placeholder: empty,
+                protected: false,
+            };
+            let mut ancestor = anonymous.clone();
+            ancestor.role = "AXWindow".into();
+            ancestor.title = Some("Window".into());
+            let root = ElementRecord {
+                surface_id: "surface_test".into(),
+                path: vec![0],
+                lineage: vec![ancestor, anonymous.clone()],
+            };
+            // A same-role replacement can collide with this fingerprint. The
+            // scoped entry must reject it rather than attest the old scope ID.
+            ensure_correlated_fingerprint(&anonymous, &anonymous.clone(), false).unwrap();
+            let error = accessibility_tree_scoped("surface_test", &surface, 1, 8, &root)
+                .err()
+                .expect("anonymous subtree root must fail admission");
+            assert_eq!(
+                error,
+                "stale_element: AX element lacks positive correlation evidence for state observation"
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
