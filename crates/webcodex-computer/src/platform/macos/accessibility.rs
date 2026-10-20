@@ -192,27 +192,18 @@ fn element_fingerprint(
         .ok_or_else(|| "accessibility_failed: AX element is missing a string role".to_string())?;
     let protected = inherited_protected
         || optional_ax_bool(deadline, element, "AXProtectedContent")?.unwrap_or(false);
-    Ok(ElementFingerprint {
-        role,
-        subrole: optional_ax_string(deadline, element, "AXSubrole")?,
-        identifier: optional_ax_string(deadline, element, "AXIdentifier")?,
-        title: if protected {
-            None
-        } else {
-            optional_ax_string(deadline, element, "AXTitle")?
+    finish_ax_fingerprint(
+        ElementFingerprint {
+            role,
+            subrole: optional_ax_string(deadline, element, "AXSubrole")?,
+            identifier: optional_ax_string(deadline, element, "AXIdentifier")?,
+            title: None,
+            description: None,
+            placeholder: None,
+            protected,
         },
-        description: if protected {
-            None
-        } else {
-            optional_ax_string(deadline, element, "AXDescription")?
-        },
-        placeholder: if protected {
-            None
-        } else {
-            optional_ax_string(deadline, element, "AXPlaceholderValue")?
-        },
-        protected,
-    })
+        |attribute| optional_ax_string(deadline, element, attribute),
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -590,7 +581,7 @@ fn accessibility_tree_impl(
         return Err("permission_denied: macOS Accessibility permission is not granted".to_string());
     }
     let deadline = AxObservationDeadline::new();
-    let (path, lineage, inherited_protected) = crate::accessibility_tree_seed(scope)?;
+    let (path, lineage, inherited_protected) = ax_accessibility_tree_seed(scope)?;
     let root = match scope {
         Some(element) => resolve_correlated_element(surface, element, &deadline)?,
         None => exact_ax_window(surface, &deadline)?,
@@ -624,16 +615,10 @@ fn accessibility_tree_impl(
         let description = fingerprint.description.clone();
         let placeholder = fingerprint.placeholder.clone();
         let protected = fingerprint.protected;
+        let value = ax_observed_value(&fingerprint, || {
+            optional_ax_string(&deadline, &element, "AXValue")
+        })?;
         lineage.push(fingerprint);
-        let sensitive = role == "AXSecureTextField"
-            || subrole
-                .as_deref()
-                .is_some_and(|value| value.contains("Secure"));
-        let value = if sensitive || protected {
-            None
-        } else {
-            optional_ax_string(&deadline, &element, "AXValue")?
-        };
         let enabled = optional_ax_bool(&deadline, &element, "AXEnabled")?;
         let focused = optional_ax_bool(&deadline, &element, "AXFocused")?;
         let child_count = ax_array_count(&deadline, &element, "AXChildren")?;
