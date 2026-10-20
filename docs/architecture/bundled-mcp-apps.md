@@ -43,6 +43,15 @@ appearing in this registry.
 
 ## Authority and execution boundaries
 
+Work Result inputs may use issued Project and Workflow Session selectors. Only a
+successful admitted `present_work_result` response echoes those typed selectors
+in private `_meta["webcodex/workResultInput"]`; its existing canonical Work Result
+supplies their resolved identities. The View waits for that pairing before using
+a selector-bearing input, regardless of notification order. Refresh and all later
+reads use canonical identities. Missing or conflicting selector projections fail
+closed with `WR-INPUT-UNRESOLVED`; raw selectors never become identity or authority.
+The projection does not enter model-visible content or `structuredContent`.
+
 MCP discovery still decides visibility, OAuth scopes, supported protocol and UI
 capability before binding a template. `for_tool` is not admission. In particular,
 retained Agent continuation bindings do not make the hidden model descriptor
