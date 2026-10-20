@@ -113,6 +113,45 @@ test("an unproven or changed Work selector never authorizes a state read", async
   }
 });
 
+for (const selectors of [
+  { project: "~p1" }, { session_id: "~s2" }, { project: "~p1", session_id: "~s2" },
+]) for (const first of ["input", "result"]) {
+  test(`text-only final result diagnoses unresolved selectors (${JSON.stringify(selectors)}, ${first}-first)`, async () => {
+    const view = app("mcp_work_result_app.html");
+    const selectedInput = { ...input, ...selectors };
+    if (first === "input") view.toolInput(selectedInput);
+    view.notification("ui/notifications/tool-result", { content: [{ type: "text", text: "private-host-payload" }] });
+    if (first === "result") view.toolInput(selectedInput);
+    await view.initialize();
+    await view.fireTimers(100000);
+    assert.match(view.nodes.status.textContent, /WR-INPUT-UNRESOLVED/);
+    assert.doesNotMatch(view.nodes.status.textContent, /private-host-payload|~[ps]/);
+    assert.equal(view.nodes.initialDelivery.textContent, `Initial delivery · first: ${first} · input: yes · result: yes · structured: no · private: no · selectors: no`);
+    assert.equal(view.nodes.refresh.disabled, true);
+    assert.equal(view.calls("get_work_result_state").length, 0);
+    assert.equal(view.timers.size, 0);
+  });
+}
+
+for (const first of ["input", "result"]) test(`private final result still resolves selectors (${first}-first)`, async () => {
+  const view = app("mcp_work_result_app.html");
+  const selectors = { project: "~p1", session_id: "~s2" };
+  if (first === "input") view.toolInput(selectors);
+  const result = selectorResult(selectors);
+  result._meta["webcodex/workResult"] = result.structuredContent;
+  delete result.structuredContent;
+  view.notification("ui/notifications/tool-result", { result });
+  if (first === "result") view.toolInput(selectors);
+  await view.initialize();
+  await flush();
+  assert.equal(view.nodes.refresh.disabled, false);
+  assert.equal(view.nodes.initialDelivery.textContent, `Initial delivery · first: ${first} · input: yes · result: yes · structured: no · private: yes · selectors: yes`);
+  assert.doesNotMatch(view.nodes.initialDelivery.textContent, /~[ps]|agent:|wc_sess/);
+  view.nodes.refresh.onclick();
+  await flush();
+  assert.deepEqual({ ...view.calls("get_work_result_state")[0].params.arguments }, input);
+});
+
 test("selector input waits without reads until its canonical private result arrives", async () => {
   const view = app("mcp_work_result_app.html");
   view.toolInput({ project: " ~p1 ", session_id: " ~s2 " });

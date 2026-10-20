@@ -51,6 +51,10 @@ a selector-bearing input, regardless of notification order. Refresh and all late
 reads use canonical identities. Missing or conflicting selector projections fail
 closed with `WR-INPUT-UNRESOLVED`; raw selectors never become identity or authority.
 The projection does not enter model-visible content or `structuredContent`.
+The View's Diagnostics records only the first input/result notification order
+and presence of structuredContent, private Work Result and selector projections. A final
+text-only result cannot leave unresolved selectors waiting indefinitely; it
+fails closed, while canonical input retains the existing app-only read fallback.
 
 MCP discovery still decides visibility, OAuth scopes, supported protocol and UI
 capability before binding a template. `for_tool` is not admission. In particular,

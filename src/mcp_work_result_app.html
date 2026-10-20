@@ -563,6 +563,7 @@ select:disabled { opacity: .48; cursor: default; }
     </section>
     <details id="diagnostics" class="details" hidden>
       <summary>Diagnostics</summary>
+      <p id="initialDelivery" class="secondary">Initial delivery: waiting</p>
       <div id="diagnosticContent"></div>
     </details>
   </div>
@@ -1476,6 +1477,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
   let collaborationSendState = "idle";
   let tornDown = false;
   let initialResultTransportMissing = false;
+  const initialDelivery = { first: null, input: false, result: false, structured: false, private: false, selectors: false };
   let selectedPane = "Activity";
   const pending = new Map();
   const el = id => document.getElementById(id);
@@ -3347,7 +3349,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         failClosed("Unresolved Work input selector"); return;
       }
       if (!inputSelectors) {
-        if (lastRenderedState || (pendingSelectorInput
+        if (lastRenderedState || initialResultTransportMissing || (pendingSelectorInput
           && (pendingSelectorInput.project !== args.project || pendingSelectorInput.session_id !== args.session_id))) {
           failClosed("Unresolved Work input selector"); return;
         }
@@ -3373,6 +3375,21 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     if (initialResultTransportMissing && hostInitialized && lastStateVersion === null) void refresh(false);
   }
 
+  function noteInitialDelivery(kind, result) {
+    if (initialDelivery.first === null) initialDelivery.first = kind;
+    if (!initialDelivery[kind]) {
+      initialDelivery[kind] = true;
+      if (kind === "result") {
+        const call = callToolResultOf(result);
+        initialDelivery.structured = call?.structuredContent !== undefined;
+        initialDelivery.private = call?._meta?.[WORK_RESULT_META_KEY] !== undefined;
+        initialDelivery.selectors = call?._meta?.[WORK_RESULT_INPUT_META_KEY] !== undefined;
+      }
+    }
+    el("initialDelivery").textContent = "Initial delivery · first: " + initialDelivery.first
+      + ["input", "result", "structured", "private", "selectors"].map(key => " · " + key + ": " + (initialDelivery[key] ? "yes" : "no")).join("");
+  }
+
   function acceptToolResult(result) {
     if (tornDown) return;
     const structured = structuredOf(result);
@@ -3396,6 +3413,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       // to the View. Preserve exact identity from tool-input and recover once
       // through the app-only state read instead of permanently disabling the card.
       initialResultTransportMissing = true;
+      if (pendingSelectorInput) { failClosed("Unresolved Work input selector"); return; }
       if (identity && hostInitialized && lastStateVersion === null) void refresh(false);
       return;
     }
@@ -3482,10 +3500,12 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return;
     }
     if (msg.method === "ui/notifications/tool-input") {
+      noteInitialDelivery("input");
       acceptToolInput(msg.params);
       return;
     }
     if (msg.method === "ui/notifications/tool-result") {
+      noteInitialDelivery("result", msg.params);
       acceptToolResult(msg.params);
       return;
     }
