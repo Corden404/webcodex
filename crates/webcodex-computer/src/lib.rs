@@ -458,6 +458,53 @@ fn is_secure_text_fingerprint(fingerprint: &ElementFingerprint) -> bool {
             .is_some_and(|subrole| subrole.contains("Secure"))
 }
 
+#[cfg(any(test, target_os = "macos"))]
+fn finish_ax_fingerprint(
+    mut fingerprint: ElementFingerprint,
+    mut read_text: impl FnMut(&'static str) -> Result<Option<String>, String>,
+) -> Result<ElementFingerprint, String> {
+    // Retain one inherited protection marker for secure roles, native protected
+    // content, and all descendants before any potentially sensitive text read.
+    fingerprint.protected |= is_secure_text_fingerprint(&fingerprint);
+    fingerprint.title = if fingerprint.protected {
+        None
+    } else {
+        read_text("AXTitle")?
+    };
+    fingerprint.description = if fingerprint.protected {
+        None
+    } else {
+        read_text("AXDescription")?
+    };
+    fingerprint.placeholder = if fingerprint.protected {
+        None
+    } else {
+        read_text("AXPlaceholderValue")?
+    };
+    Ok(fingerprint)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn ax_accessibility_tree_seed(
+    root: Option<&ElementRecord>,
+) -> Result<(Vec<usize>, Vec<ElementFingerprint>, bool), String> {
+    let (path, lineage, protected) = accessibility_tree_seed(root)?;
+    let protected = protected || lineage.iter().any(is_secure_text_fingerprint);
+    Ok((path, lineage, protected))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn ax_observed_value(
+    fingerprint: &ElementFingerprint,
+    read_value: impl FnOnce() -> Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    if fingerprint.protected {
+        Ok(None)
+    } else {
+        read_value()
+    }
+}
+
 #[cfg(any(test, target_os = "macos", windows))]
 fn is_supported_text_input_fingerprint(fingerprint: &ElementFingerprint) -> bool {
     match fingerprint.role.as_str() {
@@ -2264,6 +2311,9 @@ mod ax_observation_bound_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod macos_observation_tests;
 
 #[cfg(test)]
 mod element_registry_tests {

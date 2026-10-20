@@ -15,7 +15,8 @@ use xcap::Window;
 
 #[cfg(target_os = "macos")]
 use crate::{
-    clipboard_read_result, ensure_correlated_fingerprint, is_secure_text_fingerprint,
+    ax_accessibility_tree_seed, ax_observed_value, clipboard_read_result,
+    ensure_correlated_fingerprint, finish_ax_fingerprint, is_secure_text_fingerprint,
     run_macos_clipboard_write_effect_steps, select_exact_ax_window_index,
     validate_element_state_target, validate_key_modifiers, validate_text_input_preflight,
     validate_text_input_target, AxObservationDeadline,
