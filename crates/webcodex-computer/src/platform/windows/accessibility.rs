@@ -479,18 +479,59 @@ fn uia_observed_value(
     context.deadline.ensure_remaining()?;
     let selected = unsafe { selected.GetElement(0) }
         .map_err(|error| uia_error("IUIAutomationElementArray::GetElement", &error))?;
-    context.deadline.ensure_remaining()?;
-    if unsafe { selected.CurrentIsPassword() }
-        .map_err(|error| uia_error("IUIAutomationElement::CurrentIsPassword", &error))?
-        .as_bool()
-    {
+    uia_selection_item_value(
+        || {
+            context.deadline.ensure_remaining()?;
+            uia_selection_property(
+                unsafe { selected.CurrentIsPassword() },
+                "IUIAutomationElement::CurrentIsPassword",
+            )
+            .map(|value| value.map(|password| password.as_bool()))
+        },
+        || {
+            context.deadline.ensure_remaining()?;
+            let name = uia_selection_property(
+                unsafe { selected.CurrentName() },
+                "IUIAutomationElement::CurrentName",
+            )?;
+            Ok(name.and_then(|name| {
+                let name = bounded_text(&name.to_string());
+                (!name.is_empty()).then_some(name)
+            }))
+        },
+    )
+}
+
+#[cfg(windows)]
+fn uia_selection_property<T>(
+    result: windows::core::Result<T>,
+    operation: &str,
+) -> Result<Option<T>, String> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        // A selected item may be virtualized or disappear independently of its
+        // live ComboBox. Missing optional properties do not invalidate its tree.
+        Err(error)
+            if matches!(
+                uia_error_code(&error),
+                UIA_E_ELEMENTNOTAVAILABLE | UIA_E_NOTSUPPORTED
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(uia_error(operation, &error)),
+    }
+}
+
+#[cfg(windows)]
+fn uia_selection_item_value(
+    read_is_password: impl FnOnce() -> Result<Option<bool>, String>,
+    read_name: impl FnOnce() -> Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    if read_is_password()? != Some(false) {
         return Ok(None);
     }
-    context.deadline.ensure_remaining()?;
-    uia_string(
-        unsafe { selected.CurrentName() },
-        "IUIAutomationElement::CurrentName",
-    )
+    read_name()
 }
 
 #[cfg(windows)]
@@ -1188,4 +1229,93 @@ pub(crate) fn test_windows_focused_element_belongs_to_surface(
     let context = UiaContext::new()?;
     let root = exact_uia_window(&context, surface)?;
     validate_uia_focused_element_root(&context, &root)
+}
+
+#[cfg(all(test, windows))]
+mod selection_item_tests {
+    use super::*;
+    use std::cell::Cell;
+    use windows::core::{Error, HRESULT};
+
+    fn unavailable<T>(code: u32) -> windows::core::Result<T> {
+        Err(Error::from_hresult(HRESULT(code as i32)))
+    }
+
+    #[test]
+    fn selection_item_unavailable_protection_redacts_without_reading_name() {
+        for code in [UIA_E_ELEMENTNOTAVAILABLE, UIA_E_NOTSUPPORTED] {
+            let name_read = Cell::new(false);
+            let value = uia_selection_item_value(
+                || uia_selection_property::<bool>(unavailable(code), "CurrentIsPassword"),
+                || {
+                    name_read.set(true);
+                    Ok(Some("must remain unread".into()))
+                },
+            )
+            .unwrap();
+            assert_eq!(value, None);
+            assert!(!name_read.get());
+        }
+    }
+
+    #[test]
+    fn selection_item_unavailable_name_keeps_optional_value_unknown() {
+        for code in [UIA_E_ELEMENTNOTAVAILABLE, UIA_E_NOTSUPPORTED] {
+            let value = uia_selection_item_value(
+                || Ok(Some(false)),
+                || uia_selection_property::<String>(unavailable(code), "CurrentName"),
+            )
+            .unwrap();
+            assert_eq!(value, None);
+        }
+    }
+
+    #[test]
+    fn selection_item_protected_or_unknown_does_not_read_name() {
+        for protection in [Some(true), None] {
+            assert_eq!(
+                uia_selection_item_value(
+                    || Ok(protection),
+                    || panic!("protected or unknown selected item name must not be read"),
+                )
+                .unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            uia_selection_item_value(|| Ok(Some(false)), || Ok(Some("Theme".into()))).unwrap(),
+            Some("Theme".into())
+        );
+    }
+
+    #[test]
+    fn selection_item_unexpected_property_failures_remain_errors() {
+        let e_fail = 0x8000_4005;
+        let password_error = uia_selection_item_value(
+            || uia_selection_property::<bool>(unavailable(e_fail), "CurrentIsPassword"),
+            || panic!("failed protection read must not disclose the name"),
+        )
+        .unwrap_err();
+        assert!(password_error.contains("CurrentIsPassword"));
+        let name_error = uia_selection_item_value(
+            || Ok(Some(false)),
+            || uia_selection_property::<String>(unavailable(e_fail), "CurrentName"),
+        )
+        .unwrap_err();
+        assert!(name_error.contains("CurrentName"));
+    }
+
+    #[test]
+    fn selection_item_deadline_errors_are_not_optional_property_failures() {
+        let timeout = "accessibility_timeout: native observation deadline exceeded";
+        assert_eq!(
+            uia_selection_item_value(|| Err(timeout.into()), || panic!("deadline expired"))
+                .unwrap_err(),
+            timeout
+        );
+        assert_eq!(
+            uia_selection_item_value(|| Ok(Some(false)), || Err(timeout.into())).unwrap_err(),
+            timeout
+        );
+    }
 }
