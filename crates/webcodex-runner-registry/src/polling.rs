@@ -95,6 +95,24 @@ impl RunnerRegistry {
             let Some(request_id) = request_id else {
                 return Ok(None);
             };
+            // The exact synchronous Computer caller has stopped waiting. Retire
+            // only work not yet dispatched; this says nothing about a Host turn
+            // or an already dispatched native operation.
+            let abandoned_computer = inner.pending_by_id.get(&request_id).is_some_and(|pending| {
+                matches!(&pending.operation, RunnerOperation::Computer(_))
+                    && pending.job_id.is_none()
+                    && !pending.dispatched
+                    && pending
+                        .waiter
+                        .as_ref()
+                        .is_some_and(tokio::sync::oneshot::Sender::is_closed)
+            });
+            if abandoned_computer {
+                take_pending_request_locked(&mut inner, &request_id);
+                self.telemetry.runner_request_abandoned(&request_id);
+                self.telemetry.runner_result_finalized(&request_id);
+                continue;
+            }
             let stale_input = inner.pending_by_id.get(&request_id).and_then(|pending| {
                 super::job_input::dispatch_rejection(&inner, &pending.operation, &body.client_id)
             });

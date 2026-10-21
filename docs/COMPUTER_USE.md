@@ -280,6 +280,22 @@ Do not introduce these as shortcuts while implementing earlier slices:
 
 Browser-native automation may become a separate branch of Computer Use later, sharing high-level safety principles without forcing DOM/ARIA semantics into the desktop AX/UIA backend.
 
+## Cancellation and late observations
+
+A synchronous Computer request remains owned by its exact response waiter while
+queued. If that waiter is closed when the Registry checks the queue, the request
+is retired before dispatch. This applies to that request only. An operation
+already dispatched to the Runner keeps its existing completion and uncertain-effect
+semantics; closing a waiter does not stop a durable Job or authorize replay.
+
+For a Host Stop investigation, record the UI Stop time separately from Server
+receipt, queue exit, accepted Runner result and response handoff. Metadata tracing
+records `tool_runner_request_dequeued` with Server-monotonic `queue_wait_ms`, or
+`tool_runner_request_abandoned` when the waiter closed before dispatch. Dequeue
+records Server dispatch selection, not native execution or Host receipt. Missing
+events remain unknown within trace retention/capture limits. A late read-only call
+alone does not establish a failed cancellation; see [MCP lifecycle](MCP.md).
+
 ## Validation loop
 
 Keep a small set of representative scenarios and use them to reorder work when repeated friction is demonstrated:

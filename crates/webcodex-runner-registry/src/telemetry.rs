@@ -52,6 +52,10 @@ pub trait RunnerRegistryTelemetry: Debug + Send + Sync {
     ) {
     }
 
+    /// A synchronous Computer request lost its response waiter before the
+    /// dispatch boundary. No native operation or durable Job was stopped.
+    fn runner_request_abandoned(&self, _request_id: &str) {}
+
     fn runner_result_accepted(&self, request_id: &str, payload: &RunnerResultPayload);
 
     /// Unlike `runner_result_accepted`, runs only after bridge response

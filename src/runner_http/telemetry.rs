@@ -229,7 +229,7 @@ impl RunnerRegistryTelemetry for ToolRequestTraceRunnerRegistryTelemetry {
 
     fn runner_request_dequeued(
         &self,
-        _request_id: &str,
+        request_id: &str,
         transport: RunnerTransport,
         queue_wait: Duration,
     ) {
@@ -238,6 +238,11 @@ impl RunnerRegistryTelemetry for ToolRequestTraceRunnerRegistryTelemetry {
             transport,
             queue_wait,
         );
+        crate::tool_request_trace::record_runner_request_dequeued(request_id, queue_wait);
+    }
+
+    fn runner_request_abandoned(&self, request_id: &str) {
+        crate::tool_request_trace::record_runner_request_abandoned(request_id);
     }
 
     fn runner_result_accepted(&self, request_id: &str, payload: &RunnerResultPayload) {
