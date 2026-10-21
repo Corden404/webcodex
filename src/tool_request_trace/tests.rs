@@ -2,6 +2,9 @@ use super::*;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "tests/runner_cancellation.rs"]
+mod runner_cancellation;
+
 fn payload_files(root: &Path, trace_id: &str) -> Vec<PathBuf> {
     let payload_dir = root.join(trace_id).join("payloads");
     let Ok(entries) = fs::read_dir(payload_dir) else {
@@ -1236,11 +1239,19 @@ async fn metadata_runner_queue_stages_keep_exact_correlation_without_payloads() 
     .await;
     // Queue telemetry may run on a different request/task from the enqueue.
     scope_active_trace(Some(new_trace_id()), async {
-        record_runner_request_abandoned("queue-abandoned");
+        record_runner_request_cancelled(
+            "queue-abandoned",
+            false,
+            webcodex_runner_registry::RunnerRequestCancellationReason::WaiterClosed,
+        );
         finalize_runner_result_correlation("queue-abandoned");
         record_runner_request_dequeued("queue-live", Duration::from_micros(1250));
         record_runner_request_dequeued("queue-abandoned", Duration::ZERO);
-        record_runner_request_abandoned("unknown-request");
+        record_runner_request_cancelled(
+            "unknown-request",
+            false,
+            webcodex_runner_registry::RunnerRequestCancellationReason::WaiterClosed,
+        );
     })
     .await;
     flush_full_trace_writer();
@@ -1254,12 +1265,12 @@ async fn metadata_runner_queue_stages_keep_exact_correlation_without_payloads() 
         .filter(|event| {
             matches!(
                 event["event"].as_str(),
-                Some("tool_runner_request_abandoned" | "tool_runner_request_dequeued")
+                Some("tool_runner_request_cancelled" | "tool_runner_request_dequeued")
             )
         })
         .collect();
     assert_eq!(stages.len(), 2);
-    assert_eq!(stages[0]["event"], "tool_runner_request_abandoned");
+    assert_eq!(stages[0]["event"], "tool_runner_request_cancelled");
     assert_eq!(stages[0]["runner_request_id"], "queue-abandoned");
     assert_eq!(stages[1]["event"], "tool_runner_request_dequeued");
     assert_eq!(stages[1]["runner_request_id"], "queue-live");

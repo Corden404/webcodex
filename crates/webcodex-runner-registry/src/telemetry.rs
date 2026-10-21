@@ -23,6 +23,23 @@ pub struct ValidatedMcpToolResult<'a> {
     pub result: &'a McpGatewayToolResult,
 }
 
+/// Why a synchronous request's local pending record was cancelled. These
+/// bounded reasons do not attest a Host Stop or cancellation of native effects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerRequestCancellationReason {
+    WaiterClosed,
+    ExplicitCancel,
+}
+
+impl RunnerRequestCancellationReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WaiterClosed => "waiter_closed",
+            Self::ExplicitCancel => "explicit_cancel",
+        }
+    }
+}
+
 /// Fail-open telemetry callbacks invoked only from authoritative registry
 /// lifecycle points. Implementations must not re-enter the registry. Callback
 /// results never participate in admission, lease, ownership, replay, or
@@ -52,9 +69,17 @@ pub trait RunnerRegistryTelemetry: Debug + Send + Sync {
     ) {
     }
 
-    /// A synchronous Computer request lost its response waiter before the
-    /// dispatch boundary. No native operation or durable Job was stopped.
-    fn runner_request_abandoned(&self, _request_id: &str) {}
+    /// The exact synchronous request's local pending record was cancelled.
+    /// `dispatched` is Registry dispatch selection, not wire delivery or native
+    /// completion. A dispatched cancellation leaves effects uncertain; durable
+    /// Job ownership is unaffected. Called before correlation finalization.
+    fn runner_request_cancelled(
+        &self,
+        _request_id: &str,
+        _dispatched: bool,
+        _reason: RunnerRequestCancellationReason,
+    ) {
+    }
 
     fn runner_result_accepted(&self, request_id: &str, payload: &RunnerResultPayload);
 

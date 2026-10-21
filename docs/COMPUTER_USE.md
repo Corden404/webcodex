@@ -285,15 +285,26 @@ Browser-native automation may become a separate branch of Computer Use later, sh
 A synchronous Computer request remains owned by its exact response waiter while
 queued. If that waiter is closed when the Registry checks the queue, the request
 is retired before dispatch. This applies to that request only. An operation
-already dispatched to the Runner keeps its existing completion and uncertain-effect
+already selected for dispatch keeps its existing completion and uncertain-effect
 semantics; closing a waiter does not stop a durable Job or authorize replay.
+Timeout cleanup retains its response waiter until it has consumed dispatch
+certainty under the Registry lock, so a cleanup sweep cannot erase that evidence.
 
 For a Host Stop investigation, record the UI Stop time separately from Server
 receipt, queue exit, accepted Runner result and response handoff. Metadata tracing
-records `tool_runner_request_dequeued` with Server-monotonic `queue_wait_ms`, or
-`tool_runner_request_abandoned` when the waiter closed before dispatch. Dequeue
-records Server dispatch selection, not native execution or Host receipt. Missing
-events remain unknown within trace retention/capture limits. A late read-only call
+records `tool_runner_request_dequeued` with Server-monotonic `queue_wait_ms`.
+Queue abandonment, abandoned-request sweeps and explicit cancellation record one
+`tool_runner_request_cancelled` event with the retained `dispatched` state and a
+bounded `reason` (`waiter_closed` or `explicit_cancel`), then finalize the exact
+synchronous request correlation. This event retires local pending bookkeeping;
+when `dispatched=true`, effects remain uncertain. Durable Job correlation keeps
+its separate terminal owner.
+
+Streaming dispatch selection precedes the bounded writer channel and wire send.
+A request can wait for channel capacity after selection, and closing its waiter
+does not retract that envelope. Dequeue therefore records Server dispatch
+selection, not wire delivery, native execution or Host receipt. Missing events
+remain unknown within trace retention/capture limits. A late read-only call
 alone does not establish a failed cancellation; see [MCP lifecycle](MCP.md).
 
 ## Validation loop
