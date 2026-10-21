@@ -1,5 +1,25 @@
 use super::responses::{validate_computer_response, ComputerResponseContext};
 use super::*;
+
+#[test]
+fn computer_post_observation_governance_requires_read_and_control() {
+    let call: ComputerControlToolCall = serde_json::from_value(json!({"action":"press",
+        "client_id":"mini","surface_id":"surface_test","element_id":"element_test",
+        "observe_after":{"action":"accessibility_tree"}}))
+    .unwrap();
+    let policy = computer_control_policy(&call);
+    let mut auth = computer_auth(&[]);
+    auth.scopes = vec![SCOPE_COMPUTER_CONTROL.into()];
+    assert_eq!(
+        policy.authority.first_missing(Some(&auth)),
+        Some(SCOPE_COMPUTER_READ)
+    );
+    auth.scopes = vec![SCOPE_COMPUTER_READ.into()];
+    assert_eq!(
+        policy.authority.first_missing(Some(&auth)),
+        Some(SCOPE_COMPUTER_CONTROL)
+    );
+}
 use crate::tool_runtime::specialized::SpecializedAuthorityRequirement;
 
 fn surface(id: &str) -> Value {
@@ -1558,6 +1578,7 @@ fn computer_input_text_utf8_byte_bound_rejects_empty_nul_and_oversize() {
     assert_eq!(validate_input_text(valid).unwrap(), valid.len());
     let encoded = serde_json::to_value(ToolCall::ComputerControl(
         ComputerControlToolCall::InputText {
+            observe_after: None,
             client_id: "mini".to_string(),
             surface_id: "surface_test".to_string(),
             element_id: "element_test".to_string(),
