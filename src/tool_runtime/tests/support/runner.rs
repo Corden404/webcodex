@@ -47,32 +47,23 @@ pub(in crate::tool_runtime::tests) async fn register_runner_project_at_path_with
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
             coding_agent_providers: providers,
             coding_agent_inventory: coding_agent_runs.then(Default::default),
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
-            owner: None,
-            hostname: None,
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(RunnerCapabilities {
-                shell: true,
-                explicit_shell_selection: true,
-                bash_login_shell: true,
-                git: true,
-                file_read: true,
-                file_write: true,
-                internal_posix_script: true,
-                coding_agent_runs,
-                ..Default::default()
-            }),
-            policy: None,
+            ..crate::test_support::runner_registration(
+                client_id,
+                "inst",
+                RunnerCapabilities {
+                    shell: true,
+                    explicit_shell_selection: true,
+                    bash_login_shell: true,
+                    git: true,
+                    file_read: true,
+                    file_write: true,
+                    internal_posix_script: true,
+                    coding_agent_runs,
+                    ..Default::default()
+                },
+            )
         })
         .await
         .unwrap();
@@ -102,24 +93,11 @@ pub(in crate::tool_runtime::tests) async fn register_runner_project_at_path_with
     let project_path = root.to_string_lossy().to_string();
     runtime
         .runner_registry
-        .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
-            owner: None,
-            hostname: None,
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(capabilities),
-            policy: None,
-        })
+        .register(crate::test_support::runner_registration(
+            client_id,
+            "inst",
+            capabilities,
+        ))
         .await
         .unwrap();
     crate::test_support::apply_project_inventory_snapshot(
@@ -149,33 +127,18 @@ pub(in crate::tool_runtime::tests) async fn register_runner_project_at_path_with
     runtime
         .runner_registry
         .register_with_auth(
-            RunnerRegisterRequest {
-                computer_session_availability: None,
-                process_started_at: None,
-                build: None,
-                job_concurrency_limit: None,
-                job_inventory: None,
-                coding_agent_providers: None,
-                coding_agent_inventory: None,
-                client_id: client_id.to_string(),
-                runner_instance_id: "inst".to_string(),
-                runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-                display_name: None,
-                owner: None,
-                hostname: None,
-                host_context: None,
-                capabilities: crate::test_support::current_runner_capabilities(
-                    RunnerCapabilities {
-                        shell: true,
-                        git: true,
-                        file_read: true,
-                        file_write: true,
-                        internal_posix_script: true,
-                        ..Default::default()
-                    },
-                ),
-                policy: None,
-            },
+            crate::test_support::runner_registration(
+                client_id,
+                "inst",
+                RunnerCapabilities {
+                    shell: true,
+                    git: true,
+                    file_read: true,
+                    file_write: true,
+                    internal_posix_script: true,
+                    ..Default::default()
+                },
+            ),
             Some(&crate::test_support::runner_access(auth)),
         )
         .await
@@ -745,33 +708,24 @@ pub(in crate::tool_runtime::tests) async fn register_agent(
     owner: Option<&str>,
     caps: RunnerCapabilities,
 ) {
-    runtime
-        .runner_registry
-        .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
-            owner: owner.map(str::to_string),
-            hostname: None,
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(caps),
-            policy: None,
-        })
-        .await
-        .unwrap();
-    crate::test_support::apply_project_inventory_snapshot(
-        &runtime.runner_registry,
+    register_agent_with_instance(runtime, client_id, "inst", owner, caps).await;
+}
+
+/// Register the ordinary async structured-validation fixture without enabling
+/// optional validation languages or package-selection capabilities.
+pub(in crate::tool_runtime::tests) async fn register_async_validation_agent(
+    runtime: &ToolRuntime,
+    client_id: &str,
+) {
+    register_agent(
+        runtime,
         client_id,
-        "inst",
-        vec![registered_project("agent-proj", "/tmp/agent-proj")],
+        None,
+        RunnerCapabilities {
+            async_shell_jobs: true,
+            structured_validation_argv: true,
+            ..Default::default()
+        },
     )
     .await;
 }
@@ -793,22 +747,8 @@ pub(in crate::tool_runtime::tests) async fn register_agent_with_instance(
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: runner_instance_id.to_string(),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
             owner: owner.map(str::to_string),
-            hostname: None,
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(caps),
-            policy: None,
+            ..crate::test_support::runner_registration(client_id, runner_instance_id, caps)
         })
         .await
         .unwrap();
@@ -900,22 +840,8 @@ pub(in crate::tool_runtime::tests) async fn register_agent_projects(
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: runner_instance_id.clone(),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
             owner: owner.map(str::to_string),
-            hostname: None,
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(caps),
-            policy: None,
+            ..crate::test_support::runner_registration(client_id, &runner_instance_id, caps)
         })
         .await
         .unwrap();
@@ -939,24 +865,7 @@ pub(in crate::tool_runtime::tests) async fn register_agent_projects_for_auth(
     runtime
         .runner_registry
         .register_with_auth(
-            RunnerRegisterRequest {
-                computer_session_availability: None,
-                process_started_at: None,
-                build: None,
-                job_concurrency_limit: None,
-                job_inventory: None,
-                coding_agent_providers: None,
-                coding_agent_inventory: None,
-                client_id: client_id.to_string(),
-                runner_instance_id: runner_instance_id.clone(),
-                runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-                display_name: None,
-                owner: None,
-                hostname: None,
-                host_context: None,
-                capabilities: crate::test_support::current_runner_capabilities(caps),
-                policy: None,
-            },
+            crate::test_support::runner_registration(client_id, &runner_instance_id, caps),
             Some(&crate::test_support::runner_access(auth)),
         )
         .await
@@ -1407,22 +1316,9 @@ pub(in crate::tool_runtime::tests) async fn register_agent_with_projects_and_pol
     runtime
         .runner_registry
         .register(RunnerRegisterRequest {
-            computer_session_availability: None,
-            process_started_at: None,
-            build: None,
-            job_concurrency_limit: None,
-            job_inventory: None,
-            coding_agent_providers: None,
-            coding_agent_inventory: None,
-            client_id: client_id.to_string(),
-            runner_instance_id: "inst".to_string(),
-            runner_protocol_generation: crate::runner_protocol::RUNNER_PROTOCOL_GENERATION_V2,
-            display_name: None,
             owner: owner.map(str::to_string),
-            hostname: None,
-            host_context: None,
-            capabilities: crate::test_support::current_runner_capabilities(caps),
             policy,
+            ..crate::test_support::runner_registration(client_id, "inst", caps)
         })
         .await
         .unwrap();
