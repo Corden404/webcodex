@@ -18,11 +18,16 @@ Desktop 界面支持简体中文、繁體中文（`zh-TW`）、English、日本�
 
 ## 完整快速开始
 
-开始前准备好：
+新建 WebCodex Desktop / Tunnel 接入前，请准备好：
 
 - 真正要让 ChatGPT 使用的项目目录，建议项目已经使用版本控制；
-- 能看到“开发人员模式”和“插件”页面的 ChatGPT 网页版账户；
+- 能访问目标 ChatGPT 工作空间的 **Plugins（插件）** 页面；Business 工作空间
+  只有 Owner/Admin 可以创建和发布自定义 MCP 插件；
 - 能够创建 Tunnel 和 API key 的 OpenAI Platform 访问权限。
+
+**已经有管理员发布的 Business 工作空间插件？**你可以跳过下方本机设置步骤 1–6，
+在第 7 步直接连接现有插件，不必另建一套 Desktop/Tunnel；再在第 8 步验证自己
+获准访问的项目。
 
 WebCodex 可以在已注册的项目范围内读取和修改文件、执行命令。只注册确实要
 交给 AI 使用的目录，留意工具调用，并且不要把 API key、token 或其他密钥放进
@@ -47,15 +52,18 @@ WebCodex 可以在已注册的项目范围内读取和修改文件、执行命�
    启动 Tunnel 即可，不需要重启 WebCodex Desktop。
 6. **启动 Tunnel。**进入**连接 → OpenAI Secure Tunnel**，点击**启动**。
    看到“**OpenAI Secure Tunnel 已就绪，等待 ChatGPT 连接**”后再继续。
-7. **在 ChatGPT 网页版添加插件。**打开[账户安全设置](https://chatgpt.com/#settings/Security)，
-   开启**开发人员模式**，再打开[插件页面](https://chatgpt.com/plugins)。创建插件，
-   连接方式选择 **Tunnel**；选择正确的 Available Tunnel，或点击 **Use tunnel ID
-   instead** 填写完整 ID；Authentication 选择 **No Auth**；仅在信任当前安装时
-   接受自定义 MCP 风险提示；然后依次点击 **Create** 和 **Connect**。不要把
-   Tunnel API key 填入 ChatGPT 网页版。如果 Tunnel 列表可能没有刷新，请和
-   OpenAI Tunnels 页面中的完整 ID 对照。
+7. **在 ChatGPT 网页版连接 WebCodex。**先切换到正确的工作空间，打开
+   [Plugins（插件）页面](https://chatgpt.com/plugins)。如果你有创建权限（Business 工作空间须为 **Owner/Admin**），点击 **+ → Add custom MCP server**，
+   连接方式选 **Tunnel**，选择正确的 Tunnel 或点击 **Use tunnel ID instead**
+   输入完整 ID；**Authentication** 选 **No Auth**；仅在信任当前安装时阅读并
+   接受自定义 MCP 风险提示，再点击 **Create as a plugin**（旧界面可能是
+   **Create**）、审查工具，并按提示连接/安装。当前 Plugins 流程**不要求先开启
+   Developer Mode**；只有旧界面明确提示时才按提示操作。Business **普通成员**
+   应直接连接管理员已发布的插件，详见[第 7 节](#chatgpt-business原-team工作空间接入前提)。
+   不要把 Tunnel API key 填入 ChatGPT 网页版。如果 Tunnel 列表没有刷新，请核对
+   OpenAI Tunnels 页面中的完整 ID。
 8. **从 ChatGPT 网页版验证完整链路。**发送：“列出 WebCodex 项目，然后列出
-   我刚才选择的项目的顶层文件；如果目录为空，请明确报告为空。”这次真实项目
+   我有权访问的某个项目的顶层文件；如果目录为空，请明确报告为空。”这次真实项目
    读取才是最终验收：仅仅看到本机状态全绿，并不能证明 ChatGPT 网页版、Tunnel、
    Server、Runner 和项目权限已经全部连通。
 

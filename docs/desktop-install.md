@@ -18,12 +18,18 @@ its pending native acceptance is separate from published Desktop artifacts.
 
 ## Complete quick start
 
-Before starting, prepare:
+For a new WebCodex Desktop/Tunnel setup, prepare:
 
 - the real project directory that ChatGPT should use, preferably under version
   control;
-- a ChatGPT Web account that shows **Developer Mode** and the **Plugins** page;
+- access to the **Plugins** page in the intended ChatGPT Web workspace; only
+  Business owners/admins can create or publish custom MCP plugins;
 - access to the OpenAI Platform pages for creating a Tunnel and API key.
+
+**Already using a Business workspace plugin?** If an owner/admin has already
+published WebCodex for your workspace, skip local setup steps 1–6. In step 7,
+connect the existing plugin instead of creating another one, then verify a
+project you are authorized to access in step 8.
 
 WebCodex can read and modify files and run commands inside registered project
 boundaries. Register only directories you intend to expose, review tool calls,
@@ -56,19 +62,24 @@ issues, and shared logs.
 6. **Start the Tunnel.** Open **Connections → OpenAI Secure Tunnel** and select
    **Start**. Continue only after WebCodex Desktop reports
    **OpenAI Secure Tunnel ready; waiting for ChatGPT**.
-7. **Add the plugin in ChatGPT Web.** Open
-   [Security and login](https://chatgpt.com/#settings/Security), enable
-   **Developer Mode**, then open the [Plugins page](https://chatgpt.com/plugins).
-   Create a plugin using **Tunnel**, select the correct available Tunnel or use
-   **Use tunnel ID instead**, choose **No Auth**, accept the custom MCP warning
-   only if you trust this installation, select **Create**, and then **Connect**.
+7. **Connect WebCodex in ChatGPT Web.** Select the correct workspace and open
+   the [Plugins page](https://chatgpt.com/plugins). If you have permission to
+   create a plugin (for Business, this requires **Owner/Admin**), select
+   **+ → Add custom MCP server**, choose **Tunnel**, and select the right Tunnel
+   or **Use tunnel ID instead**. Set **Authentication** to **No Auth**, read and
+   acknowledge the warning only if you trust the installation, then choose
+   **Create as a plugin** (or **Create** in older interfaces), review its tools,
+   and connect/install it as prompted. The current Plugins flow does **not**
+   require enabling Developer Mode first; follow a legacy interface's explicit
+   prompt if one appears. Business **members** should instead connect the
+   plugin already published by their owner/admin; see [section 7](#chatgpt-business-formerly-team-workspaces).
    Never paste the Tunnel API key into ChatGPT Web. If the Tunnel list looks
-   stale, compare the complete ID with the OpenAI Tunnels page.
+   stale, compare the full ID with the OpenAI Tunnels page.
 8. **Verify the complete path from ChatGPT Web.** Send: “List the WebCodex
-   projects, then list the top-level files in the project I just selected;
-   report an empty directory as empty.” This real project read—not local green
-   status alone—is the final proof that ChatGPT Web, the Tunnel, Server, Runner,
-   and project authority are connected.
+   projects, then list the top-level files in a project I am authorized to
+   access; report an empty directory as empty.” This real project read—not
+   local green status alone—is the final proof that ChatGPT Web, the Tunnel,
+   Server, Runner, and project authority are connected.
 
 “OpenAI Secure Tunnel ready” proves only that the local Tunnel is ready **for**
 ChatGPT; WebCodex Desktop may continue to display “waiting for ChatGPT” even
