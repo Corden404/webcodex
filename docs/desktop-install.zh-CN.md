@@ -4,10 +4,12 @@
 
 Desktop 界面支持简体中文、繁體中文（`zh-TW`）、English、日本語、한국어、Deutsch 和 Français。可在设置中切换，选择会保存，活动时间也按所选语言格式显示。繁体中文使用独立翻译；系统托盘菜单跟随所选语言，后台启动时也会恢复上次选择；原始后端诊断仍为英文，文件选择器跟随操作系统语言。
 
-对于普通 Windows / macOS 个人用户，**最推荐的路径是 WebCodex Desktop +
-官方 OpenAI Secure Tunnel**。WebCodex Desktop 在本机运行 Server 和 Runner；
-真正向 AI 发送编程请求的界面是 **ChatGPT 网页版**。第一次使用不需要配置
-公开的 WebCodex 地址、反向代理或 ChatGPT OAuth。
+对于普通 Windows / macOS **个人、同一所有者**使用，**最推荐的路径是 WebCodex
+Desktop + 官方 OpenAI Secure Tunnel**。WebCodex Desktop 在本机运行 Server 和
+Runner；真正向 AI 发送编程请求的界面是 **ChatGPT 网页版**。第一次使用不需要
+配置公开的 WebCodex 地址、反向代理或 ChatGPT OAuth。这种个人 Tunnel **不是**
+推荐的多人共享部署方式；团队使用请参阅[部署指南](DEPLOYMENT.zh-CN.md)与
+[认证与凭据](AUTH_MODEL.zh-CN.md)。
 
 本文覆盖已发布 Desktop 产物路径，包括 v0.4.6 的 Windows x64/arm64 setup `.exe`
 与 macOS Intel/Apple Silicon `.dmg`。版本专属命令和 UI 请使用
@@ -18,16 +20,17 @@ Desktop 界面支持简体中文、繁體中文（`zh-TW`）、English、日本�
 
 ## 完整快速开始
 
-新建 WebCodex Desktop / Tunnel 接入前，请准备好：
+新建**个人、同一所有者**的 WebCodex Desktop / Tunnel 接入前，请准备好：
 
 - 真正要让 ChatGPT 使用的项目目录，建议项目已经使用版本控制；
 - 能访问目标 ChatGPT 工作空间的 **Plugins（插件）** 页面；Business 工作空间
   只有 Owner/Admin 可以创建和发布自定义 MCP 插件；
 - 能够创建 Tunnel 和 API key 的 OpenAI Platform 访问权限。
 
-**已经有管理员发布的 Business 工作空间插件？**你可以跳过下方本机设置步骤 1–6，
-在第 7 步直接连接现有插件，不必另建一套 Desktop/Tunnel；再在第 8 步验证自己
-获准访问的项目。
+**已经有团队集中管理的 Business 工作空间插件？**如果管理员已提供获批插件，
+其后端是独立部署、集中管理的 WebCodex Server，并配置了适当的按用户授权，
+就可以跳过本机设置步骤 1–6。在第 7 步连接该插件，第 8 步验证获准访问的项目。
+加入工作空间不会自动连接到你自己的 Desktop，也不会创建独立的 WebCodex 身份。
 
 WebCodex 可以在已注册的项目范围内读取和修改文件、执行命令。只注册确实要
 交给 AI 使用的目录，留意工具调用，并且不要把 API key、token 或其他密钥放进
@@ -59,7 +62,8 @@ WebCodex 可以在已注册的项目范围内读取和修改文件、执行命�
    接受自定义 MCP 风险提示，再点击 **Create as a plugin**（旧界面可能是
    **Create**）、审查工具，并按提示连接/安装。当前 Plugins 流程**不要求先开启
    Developer Mode**；只有旧界面明确提示时才按提示操作。Business **普通成员**
-   应直接连接管理员已发布的插件，详见[第 7 节](#chatgpt-business原-team工作空间接入前提)。
+   应连接管理员提供的、集中管理的团队插件，而不是他人的个人 Desktop Tunnel，
+   详见[第 7 节](#chatgpt-business原-team工作空间接入前提)。
    不要把 Tunnel API key 填入 ChatGPT 网页版。如果 Tunnel 列表没有刷新，请核对
    OpenAI Tunnels 页面中的完整 ID。
 8. **从 ChatGPT 网页版验证完整链路。**发送：“列出 WebCodex 项目，然后列出
@@ -244,25 +248,45 @@ ChatGPT Team 已于 2025 年 8 月 29 日更名为 **ChatGPT Business**，原有
 OpenAI Platform 环境中配置。参见 OpenAI 官方[更名说明](https://help.openai.com/en/articles/12111915-chatgpt-team-is-now-chatgpt-business)
 和 [API 计费说明](https://help.openai.com/zh-hans-cn/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform)。
 
-- **工作空间所有者/管理员：**Business 工作空间只有 Owner 或 Admin 可以创建、
-  发布自定义 MCP 插件。先在 **工作空间设置 → 成员**确认角色；按下面的步骤创建
-  WebCodex 插件，审查其工具（尤其是写入操作），再通过工作空间的应用/插件
-  管理设置发布或启用，供成员使用。
-- **普通成员：**请所有者/管理员完成 WebCodex 配置、发布，并将插件开放给你的
-  账号或角色。切换到 Business 工作空间，在 **Plugins（插件）**中找到获批的
-  WebCodex 插件并连接/安装。成员可以使用工作空间允许的插件，但不能自行
-  创建、发布 Business 工作空间插件或绕过管理员限制。不要索取或分享管理员的
-  Tunnel API key、本地 WebCodex 凭据。
+**在开放插件给同事前，先区分 WebCodex 部署方式：**
 
-实际可用性仍受工作空间策略和连接权限约束。当前创建/发布规则请以 OpenAI 的
+- **个人 Desktop + OpenAI Secure Tunnel（同一所有者）：**Tunnel 使用本机
+  Server 的 `WEBCODEX_TOKEN` bootstrap 凭据转发 MCP 请求，该凭据具有
+  **admin 管理员权限**。ChatGPT 选择 **No Auth** 只表示 ChatGPT 不另行提供
+  WebCodex 凭据，并不代表匿名调用或每位成员独立认证。如果把这个插件发布给
+  其他 Business 成员，获准使用插件的人会以**同一个 WebCodex 身份**访问该
+  Server 及其配置的 Runners、已注册项目和工具权限（仍受 Runner/项目边界及
+  其他运行时检查约束）。成员不会因此连接各自的 Desktop，也不会获得独立的
+  WebCodex scopes。**不要把个人 Desktop Tunnel 当作常规团队共享方案发布。**
+- **团队/多人部署：**单独部署**集中管理的 Server 及其 Runners**，为各成员配置
+  **适当权限范围的独立或委托凭据**（例如所选 MCP 连接方式支持的 managed-user
+  OAuth 或 PAT），并选择兼容的 ChatGPT 认证方式。仅发布 **Tunnel + No Auth**
+  插件不会自动实现 WebCodex 按用户授权。不得向成员分发 Server bootstrap 凭据。
+  详见[认证与凭据](AUTH_MODEL.zh-CN.md)和[部署指南](DEPLOYMENT.zh-CN.md)。
+
+**ChatGPT Business 工作空间角色：**
+
+- **工作空间所有者/管理员：**Business 工作空间仅 Owner/Admin 能创建和发布
+  自定义 MCP 插件。先在**工作空间设置 → 成员**确认角色。个人使用时应将 Desktop
+  Tunnel 保持为仅自己使用；团队使用时先部署集中管理的 Server 并设置按用户授权，
+  审查其工具（尤其是写入操作），再通过工作空间管理设置批准/发布**团队插件**。
+- **普通成员：**请管理员提供获批的**集中管理团队插件**。切换到 Business
+  工作空间，在 **Plugins（插件）**中找到并按管理员配置的认证方式连接/安装。
+  成员不能自行创建、发布 Business 工作空间插件或绕过管理员限制。不要索取
+  或分享所有者的 Tunnel API key、Server bootstrap token 或本地凭据。
+
+Business 的应用可用性主要在工作空间级管理；Enterprise/Edu 另有按角色控制
+应用访问的功能。ChatGPT 侧插件是否可见或可用，**不等于** WebCodex 后端的
+按用户授权。当前创建/发布规则请以 OpenAI 的
 [自定义 MCP 服务器说明](https://help.openai.com/zh-hans-cn/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
 为准。
 
 ### 创建或连接插件
 
-以下创建步骤适用于有权限的工作空间 Owner/Admin（或个人工作空间中获准
-创建插件的账号）。如果 Business 管理员已发布插件，普通成员直接连接即可，
-无需再创建一份服务器配置。
+以下 **Tunnel + No Auth** 步骤仅用于有创建权限的用户配置**个人、同一所有者**
+Desktop 连接，**不会**为团队成员建立独立授权。使用集中部署的团队 Server 的
+Business 普通成员应直接连接获批的团队插件，按团队规定的方式完成个人认证，
+不要重新创建这套个人 Desktop Tunnel。
 
 1. 在正确的工作空间打开 [ChatGPT 插件页面](https://chatgpt.com/plugins)。
 2. 点击 **+ → Add custom MCP server**（旧版界面可能显示 **Create a new plugin**）。
@@ -277,10 +301,11 @@ OpenAI Platform 环境中配置。参见 OpenAI 官方[更名说明](https://hel
    **I understand and want to continue**。
 7. 点击 **Create as a plugin**（旧版界面可能是 **Create**），并审查发现的工具。
 8. 如果出现 **Add … to ChatGPT** 确认页面，点击 **Connect**。
-9. 若要让其他 Business 成员使用，Owner/Admin 还须在工作空间中发布/批准该插件；
-   仅保存个人草稿不会自动向整个工作空间开放。
+9. **个人 Desktop Tunnel 插件仅供其所有者使用。**不要把它直接发布为 Business
+   工作空间共享插件。如需团队使用，应先配置独立的**集中管理团队连接**和上述
+   委托认证，再发布面向团队的插件。
 
-这里不需要 OAuth。WebCodex 会在本机保存 MCP authorization credential，并由 Tunnel client 注入；ChatGPT 网页版不需要看到这份本机凭据。
+**仅对于这个个人 Tunnel 接入方式**，ChatGPT 侧无需配置 OAuth：WebCodex 将 bootstrap MCP 凭据保存在本机并由 Tunnel client 注入。ChatGPT 网页版不需要看到这份本机凭据，但这**不会**为其他成员创建不同的 WebCodex 身份。团队连接必须另行采用合适的认证和权限模型。
 
 在 ChatGPT 网页版保存连接器后，回到 WebCodex Desktop。仅仅保存 ChatGPT
 网页版的连接器并不会自动把 WebCodex Desktop 的本地 Tunnel 证据升级成
@@ -306,7 +331,7 @@ Business 工作空间的创建权限与 Tunnel 权限是两个独立前提。如
 ## 8. 最小验收
 
 连接后先做**一个最小、真实的项目读取**，例如：“列出 WebCodex 项目，然后列出
-我刚选择项目的顶层文件；空目录请报告为空”。这一步成功，就证明基本的
+我有权访问的某个项目的顶层文件；空目录请报告为空”。这一步成功，就证明基本的
 ChatGPT 网页版 → Tunnel → Server → Runner → Project 链路已经打通。
 
 以下检查用于验证更多能力，均为可选：
@@ -326,7 +351,9 @@ ChatGPT 网页版 → Tunnel → Server → Runner → Project 链路已经打�
 
 **Business 工作空间无法创建自定义 MCP 插件**：先确认已切换到正确的 Business 工作空间，且当前账号是 Owner/Admin。普通成员须由所有者/管理员创建并发布插件；开启 Developer Mode 不能绕过角色权限。
 
-**Business 成员找不到或无法使用 WebCodex**：请管理员检查插件是否已在该工作空间发布/批准，是否对该成员开放，并让成员在 **Plugins（插件）**中检查。看到 **Disabled by admin（已被管理员禁用）**时应联系管理员，不要通过个人工作空间插件或共享 Tunnel/API 凭据绕过限制。
+**Business 成员找不到或无法使用 WebCodex**：请管理员检查集中管理的团队插件是否已在工作空间发布/批准、是否在 **Plugins（插件）**中可用，以及成员是否具有所需的 WebCodex 后端授权。看到 **Disabled by admin（已被管理员禁用）**时应联系管理员；不要借用他人的个人 Desktop Tunnel 或共享凭据绕过限制。
+
+**共享插件意外暴露了某个人 Desktop 上的项目**：个人 Tunnel 对转发请求使用所有者的 bootstrap/admin 身份。应停止共享该连接，检查 Server/Runner 的项目访问范围，并改用带独立委托凭据的团队 Server；仅调整 ChatGPT 插件可用性不能隔离 WebCodex 权限。
 
 **OpenAI Secure Tunnel 按钮不可用**：查看 Desktop 的“OpenAI Tunnel 配置检测”。缺哪一项会明确显示；点“重新检测配置”只观察当前进程。如果变量刚设置，必须**完全退出 WebCodex 后重新启动**，关闭窗口不算退出。
 
