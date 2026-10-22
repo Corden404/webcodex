@@ -20,8 +20,10 @@ If the complete response is lost, do not replay the combined call blindly.
 
 Both requests are pinned to the admitted Runner instance, with access and
 capability checks repeated at admission and dispatch. A replacement Runner or a
-closed window cannot redirect the observation to another target. A fresh tree
-replaces old element IDs and obeys the existing depth/node/content budgets.
+closed window cannot redirect the observation to another target.
+If admission rejects the action before it is queued, the result retains
+`execution_state=not_started` and `state_changed=false`; no post-observation runs.
+A fresh tree replaces old element IDs and obeys the existing depth/node/content budgets.
 It may show intermediate application state; this is not an atomic UI transaction
 or an application-settled barrier. Each phase retains its existing bounded wait.
 The composition saves a Host round trip; it still uses two Runner requests.

@@ -1,6 +1,75 @@
 use super::responses::{validate_computer_response, ComputerResponseContext};
 use super::*;
 
+#[tokio::test]
+async fn computer_post_observation_admission_rejection_preserves_not_started() {
+    use crate::runner_protocol::{RunnerCapabilities, RunnerPollRequest};
+    use std::sync::Arc;
+
+    // These are the admission-time states after the composing caller captured
+    // its Runner identity and capabilities. No native operation has been queued.
+    for replaced in [true, false] {
+        for kind in ["computer_control", "computer_input_text"] {
+            let registry = Arc::new(crate::runner_http::RunnerRegistry::default());
+            registry
+                .register(crate::test_support::runner_registration(
+                    "computer",
+                    "current",
+                    RunnerCapabilities {
+                        computer_control: true,
+                        computer_text_input: true,
+                        computer_accessibility_observe: replaced,
+                        ..Default::default()
+                    },
+                ))
+                .await
+                .unwrap();
+            let runtime = ToolRuntime::new(
+                registry.clone(),
+                Arc::new(crate::tool_runtime::RuntimeInfo::default()),
+            );
+            let mut auth = AuthContext::new(crate::auth::AuthKind::Bootstrap);
+            auth.is_bootstrap = true;
+            let result = runtime
+                .dispatch_computer_request_for_instance(
+                    "computer",
+                    kind,
+                    json!({"surface_id":"surface_test","element_id":"element_test",
+                        "action":"press","text":"hello"}),
+                    Some(&auth),
+                    None,
+                    Some("surface_test"),
+                    None,
+                    Some(if replaced { "previous" } else { "current" }),
+                )
+                .await;
+            assert!(!result.success, "{kind}: {result:?}");
+            assert_eq!(
+                result.output["execution_state"], "not_started",
+                "{kind}: {result:?}"
+            );
+            assert_eq!(result.output["state_changed"], false);
+            assert!(result.output.get("post_observation").is_none());
+            assert!(
+                result.error.as_deref().unwrap().contains(if replaced {
+                    "runner_replaced:"
+                } else {
+                    "capability_unavailable:"
+                }),
+                "{kind}: {result:?}"
+            );
+            assert!(registry
+                .poll(RunnerPollRequest {
+                    client_id: "computer".into(),
+                    runner_instance_id: "current".into(),
+                })
+                .await
+                .unwrap()
+                .is_none());
+        }
+    }
+}
+
 #[test]
 fn computer_post_observation_governance_requires_read_and_control() {
     let call: ComputerControlToolCall = serde_json::from_value(json!({"action":"press",

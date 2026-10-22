@@ -338,6 +338,9 @@ impl ToolRuntime {
                         .expect("clipboard write context"),
                 );
             }
+            Err(error) if expected_instance.is_some() && computer_request_is_effect(kind) => {
+                return computer_effect_not_started(&error);
+            }
             Err(error) => return computer_error("dispatch_denied", &error),
         };
         let is_effect = computer_request_is_effect(kind);
