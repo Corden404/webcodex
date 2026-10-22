@@ -249,24 +249,59 @@ All ChatGPT setup in this section is performed in **ChatGPT Web**. "Desktop"
 throughout this guide refers to **WebCodex Desktop**, not a ChatGPT desktop
 application.
 
-1. Open [ChatGPT Web account security settings](https://chatgpt.com/#settings/Security).
-2. Under **Account security and sign-in**, enable **Developer Mode**. Review the
-   warning shown by ChatGPT before enabling it; Developer Mode permits adding
-   connectors that may make permanent changes or delete data.
+### ChatGPT Business (formerly Team) workspaces
 
-![Enable Developer Mode in ChatGPT Web](desktop-install/chatgpt-enable-developer-mode.en.png)
+ChatGPT Team was renamed **ChatGPT Business** on August 29, 2025; existing
+Team workspaces need no migration. Select the intended **Business workspace**
+in ChatGPT Web, not your personal workspace. A Business subscription does
+**not** include OpenAI API Platform usage or automatically provide Tunnel
+credentials: the Tunnel ID and API key in sections 2–3 are managed separately
+through the OpenAI Platform. See OpenAI's [rename FAQ](https://help.openai.com/en/articles/12111915-chatgpt-team-is-now-chatgpt-business)
+and [API billing guidance](https://help.openai.com/en/articles/9039756-billing-settings-in-chatgpt-vs-platform).
 
-3. Open the [ChatGPT Plugins page](https://chatgpt.com/plugins).
-4. Create a new plugin, then choose **Tunnel** as the connection method.
-5. Under **Available tunnels**, select the Tunnel configured for WebCodex. To
+- **Workspace owner/admin:** Only owners and admins can create and publish a
+  custom MCP plugin for a Business workspace. Check your role under
+  **Workspace settings → Members**; create the WebCodex plugin using the steps
+  below, review its exposed tools (including write actions), and publish or
+  enable it for the workspace using the workspace app/plugin controls.
+- **Workspace member:** Ask an owner/admin to set up and publish WebCodex and
+  make it available to your account or role. Select the Business workspace,
+  then find and connect/install the approved plugin under **Plugins**. A
+  member can use an allowed plugin but cannot create or publish one for the
+  Business workspace or override admin restrictions. Do not share the
+  administrator's Tunnel API key or local WebCodex credentials.
+
+Workspace policy and individual connection permissions still apply. For the
+current creation and publication rules, see OpenAI's
+[custom MCP server guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+
+### Create or connect the plugin
+
+The following creation steps are for an authorized workspace owner/admin
+(or an account permitted to create a plugin in a personal workspace). A
+Business member with an already-published plugin can connect it directly
+without recreating the server.
+
+1. In the correct workspace, open the [ChatGPT Plugins page](https://chatgpt.com/plugins).
+2. Select **+ → Add custom MCP server** (older interfaces may say
+   **Create a new plugin**). The current Plugins flow does **not** require
+   enabling Developer Mode first. If a legacy UI explicitly requests it,
+   follow its warning and setup prompt; Developer Mode does not override
+   Business workspace roles.
+3. Choose **Tunnel** as the connection method.
+4. Under **Available tunnels**, select the Tunnel configured for WebCodex. To
    use a specific ID, choose **Use tunnel ID instead** and enter the current
-   Tunnel ID from WebCodex Desktop/OpenAI. Verify the ID if the available list
-   appears stale or shows a similarly named Tunnel.
-6. Set **Authentication** to **No Auth / None / No authentication**.
-7. Read the custom MCP server warning and select **I understand and want to
+   Tunnel ID from WebCodex Desktop/OpenAI. Verify the ID if the list looks
+   stale or contains a similarly named Tunnel.
+5. Set **Authentication** to **No Auth / None / No authentication**.
+6. Read the custom MCP server warning and select **I understand and want to
    continue** only if you trust this WebCodex installation.
-8. Select **Create**.
-9. On the **Add … to ChatGPT** confirmation screen, select **Connect**.
+7. Select **Create as a plugin** (or **Create** in older interfaces), then
+   review the discovered tools.
+8. If ChatGPT displays **Add … to ChatGPT**, select **Connect**.
+9. For other Business members to use it, the owner/admin must also
+   publish/approve the plugin for the workspace; a private draft alone
+   is not a workspace-wide installation.
 
 You do not configure OAuth in ChatGPT Web for this path. WebCodex keeps the MCP authorization credential locally and the Tunnel client injects it; ChatGPT Web does not need the local credential.
 
@@ -274,7 +309,7 @@ After saving the connector in ChatGPT Web, return to WebCodex Desktop. Saving a 
 
 **Success looks like:** the ChatGPT Web connector is saved and the WebCodex Desktop Tunnel remains running.
 
-**If it fails:** verify that you selected or entered the current Tunnel ID, not the API key; Authentication should be No Auth / None / No authentication. If the Tunnel is missing or rejected, verify that it is associated with the target ChatGPT workspace and that your OpenAI Platform identity has **Tunnels: Read + Use** for that Tunnel; Developer Mode and Tunnel permissions are separate. If the available Tunnel list merely looks stale, compare the exact ID with the OpenAI Tunnels page or use **Use tunnel ID instead**. Do not paste the Tunnel API key into ChatGPT Web.
+**If it fails:** verify that you selected or entered the current Tunnel ID, not the API key; Authentication should be No Auth / None / No authentication. If the Tunnel is missing or rejected, verify that it is associated with the target ChatGPT workspace and that your OpenAI Platform identity has **Tunnels: Read + Use** for that Tunnel; Business workspace creation rights and Tunnel permissions are separate. If the available Tunnel list merely looks stale, compare the exact ID with the OpenAI Tunnels page or use **Use tunnel ID instead**. Do not paste the Tunnel API key into ChatGPT Web.
 
 **Next:** immediately perform one real project read.
 
@@ -305,6 +340,10 @@ or use Computer Use.
 If Desktop shows a healthy Service / Runner / Project / Tunnel but ChatGPT still cannot list projects or read a file, do **not** treat local green status as proof of an external connection. Recheck the Tunnel ID and ChatGPT connection configuration, then inspect Desktop Connection / Activity for the latest state.
 
 ## Troubleshooting
+
+**Cannot create a custom MCP plugin in a Business workspace:** check that you selected the correct Business workspace and have the Owner/Admin role. Ordinary members must ask an owner/admin to create and publish it; enabling Developer Mode cannot grant this role.
+
+**A Business member cannot find or use WebCodex:** confirm the plugin was published/approved for the workspace and is available to that member under **Plugins**. If it says **Disabled by admin**, contact the workspace admin. Do not substitute a personal-workspace plugin or share Tunnel/API credentials to bypass workspace controls.
 
 **OpenAI Secure Tunnel is disabled:** check Desktop's OpenAI Tunnel configuration diagnostics, which identify a missing Tunnel ID or API key. **Recheck configuration** observes the current process only; if using environment fallback, fully quit and reopen WebCodex after changing variables.
 

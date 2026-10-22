@@ -169,6 +169,8 @@ That output contains a user credential. Only you should enter it into ChatGPT; d
 
 If you chose OpenAI Secure MCP Tunnel, login does not need `--print-mcp-config` for ChatGPT. ChatGPT normally uses Tunnel + No authentication while the local tunnel client injects the WebCodex credential. Follow the Tunnel guide instead of copying the local Bearer into ChatGPT.
 
+**ChatGPT Team/Business workspace:** Team is now called Business. Only workspace owners/admins can create and publish custom MCP plugins for a Business workspace; members need the admin to publish/enable WebCodex before they can connect. Select the correct workspace; creation rights and OpenAI Platform Tunnel permissions are separate. See [Business workspace prerequisites and troubleshooting](desktop-install.md#chatgpt-business-formerly-team-workspaces).
+
 ## 8. Verify the full experience
 
 Start with a read-only request:

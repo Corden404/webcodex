@@ -169,6 +169,8 @@ Runner 运行后，WebCodex 才真正拥有调用本机文件、Git、编译器�
 
 如果你选择 OpenAI Secure MCP Tunnel，登录时不需要 `--print-mcp-config` 给 ChatGPT 使用；ChatGPT 侧通常选择 Tunnel + No authentication，由本机 tunnel client 注入 WebCodex 凭据。按对应 Tunnel 指南操作，不要把本地 Bearer 复制给 ChatGPT。
 
+**ChatGPT Team/Business 工作空间：**Team 现已更名为 Business。Business 工作空间仅 Owner/Admin 能创建和发布自定义 MCP 插件；普通成员需要管理员先发布/启用 WebCodex，再进行连接。请确认切换到了正确的工作空间；插件创建权限与 OpenAI Platform Tunnel 权限相互独立。详见 [Business 工作空间接入前提和故障排查](desktop-install.zh-CN.md)。
+
 ## 8. 验证完整体验
 
 先让 AI 读取项目：
