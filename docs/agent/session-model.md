@@ -100,6 +100,16 @@ longer; this is neither a fsync nor a power-loss guarantee. Ledger version 2 and
 its per-cycle full snapshot format are unchanged. Implementation evidence and
 tradeoffs: [SessionStore access and writes](../implementation/session-store-access-and-write-scheduling.md).
 
+Restart-safe message delivery, assignment/completion fences, message replacement
+and withdrawal, and observation-token issuance await their exact persistence
+generation without blocking a Tokio worker on the writer's condition variable.
+An accepted in-memory mutation schedules persistence and notifies message observers
+before waiting, so canceling the request cannot discard that mutation or its wakeup.
+Success still requires persistence confirmation; cancellation is neither rollback
+nor permission to replay an effect. Existing delivery/completion keys and failure
+responses remain the authority for safe recovery. Full-ledger snapshot and write
+costs remain separate from this asynchronous acknowledgement boundary.
+
 Per-Session event and message tails remain independently bounded (`DEFAULT_MAX_EVENTS_PER_SESSION` and `DEFAULT_MAX_MESSAGES_PER_SESSION`); preserving a canonical Active identity does not turn its event/message history into an unbounded archive. The persistence wire shape remains ledger version 2. A retention tombstone is an additional row-local object in the same `sessions` array, not a Session row and not a new ledger version. Existing Session rows already deleted by an older Server cannot be reconstructed by upgrading: tombstones apply only to Closed rows removed after this behavior is present.
 
 `recording_session_id` remains a separate provenance contract. It may explicitly carry the same principal-scoped `session_ref` returned for that exact Session; Runtime canonicalizes the ref before recorder authorization and durable provenance recording. This does not make recorder provenance a business Session target, and omission never selects a recorder implicitly or creates sticky recorder context.
@@ -216,6 +226,19 @@ races without claiming atomicity across independent Runner workspace or Job read
 and without promoting external reports into Session revision or native execution
 truth. No handoff generation or replacement model-context revision is introduced or
 returned.
+
+Internally, closeout gathers typed validation, Job, failure, and review evidence
+before producing presentation JSON. Closeout pairs a bounded Session summary
+(up to 200 events) with the existing Session fence; a display limit does not
+change the captured counts or failure actionability. Handoff retains its initial
+task snapshot while enriching validation evidence. Concurrent task corrections
+make that observation incomplete and require an explicit reread; they do not
+silently replace the captured task. `finish_coding_task`
+reuses the evidence collected by handoff instead of gathering a second Session
+and validation view. Continuation decisions use the same typed report, including
+Job-enriched validation identities and latest-observation details. Passive startup
+and WorkResult projections remain read-only and do not claim a live snapshot fence
+for historical evidence.
 
 Collaboration is independent: `ack_session_message_ids` still proves exact
 ACK-required Session/Peer message ids, while `session_attention.ack_ref` is the

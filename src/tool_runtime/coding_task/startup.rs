@@ -292,7 +292,14 @@ impl ToolRuntime {
         let (startup_complete, startup_completed) = tokio::sync::oneshot::channel();
         let extension_discovery = async {
             if startup.include_extension_catalog {
-                Some(self.extension_discovery_for_startup(&resolved, auth).await)
+                Some(
+                    self.extension_discovery_for_startup(
+                        &resolved,
+                        auth,
+                        title.as_deref().unwrap_or_default(),
+                    )
+                    .await,
+                )
             } else {
                 None
             }
@@ -481,8 +488,8 @@ impl ToolRuntime {
         // Read the lifecycle-aware, project-scoped summary once, after the
         // potentially slow startup probes, then share it across continuation,
         // the legacy full verdict, and the model-facing brief.
-        let active_jobs = self
-            .active_jobs_summary(
+        let job_snapshot = self
+            .active_jobs_snapshot(
                 Some(&resolved.resolved_id),
                 Some(&session_outcome.summary.session_id),
                 auth,
@@ -494,13 +501,14 @@ impl ToolRuntime {
                 &session_outcome.summary,
                 session_outcome.pre_instruction_summary.as_ref(),
                 continuation_kind,
-                &active_jobs,
+                job_snapshot.continuation_snapshot(),
                 git.pointer("/counts/conflicted")
                     .and_then(Value::as_u64)
                     .unwrap_or(0)
                     > 0,
             )
             .await;
+        let active_jobs = job_snapshot.to_value();
         let session_ref = self.session_reference_for_id(&session_summary.session_id, auth);
         let mut output = json!({
             "detail": detail.as_str(),
@@ -673,8 +681,10 @@ impl ToolRuntime {
         &self,
         project: &ResolvedProject,
         auth: Option<&AuthContext>,
+        instruction: &str,
     ) -> StartupExtensions {
-        let skills = self.startup_skills_catalog(project, auth);
+        let relevance = super::super::surface::discovery::TaskRelevance::new(instruction);
+        let skills = self.startup_skills_catalog(project, auth, &relevance);
         let plugins = async {
             if auth.is_some_and(|auth| !auth.has_scope(crate::auth::SCOPE_PLUGIN_INSPECT)) {
                 return StartupPluginsCatalog::unavailable("plugin_inspect_scope_unavailable");
@@ -696,10 +706,11 @@ impl ToolRuntime {
                             annotations: entry.annotations,
                         })
                         .collect();
-                    StartupPluginsCatalog::available(
+                    StartupPluginsCatalog::available_for_task(
                         catalog.catalog_revision,
                         catalog.total_count,
                         entries,
+                        &relevance,
                     )
                 }
                 Err(reason_code) => StartupPluginsCatalog::unavailable(reason_code),
