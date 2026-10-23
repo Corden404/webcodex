@@ -28,8 +28,10 @@ Runner；真正向 AI 发送编程请求的界面是 **ChatGPT 网页版**。第
 - 能够创建 Tunnel 和 API key 的 OpenAI Platform 访问权限。
 
 **已经有团队集中管理的 Business 工作空间插件？**如果管理员已提供获批插件，
-其后端是独立部署、集中管理的 WebCodex Server，并配置了适当的按用户授权，
-就可以跳过本机设置步骤 1–6。在第 7 步连接该插件，第 8 步验证获准访问的项目。
+其后端是集中管理的 WebCodex Server，并配置了适当的按用户授权，
+**无需执行下面个人 Desktop/Tunnel 快速开始的第 1–7 步**。直接按
+[连接已批准的 Business 工作空间插件](#连接已批准的-business-工作空间插件)操作，
+再按[最小验收](#8-最小验收)读取有权限的项目。
 加入工作空间不会自动连接到你自己的 Desktop，也不会创建独立的 WebCodex 身份。
 
 WebCodex 可以在已注册的项目范围内读取和修改文件、执行命令。只注册确实要
@@ -55,15 +57,14 @@ WebCodex 可以在已注册的项目范围内读取和修改文件、执行命�
    启动 Tunnel 即可，不需要重启 WebCodex Desktop。
 6. **启动 Tunnel。**进入**连接 → OpenAI Secure Tunnel**，点击**启动**。
    看到“**OpenAI Secure Tunnel 已就绪，等待 ChatGPT 连接**”后再继续。
-7. **在 ChatGPT 网页版连接 WebCodex。**先切换到正确的工作空间，打开
+7. **在 ChatGPT 网页版连接个人 Desktop Tunnel。**先切换到正确的工作空间，打开
    [Plugins（插件）页面](https://chatgpt.com/plugins)。如果你有创建权限（Business 工作空间须为 **Owner/Admin**），点击 **+ → Add custom MCP server**，
    连接方式选 **Tunnel**，选择正确的 Tunnel 或点击 **Use tunnel ID instead**
    输入完整 ID；**Authentication** 选 **No Auth**；仅在信任当前安装时阅读并
    接受自定义 MCP 风险提示，再点击 **Create as a plugin**（旧界面可能是
    **Create**）、审查工具，并按提示连接/安装。当前 Plugins 流程**不要求先开启
    Developer Mode**；只有旧界面明确提示时才按提示操作。Business **普通成员**
-   应连接管理员提供的、集中管理的团队插件，而不是他人的个人 Desktop Tunnel，
-   详见[第 7 节](#chatgpt-business原-team工作空间接入前提)。
+   应跳过个人 Tunnel 步骤，改为[连接已批准的团队插件](#连接已批准的-business-工作空间插件)。
    不要把 Tunnel API key 填入 ChatGPT 网页版。如果 Tunnel 列表没有刷新，请核对
    OpenAI Tunnels 页面中的完整 ID。
 8. **从 ChatGPT 网页版验证完整链路。**发送：“列出 WebCodex 项目，然后列出
@@ -281,12 +282,26 @@ Business 的应用可用性主要在工作空间级管理；Enterprise/Edu 另�
 [自定义 MCP 服务器说明](https://help.openai.com/zh-hans-cn/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
 为准。
 
-### 创建或连接插件
+### 连接已批准的 Business 工作空间插件
 
-以下 **Tunnel + No Auth** 步骤仅用于有创建权限的用户配置**个人、同一所有者**
-Desktop 连接，**不会**为团队成员建立独立授权。使用集中部署的团队 Server 的
-Business 普通成员应直接连接获批的团队插件，按团队规定的方式完成个人认证，
-不要重新创建这套个人 Desktop Tunnel。
+如果管理员已发布由独立 Server 支撑的团队 WebCodex 插件，
+**无需执行前面的个人 Desktop/Tunnel 设置步骤**：
+
+1. 在 ChatGPT 网页版切换到目标 **Business 工作空间**，打开
+   [Plugins（插件）页面](https://chatgpt.com/plugins)。
+2. 找到工作空间管理员发布/批准的 WebCodex 插件。如果找不到或被禁用，
+   请联系管理员开放权限；不要用别人的 Desktop Tunnel 绕过限制。
+3. 按页面提示选择 **Connect/Install**，完成团队配置的认证（例如支持时使用
+   managed-user OAuth 或获授权的 PAT）。不得输入 Server bootstrap 凭据或借用他人账号。
+4. 按[最小验收](#8-最小验收)读取自己在 WebCodex 中有权访问的项目。
+
+此路径使用团队的 Server 和 Runners；ChatGPT 工作空间允许使用插件，
+不等于已获得 WebCodex 项目权限。
+
+### 创建个人 Desktop Tunnel 插件
+
+只有完成个人 Desktop/Tunnel 的第 1–6 步且拥有插件创建权限的用户，
+才执行下面的 **Tunnel + No Auth** 操作；这**不会**为团队成员建立独立授权。
 
 1. 在正确的工作空间打开 [ChatGPT 插件页面](https://chatgpt.com/plugins)。
 2. 点击 **+ → Add custom MCP server**（旧版界面可能显示 **Create a new plugin**）。
@@ -331,8 +346,9 @@ Business 工作空间的创建权限与 Tunnel 权限是两个独立前提。如
 ## 8. 最小验收
 
 连接后先做**一个最小、真实的项目读取**，例如：“列出 WebCodex 项目，然后列出
-我有权访问的某个项目的顶层文件；空目录请报告为空”。这一步成功，就证明基本的
-ChatGPT 网页版 → Tunnel → Server → Runner → Project 链路已经打通。
+我有权访问的某个项目的顶层文件；空目录请报告为空”。这一步成功，说明当前调用者的
+ChatGPT 网页版 → 已选 MCP 连接（个人 Tunnel 或团队连接）→ Server → Runner →
+Project 权限链路已经打通，并不代表其他工作空间成员也能访问。
 
 以下检查用于验证更多能力，均为可选：
 
@@ -345,7 +361,7 @@ ChatGPT 网页版 → Tunnel → Server → Runner → Project 链路已经打�
 只执行你确实需要并且理解其影响的检查，特别是会修改文件或使用 Computer Use
 的项目。
 
-如果 Desktop 看起来 Service / Runner / Project / Tunnel 都正常，但 ChatGPT 仍无法列项目或读取文件，**不要把本地全绿当作外部连接成功证据**。先检查 ChatGPT 中的 Tunnel ID 和连接配置，再回到 Desktop 的 Connection / Activity 查看最新状态。
+个人 Desktop Tunnel 场景下，如果 Desktop 看起来 Service / Runner / Project / Tunnel 都正常，但 ChatGPT 仍无法列项目或读取文件，**不要把本地全绿当作外部连接成功证据**。先检查 ChatGPT 中的 Tunnel ID 和连接配置，再回到 Desktop 的 Connection / Activity 查看最新状态。
 
 ## 常见问题
 

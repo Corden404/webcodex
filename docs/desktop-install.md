@@ -29,11 +29,12 @@ For a new **personal, same-owner** WebCodex Desktop/Tunnel setup, prepare:
 - access to the OpenAI Platform pages for creating a Tunnel and API key.
 
 **Already using a team-managed Business workspace plugin?** If your owner/admin
-has provided an approved plugin backed by a separately deployed, centrally
-managed WebCodex Server with appropriate per-user authorization, skip local
-setup steps 1–6. Connect that plugin in step 7 and verify an authorized project
-in step 8. Joining a workspace does not connect to your own Desktop or create
-an independent WebCodex identity.
+has provided an approved plugin backed by a centrally managed WebCodex Server
+with appropriate per-user authorization, **skip the personal Desktop/Tunnel
+steps 1–7**. Follow [Connect an approved Business workspace plugin](#connect-an-approved-business-workspace-plugin)
+and then [verify an authorized project](#8-minimal-acceptance-check).
+Joining a workspace does not connect to your own Desktop or create an
+independent WebCodex identity.
 
 WebCodex can read and modify files and run commands inside registered project
 boundaries. Register only directories you intend to expose, review tool calls,
@@ -66,7 +67,7 @@ issues, and shared logs.
 6. **Start the Tunnel.** Open **Connections → OpenAI Secure Tunnel** and select
    **Start**. Continue only after WebCodex Desktop reports
    **OpenAI Secure Tunnel ready; waiting for ChatGPT**.
-7. **Connect WebCodex in ChatGPT Web.** Select the correct workspace and open
+7. **Connect your private personal Desktop Tunnel in ChatGPT Web.** Select the correct workspace and open
    the [Plugins page](https://chatgpt.com/plugins). If you have permission to
    create a plugin (for Business, this requires **Owner/Admin**), select
    **+ → Add custom MCP server**, choose **Tunnel**, and select the right Tunnel
@@ -75,9 +76,9 @@ issues, and shared logs.
    **Create as a plugin** (or **Create** in older interfaces), review its tools,
    and connect/install it as prompted. The current Plugins flow does **not**
    require enabling Developer Mode first; follow a legacy interface's explicit
-   prompt if one appears. Business **members** should instead connect the
-   approved, centrally managed team plugin provided by their owner/admin,
-   not someone else's personal Desktop Tunnel; see [section 7](#chatgpt-business-formerly-team-workspaces).
+   prompt if one appears. Business **members** should skip this personal Tunnel
+   step and follow [the approved team plugin flow](#connect-an-approved-business-workspace-plugin)
+   instead.
    Never paste the Tunnel API key into ChatGPT Web. If the Tunnel list looks
    stale, compare the full ID with the OpenAI Tunnels page.
 8. **Verify the complete path from ChatGPT Web.** Send: “List the WebCodex
@@ -317,13 +318,30 @@ plugin availability or sharing is **not** WebCodex per-user authorization.
 For creation and publication rules, see OpenAI's
 [custom MCP server guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
 
-### Create or connect the plugin
+### Connect an approved Business workspace plugin
 
-The following **Tunnel + No Auth** steps create a **personal, same-owner**
-Desktop connection for an authorized plugin creator. They do not configure
-team/member authorization. Business members using a separately deployed team
-Server should connect its approved plugin with the team's specified
-per-user authentication instead of recreating this Desktop Tunnel.
+If your admin has published a team-managed WebCodex plugin backed by a
+separately deployed Server, **do not follow the personal Desktop/Tunnel steps**:
+
+1. Select the intended **Business workspace** in ChatGPT Web and open
+   [Plugins](https://chatgpt.com/plugins).
+2. Find the WebCodex plugin published/approved by your workspace admin.
+   If it is missing or disabled, ask the admin to enable it; do not use
+   another person's Desktop Tunnel as a workaround.
+3. Select **Connect/Install** as prompted and complete the team's configured
+   authentication (such as managed-user OAuth or an authorized PAT where
+   supported). Never enter the Server bootstrap token or someone else's credentials.
+4. Run the [minimal acceptance check](#8-minimal-acceptance-check) with a
+   project your WebCodex identity is authorized to access.
+
+This path uses the team's Server and Runners; ChatGPT plugin availability
+alone does not grant WebCodex project permissions.
+
+### Create a personal Desktop Tunnel plugin
+
+Only follow these **Tunnel + No Auth** steps after completing personal
+Desktop/Tunnel setup steps 1–6, as an authorized plugin creator. They do not
+configure team/member authorization.
 
 1. In the correct workspace, open the [ChatGPT Plugins page](https://chatgpt.com/plugins).
 2. Select **+ → Add custom MCP server** (older interfaces may say
@@ -367,8 +385,10 @@ After saving the connector in ChatGPT Web, return to WebCodex Desktop. Saving a 
 
 After connecting, start with **one minimal real project read**, for example:
 “List the WebCodex projects, then list the top-level files in a project I am
-authorized to access; report an empty directory as empty.” If it succeeds, the basic
-ChatGPT Web → Tunnel → Server → Runner → Project path is working.
+authorized to access; report an empty directory as empty.” If it succeeds,
+ChatGPT Web → the chosen MCP connection (personal Tunnel or team connection) →
+Server → Runner → Project access works for this caller, not necessarily for
+other workspace members.
 
 The following checks are optional and exercise additional capabilities:
 
@@ -381,7 +401,7 @@ The following checks are optional and exercise additional capabilities:
 Run only the checks you need and understand, especially those that modify files
 or use Computer Use.
 
-If Desktop shows a healthy Service / Runner / Project / Tunnel but ChatGPT still cannot list projects or read a file, do **not** treat local green status as proof of an external connection. Recheck the Tunnel ID and ChatGPT connection configuration, then inspect Desktop Connection / Activity for the latest state.
+For a personal Desktop Tunnel, if Desktop shows healthy Service / Runner / Project / Tunnel status but ChatGPT still cannot list projects or read a file, do **not** treat local green status as proof of an external connection. Recheck the Tunnel ID and ChatGPT connection configuration, then inspect Desktop Connection / Activity for the latest state.
 
 ## Troubleshooting
 
