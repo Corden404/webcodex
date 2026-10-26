@@ -1706,7 +1706,11 @@ fn mcp_tools_list_inputs_equal_canonical_except_descriptions_and_host_file_overl
                 expected["properties"]["openaiFileIdRefs"]["items"]["required"] =
                     json!(["download_url", "file_id"]);
             }
-            let mut expected_description = canonical.description.clone();
+            let mut expected_description = if name == "work_on_project" {
+                crate::mcp::discovery::bootstrap_description(false)
+            } else {
+                canonical.description.clone()
+            };
             if name == "get_runtime_status" {
                 assert_eq!(expected["properties"]["compact"]["default"], false);
                 expected["properties"]["compact"]["default"] = json!(true);
@@ -1829,7 +1833,12 @@ async fn mcp_compact_preserves_stateless_wrappers_app_metadata_and_exact_manifes
         };
         let output = &value["result"]["structuredContent"]["output"];
         let canonical = specs.iter().find(|spec| spec.name == name).unwrap();
-        assert_eq!(output["description"], canonical.description, "{name}");
+        let expected_description = if name == "work_on_project" {
+            crate::mcp::discovery::bootstrap_description(true)
+        } else {
+            canonical.description.clone()
+        };
+        assert_eq!(output["description"], expected_description, "{name}");
         assert_eq!(output["input_schema"], canonical.input_schema, "{name}");
         assert!(
             output.get("output_schema").is_none(),
@@ -2528,9 +2537,22 @@ fn mcp_compact_descriptions_preserve_selection_and_schema_literals() {
         }
     }
     for tool in tools {
-        assert!(
-            tool["description"].as_str().unwrap().chars().count() <= TOOL_DESCRIPTION_MAX_CHARS
-        );
+        if tool["name"] == "work_on_project" {
+            let canonical = webcodex_tool_contracts::lookup_tool_definition("work_on_project")
+                .unwrap()
+                .model_spec
+                .unwrap()
+                .description;
+            assert!(tool["description"].as_str().unwrap().starts_with(canonical));
+            assert_eq!(
+                tool["description"],
+                crate::mcp::discovery::bootstrap_description(false)
+            );
+        } else {
+            assert!(
+                tool["description"].as_str().unwrap().chars().count() <= TOOL_DESCRIPTION_MAX_CHARS
+            );
+        }
     }
     assert!(description_chars(&compact) < description_chars(&full));
     let long = "Read foo.rs with v0.4.0. ".to_string() + &"Additional detail. ".repeat(100);
@@ -4492,33 +4514,15 @@ async fn mcp_2026_control_sidecars_require_reviewed_operations_and_keep_closed_s
     );
 }
 
-#[test]
-fn compact_bootstrap_description_teaches_explicit_context_and_reuse() {
-    use crate::mcp::discovery::compact_tool;
-    let mut tool = json!({"name": "work_on_project", "description": "placeholder", "inputSchema": {"properties":{"_wc":{}}}});
-    compact_tool(&mut tool);
-    let description = tool["description"].as_str().unwrap();
-    for phrase in [
-        "_wc.context=[\"project.instructions\",\"webcodex.workflow\"]",
-        "project.instructions includes AGENTS.md/CLAUDE.md",
-        "Reuse complete instructions",
-        "branch/HEAD/status",
-        "semantic navigation",
-        "sufficient catalogs",
-        "stale/incomplete",
-    ] {
-        assert!(
-            description.contains(phrase),
-            "missing {phrase}: {description}"
-        );
-    }
-    assert!(!description.contains("Defaults return"));
-    assert!(!description.contains("context_request"));
-}
-
 #[tokio::test]
-async fn compact_bootstrap_guidance_matches_advertised_context_capability() {
+async fn compact_bootstrap_reuses_canonical_description_with_request_local_context_schema() {
     let runtime = test_runtime_with_mcp_settings(true, false);
+    let canonical = webcodex_tool_contracts::lookup_tool_definition("work_on_project")
+        .unwrap()
+        .model_spec
+        .unwrap()
+        .description;
+    let schema = webcodex_tool_contracts::input_schema_for_tool("work_on_project");
     for modern in [false, true] {
         let params = if modern {
             mcp_2026_params(json!({}))
@@ -4541,24 +4545,33 @@ async fn compact_bootstrap_guidance_matches_advertised_context_capability() {
             modern
         );
         let description = tool["description"].as_str().unwrap();
-        assert!(description.contains(if modern {
-            "File/data/diagnostic/coding work"
-        } else {
-            "file, data, diagnostic or coding work"
-        }));
-        assert!(description.contains("Git optional"));
-        assert!(description.contains("session_id"));
-        assert!(description.contains("stale/incomplete"));
+        assert!(description.starts_with(canonical));
+        assert_eq!(
+            description,
+            crate::mcp::discovery::bootstrap_description(modern)
+        );
         assert_eq!(description.contains("_wc.context"), modern);
-        let extension_description = tool["inputSchema"]["properties"]["include_extension_catalog"]
-            ["description"]
-            .as_str()
-            .expect("compact extension catalog guidance");
-        assert!(extension_description.contains("Catalog true fresh/first Project"));
-        assert!(extension_description.contains("complete/sufficient retained catalog"));
-        if !modern {
-            assert!(description.contains("read_files"));
-        }
+        assert_eq!(description.contains("read_files"), !modern);
+        let arguments =
+            json!({"name":"read_tool_manifest","arguments":{"tool_name":"work_on_project"}});
+        let params = if modern {
+            mcp_2026_params(arguments)
+        } else {
+            arguments
+        };
+        let McpOutcome::Ok(manifest) =
+            handle_mcp_request(&runtime, rpc("tools/call", Some(json!(8001)), params), None).await
+        else {
+            panic!("exact bootstrap Manifest");
+        };
+        assert_eq!(
+            manifest["result"]["structuredContent"]["output"]["description"],
+            description
+        );
+        assert_eq!(
+            tool["inputSchema"]["properties"]["include_extension_catalog"]["default"],
+            schema["properties"]["include_extension_catalog"]["default"]
+        );
     }
 }
 
@@ -4596,7 +4609,14 @@ async fn mcp_compact_general_workflow_preserves_recovery_and_business_schemas() 
             let full = lists[0].iter().find(|tool| tool["name"] == name).unwrap();
             let compact = lists[1].iter().find(|tool| tool["name"] == name).unwrap();
             let description = compact["description"].as_str().unwrap();
-            assert!(description.chars().count() <= TOOL_DESCRIPTION_MAX_CHARS);
+            if name == "work_on_project" {
+                assert_eq!(
+                    description,
+                    crate::mcp::discovery::bootstrap_description(modern)
+                );
+            } else {
+                assert!(description.chars().count() <= TOOL_DESCRIPTION_MAX_CHARS);
+            }
             assert_eq!(compact["annotations"], full["annotations"], "{name}");
             let mut schemas = [full["inputSchema"].clone(), compact["inputSchema"].clone()];
             for schema in &mut schemas {
