@@ -4,11 +4,27 @@ export { RUNTIME_LANGUAGES, type RuntimeLanguage } from "./runtime_locales.js";
 export const LANGUAGE_STORAGE_KEY = "webcodex.runtime.language.v1";
 
 export const RUNTIME_ZH_TEXT: Record<string, string> = {
-  "First observed": "首次记录",
+  "Named": "已命名",
+  "Window name": "窗口名称",
+  "Rename Window": "重命名窗口",
+  "Clear name": "清除名称",
+  "You do not have permission to rename this Window.": "你没有权限重命名这个窗口。",
+  "This Window is no longer visible.": "这个窗口已不可见。",
+  "This Window has no recorded activity yet. Retry after its next call.": "这个窗口还没有已记录的调用，请在它下一次调用完成后再试。",
+  "Could not save the name. Please retry.": "无法保存名称，请重试。",
+  "Within 10 minutes": "10 分钟内",
+  "Today": "今天",
+  "Earlier": "更早",
+  "All": "全部",
+  "Filter": "筛选",
+  "Synced": "已同步",
+  "Resize window list": "调整窗口列表宽度",
+  "Name": "名称",
+  "Last active": "最近活跃",
+  "IDs": "标识符",
+  "Back": "返回",
   "Last request activity": "最近请求活动",
-  "Last meaningful activity": "最近有效活动",
   "Window ID": "窗口 ID",
-  "Runner ID": "机器 ID",
   "Project ID": "项目 ID",
   "Loading Agents…": "正在加载 Agent…",
   "Agents could not be loaded. Refresh to retry.": "Agent 加载失败，请刷新重试。",
@@ -1114,7 +1130,6 @@ Object.assign(RUNTIME_ZH_TEXT, {
 
 Object.assign(RUNTIME_ZH_TEXT, {
   "Activity": "活动",
-  "Live work": "实时工作",
   "Project filter": "项目筛选",
   "All project workspaces": "全部项目",
   "Search Windows": "搜索窗口",
@@ -1187,7 +1202,6 @@ Object.assign(RUNTIME_ZH_TEXT, {
 });
 
 Object.assign(RUNTIME_ZH_TEXT, {
-  "Project information unavailable": "暂无项目信息",
   "Completed": "已完成",
   "Runner unavailable": "执行端信息暂不可用",
   "Search windows or projects…": "搜索窗口或项目…",
