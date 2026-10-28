@@ -48,64 +48,135 @@ async fn computer_letter_shortcuts_require_both_capabilities_before_enqueue() {
 }
 
 #[tokio::test]
-async fn computer_letter_shortcuts_recheck_access_and_capabilities_at_dequeue() {
-    for change in ["owner", "key_input", "letters", "instance"] {
-        let registry = RunnerRegistry::default();
-        let mut registration = runner_registration("letters", "instance", Vec::new());
-        registration.owner = Some("alice".into());
-        registration.capabilities.computer_key_input = true;
-        registration.capabilities.computer_letter_shortcuts = true;
-        registry
-            .register(current_runner_registration(registration.clone()))
-            .await
-            .unwrap();
-        let access = auth_context(Some("alice"), false);
-        let (_, rx) = registry
+async fn computer_key_chords_recheck_access_and_capabilities_at_dequeue() {
+    for (key, modifiers, capability) in [
+        ("j", vec!["control"], RunnerFeature::ComputerLetterShortcuts),
+        (
+            "p",
+            vec!["control", "shift"],
+            RunnerFeature::ComputerKeyChords,
+        ),
+    ] {
+        for change in ["owner", "key_input", "extension", "instance"] {
+            let registry = RunnerRegistry::default();
+            let mut registration = runner_registration("letters", "instance", Vec::new());
+            registration.owner = Some("alice".into());
+            registration.capabilities.computer_key_input = true;
+            registration.capabilities.set(capability, true);
+            registry
+                .register(current_runner_registration(registration.clone()))
+                .await
+                .unwrap();
+            let access = auth_context(Some("alice"), false);
+            let (_, rx) = registry
             .enqueue_computer(
                 "letters".into(),
                 "computer_key_input",
-                r#"{"surface_id":"surface_test","key":"j","modifiers":["control"]}"#.into(),
+                serde_json::json!({"surface_id":"surface_test", "key":key, "modifiers":modifiers}).to_string(),
                 "alice".into(),
                 Some(&access),
                 5,
             )
             .await
             .unwrap();
-        match change {
-            "owner" => registration.owner = Some("bob".into()),
-            "key_input" => registration.capabilities.computer_key_input = false,
-            "instance" => registration.runner_instance_id = "replacement".into(),
-            _ => registration.capabilities.computer_letter_shortcuts = false,
-        }
-        registry
-            .register(current_runner_registration(registration))
-            .await
-            .unwrap();
-        assert!(registry
-            .poll(RunnerPollRequest {
-                client_id: "letters".into(),
-                runner_instance_id: if change == "instance" {
-                    "replacement"
-                } else {
-                    "instance"
-                }
-                .into()
-            })
-            .await
-            .unwrap()
-            .is_none());
-        let response = rx.await.unwrap();
-        assert_eq!(response.request_dispatched, Some(false));
-        assert!(response.error.unwrap().starts_with(match change {
+            match change {
+                "owner" => registration.owner = Some("bob".into()),
+                "key_input" => registration.capabilities.computer_key_input = false,
+                "instance" => registration.runner_instance_id = "replacement".into(),
+                _ => registration.capabilities.set(capability, false),
+            }
+            registry
+                .register(current_runner_registration(registration))
+                .await
+                .unwrap();
+            assert!(registry
+                .poll(RunnerPollRequest {
+                    client_id: "letters".into(),
+                    runner_instance_id: if change == "instance" {
+                        "replacement"
+                    } else {
+                        "instance"
+                    }
+                    .into()
+                })
+                .await
+                .unwrap()
+                .is_none());
+            let response = rx.await.unwrap();
+            assert_eq!(response.request_dispatched, Some(false));
+            assert!(response.error.unwrap().starts_with(match change {
             "owner" => "client_access_denied:",
             "instance" => "runner instance was replaced before the request completed; the request was not handed to the replacement instance",
             _ => "capability_unavailable:",
         }));
+        }
     }
 }
 
 #[tokio::test]
-async fn computer_letter_shortcuts_reject_stale_instances_and_invalid_chords() {
+async fn computer_general_chords_require_the_new_capability_before_enqueue() {
+    for mask in 0..8 {
+        for (key, modifiers) in [
+            ("a", vec!["control"]),
+            ("p", vec!["control", "shift"]),
+            ("j", vec!["control"]),
+            ("p", vec!["control"]),
+            ("f5", vec![]),
+            ("slash", vec!["control"]),
+            ("numpad_1", vec!["option"]),
+        ] {
+            let registry = RunnerRegistry::default();
+            let mut registration = runner_registration("chords", "instance", Vec::new());
+            registration.owner = Some("alice".into());
+            registration.capabilities.computer_key_input = mask & 1 != 0;
+            registration.capabilities.computer_letter_shortcuts = mask & 2 != 0;
+            registration.capabilities.computer_key_chords = mask & 4 != 0;
+            registry
+                .register(current_runner_registration(registration))
+                .await
+                .unwrap();
+            let access = auth_context(Some("alice"), false);
+            let payload = serde_json::json!({"surface_id":"surface_test", "key":key,
+                "modifiers":modifiers})
+            .to_string();
+            let result = registry
+                .enqueue_computer(
+                    "chords".into(),
+                    "computer_key_input",
+                    payload.clone(),
+                    "alice".into(),
+                    Some(&access),
+                    5,
+                )
+                .await;
+            let legacy = matches!(key, "j" | "p") && modifiers == ["control"];
+            let accepted = mask & 1 != 0 && (mask & 4 != 0 || (legacy && mask & 2 != 0));
+            assert_eq!(result.is_ok(), accepted, "{key} {modifiers:?} mask={mask}");
+            let request = registry
+                .poll(RunnerPollRequest {
+                    client_id: "chords".into(),
+                    runner_instance_id: "instance".into(),
+                })
+                .await
+                .unwrap();
+            if accepted {
+                assert_eq!(request.unwrap().stdin.as_deref(), Some(payload.as_str()));
+            } else {
+                assert!(request.is_none());
+                assert!(result.unwrap_err().contains(if mask & 1 == 0 {
+                    "computer_key_input"
+                } else if legacy {
+                    "computer_letter_shortcuts"
+                } else {
+                    "computer_key_chords"
+                }));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn computer_letter_shortcuts_reject_stale_instances_and_unsupported_chords() {
     let registry = RunnerRegistry::default();
     let mut registration = runner_registration("letters", "new-instance", Vec::new());
     registration.owner = Some("alice".into());
@@ -138,17 +209,25 @@ async fn computer_letter_shortcuts_reject_stale_instances_and_invalid_chords() {
         let payload =
             serde_json::json!({"surface_id":"surface_test", "key":"p", "modifiers":modifiers})
                 .to_string();
-        assert!(registry
+        let error = registry
             .enqueue_computer(
                 "letters".into(),
                 "computer_key_input",
                 payload,
                 "alice".into(),
                 Some(&access),
-                5
+                5,
             )
             .await
-            .is_err());
+            .unwrap_err();
+        assert!(
+            error.contains(if modifiers.is_null() {
+                "invalid computer key input payload"
+            } else {
+                "computer_key_chords"
+            }),
+            "{error}"
+        );
     }
     assert!(registry
         .poll(RunnerPollRequest {

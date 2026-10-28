@@ -2557,11 +2557,7 @@ impl RunnerRegistry {
             "computer_element_state" => &[RunnerFeature::ComputerElementState],
             "computer_control" => &[RunnerFeature::ComputerControl],
             "computer_scroll_to_element" => &[RunnerFeature::ComputerScrollToElement],
-            "computer_key_input" => {
-                webcodex_core::computer_input_contract::computer_key_input_capabilities(
-                    &key_input.as_ref().expect("key payload validated").key,
-                )
-            }
+            "computer_key_input" => &[RunnerFeature::ComputerKeyInput],
             "computer_pointer_move" | "computer_pointer_click" => {
                 &[RunnerFeature::ComputerPointerControl]
             }
@@ -2590,14 +2586,17 @@ impl RunnerRegistry {
             .get(&client_id)
             .ok_or_else(|| format!("unknown shell client: {client_id}"))?;
         assert_runner_access(auth, current)?;
-        let letter_instance = key_input
+        let required_features = key_input.as_ref().map_or(required_features, |input| {
+            webcodex_core::computer_input_contract::computer_key_input_capabilities(
+                &input.key,
+                &input.modifiers,
+                current.supports(RunnerFeature::ComputerKeyChords),
+            )
+        });
+        let key_instance = key_input
             .as_ref()
-            .filter(|input| {
-                webcodex_core::computer_input_contract::is_computer_letter_shortcut(&input.key)
-            })
             .map(|_| current.runner_instance_id.clone());
-        let expected_runner_instance_id =
-            expected_runner_instance_id.or(letter_instance.as_deref());
+        let expected_runner_instance_id = expected_runner_instance_id.or(key_instance.as_deref());
         if let Some(expected) = expected_runner_instance_id {
             if expected.is_empty() || current.runner_instance_id != expected {
                 return Err(

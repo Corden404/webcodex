@@ -718,7 +718,7 @@ fn computer_windows_key_input_native_plan_is_closed_and_releases_modifiers_in_re
             "{key}"
         );
     }
-    assert!(platform::test_windows_key_input_plan("a", &[]).is_err());
+    assert!(platform::test_windows_key_input_plan("unknown", &[]).is_err());
 
     let option = platform::test_windows_key_input_plan("arrow_left", &["option".to_string()])
         .expect("Windows option modifier must map to Alt for exact-surface chords");
@@ -791,7 +791,12 @@ fn computer_windows_key_input_letter_chords_have_complete_bounded_sequences() {
             vec!["control".into(), "shift".into()],
             vec!["control".into(), "option".into()],
         ] {
-            assert!(platform::test_windows_key_input_plan(key, &modifiers).is_err());
+            assert_eq!(
+                platform::test_windows_key_input_plan(key, &modifiers).is_ok(),
+                !modifiers
+                    .iter()
+                    .any(|modifier: &String| modifier == "command")
+            );
         }
         for held in [vk, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C] {
             assert!(platform::test_windows_keyboard_state_guard(key, Some(held)).is_err());
@@ -804,6 +809,85 @@ fn computer_windows_key_input_letter_chords_have_complete_bounded_sequences() {
         assert!(platform::test_windows_send_input_count(0, 4)
             .unwrap_err()
             .starts_with("key_input_failed:"));
+    }
+}
+
+#[test]
+fn computer_windows_general_chords_have_bounded_balanced_native_plans() {
+    for key in webcodex_core::computer_input_contract::computer_key_input_keys() {
+        for mask in 0..8 {
+            let modifiers: Vec<_> = ["shift", "control", "option"]
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, name)| (*name).to_string())
+                .collect();
+            let blocked = (modifiers.iter().any(|m| m == "option")
+                && matches!(key, "tab" | "escape"))
+                || (modifiers.iter().any(|m| m == "control") && key == "escape")
+                || (key == "delete"
+                    && modifiers.iter().any(|m| m == "control")
+                    && modifiers.iter().any(|m| m == "option"));
+            let result = platform::test_windows_key_input_plan(key, &modifiers);
+            if blocked {
+                assert!(result.unwrap_err().starts_with("key_input_failed:"));
+                continue;
+            }
+            let plan = result.unwrap_or_else(|error| panic!("{key} {modifiers:?}: {error}"));
+            assert_eq!(plan.len(), 2 * modifiers.len() + 2);
+            assert!(plan.len() <= 8);
+            for index in 0..plan.len() / 2 {
+                let down = plan[index];
+                let up = plan[plan.len() - 1 - index];
+                assert!(!down.1);
+                assert!(up.1);
+                assert_eq!((down.0, down.2), (up.0, up.2), "{key} {modifiers:?}");
+            }
+        }
+        let native_key = platform::test_windows_key_input_plan(key, &[]).unwrap()[0].0;
+        assert!(platform::test_windows_keyboard_state_guard(key, Some(native_key)).is_err());
+    }
+    for (key, vk, extended) in [
+        ("a", 0x41, false),
+        ("z", 0x5A, false),
+        ("0", 0x30, false),
+        ("9", 0x39, false),
+        ("f1", 0x70, false),
+        ("f24", 0x87, false),
+        ("space", 0x20, false),
+        ("backspace", 0x08, false),
+        ("delete", 0x2E, true),
+        ("insert", 0x2D, true),
+        ("semicolon", 0xBA, false),
+        ("equal", 0xBB, false),
+        ("comma", 0xBC, false),
+        ("minus", 0xBD, false),
+        ("period", 0xBE, false),
+        ("slash", 0xBF, false),
+        ("backquote", 0xC0, false),
+        ("left_bracket", 0xDB, false),
+        ("backslash", 0xDC, false),
+        ("right_bracket", 0xDD, false),
+        ("quote", 0xDE, false),
+        ("numpad_0", 0x60, false),
+        ("numpad_9", 0x69, false),
+        ("numpad_add", 0x6B, false),
+        ("numpad_subtract", 0x6D, false),
+        ("numpad_multiply", 0x6A, false),
+        ("numpad_divide", 0x6F, true),
+        ("numpad_decimal", 0x6E, false),
+        ("numpad_enter", 0x0D, true),
+    ] {
+        assert_eq!(
+            platform::test_windows_key_input_plan(key, &[]).unwrap(),
+            vec![(vk, false, extended), (vk, true, extended)],
+            "{key}"
+        );
+    }
+    for inserted in 1..8 {
+        assert!(platform::test_windows_send_input_count(inserted, 8)
+            .unwrap_err()
+            .starts_with("outcome_unknown:"));
     }
 }
 
