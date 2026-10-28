@@ -222,6 +222,7 @@ fn computer_control_schema_is_closed_action_union() {
         "launch_application",
         "activate_window",
         "press",
+        "select",
         "focus",
         "scroll_to_element",
         "key",
@@ -561,4 +562,29 @@ fn computer_save_snapshot_remains_separate_create_only_project_write() {
         present: ["project", "path", "client_id", "surface_id", "source_width", "source_height", "region", "width", "height", "mime_type", "file_bytes", "sha256", "saved"],
         absent: ["content_base64", "captured_at_unix_ms"]
     );
+}
+
+#[test]
+fn computer_selection_has_one_exact_target_and_no_implicit_effects() {
+    let specs = registered_tool_specs();
+    let spec = spec_named(&specs, "control_computer");
+    let args = json!({"action":"select","client_id":"runner","surface_id":"surface_test","element_id":"element_test"});
+    test_support::validate_schema_instance(&args, &spec.input_schema).unwrap();
+    let call = ToolCall::from_tool_name("control_computer", args.clone()).unwrap();
+    let ToolCall::ComputerControl(control) = call else {
+        panic!("selection control")
+    };
+    assert_eq!(control.action_name(), "select");
+    assert_eq!(serde_json::to_value(control).unwrap(), args);
+    for field in ["observe_after", "index", "label", "add", "toggle"] {
+        let mut extra = args.clone();
+        extra[field] = json!(true);
+        assert!(ToolCall::from_tool_name("control_computer", extra.clone()).is_err());
+        assert!(test_support::validate_schema_instance(&extra, &spec.input_schema).is_err());
+    }
+    for field in ["client_id", "surface_id", "element_id"] {
+        let mut missing = args.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(ToolCall::from_tool_name("control_computer", missing).is_err());
+    }
 }

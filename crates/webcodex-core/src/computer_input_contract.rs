@@ -124,3 +124,42 @@ pub fn computer_key_modifiers_schema(_: &mut schemars::SchemaGenerator) -> schem
         ]
     })
 }
+
+/// Additional effects on the existing Computer control operation are capability gated.
+pub fn computer_control_capabilities(action: &str) -> &'static [RunnerCapabilityId] {
+    if action == "select" {
+        &[
+            RunnerCapabilityId::ComputerControl,
+            RunnerCapabilityId::ComputerSelection,
+        ]
+    } else {
+        &[RunnerCapabilityId::ComputerControl]
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use crate::runner_protocol::RunnerCapabilities;
+    #[test]
+    fn computer_selection_is_an_additive_capability() {
+        let old: RunnerCapabilities = serde_json::from_str(r#"{"computer_control":true}"#).unwrap();
+        assert!(!old.computer_selection);
+        assert!(!RunnerCapabilities::default().computer_selection);
+        let new: RunnerCapabilities =
+            serde_json::from_str(r#"{"computer_selection":true}"#).unwrap();
+        assert!(new.supports(RunnerCapabilityId::ComputerSelection));
+        assert!(!new.computer_control);
+        assert_eq!(
+            computer_control_capabilities("select"),
+            &[
+                RunnerCapabilityId::ComputerControl,
+                RunnerCapabilityId::ComputerSelection
+            ]
+        );
+        assert_eq!(
+            computer_control_capabilities("press"),
+            &[RunnerCapabilityId::ComputerControl]
+        );
+    }
+}

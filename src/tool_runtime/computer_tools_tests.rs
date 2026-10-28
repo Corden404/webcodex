@@ -2109,3 +2109,50 @@ fn computer_snapshot_validator_attaches_exact_client_id() {
     assert!(result.success);
     assert_eq!(result.output["client_id"], "msi");
 }
+
+#[test]
+fn computer_selection_state_preserves_unknown_and_rejects_inconsistent_facts() {
+    let old = json!({"platform":"windows", "surface_id":"surface_test", "element_id":"element_test",
+        "observation_generation":1,"enabled":true,"focused":false,"protected":false,
+        "value_empty":null,"can_press":false,"can_focus":false,"can_input_text":false});
+    let result = validate_computer_element_state(old.clone(), "surface_test", "element_test");
+    assert!(result.success);
+    assert!(result.output.get("can_select").is_none());
+    assert!(result.output.get("selected").is_none());
+    let mut current = old;
+    current["can_select"] = json!(true);
+    current["selected"] = json!(false);
+    assert!(
+        validate_computer_element_state(current.clone(), "surface_test", "element_test").success
+    );
+    for (field, value) in [
+        ("enabled", json!(false)),
+        ("protected", json!(true)),
+        ("selected", json!(null)),
+        ("can_select", json!("true")),
+        ("platform", json!("macos")),
+    ] {
+        let mut invalid = current.clone();
+        invalid[field] = value;
+        assert!(!validate_computer_element_state(invalid, "surface_test", "element_test").success);
+    }
+    current.as_object_mut().unwrap().remove("selected");
+    assert!(!validate_computer_element_state(current, "surface_test", "element_test").success);
+}
+
+#[test]
+fn computer_selection_uses_control_authority_without_implicit_read_or_launch() {
+    let call = ComputerControlToolCall::Select {
+        client_id: "runner".into(),
+        surface_id: "surface_test".into(),
+        element_id: "element_test".into(),
+    };
+    let policy = computer_control_policy(&call);
+    let read = computer_auth(&[SCOPE_COMPUTER_READ]);
+    assert_eq!(
+        policy.authority.first_missing(Some(&read)),
+        Some(SCOPE_COMPUTER_CONTROL)
+    );
+    let control = computer_auth(&[SCOPE_COMPUTER_CONTROL]);
+    assert_eq!(policy.authority.first_missing(Some(&control)), None);
+}
