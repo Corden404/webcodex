@@ -1416,18 +1416,17 @@ pub enum ComputerControlToolCall {
         #[schemars(length(min = 1, max = 128))]
         element_id: String,
     },
-    #[schemars(extend("allOf" = webcodex_core::computer_input_contract::computer_key_chord_constraints()))]
     Key {
         #[schemars(length(min = 1, max = 128))]
         client_id: String,
         #[schemars(length(min = 1, max = 128))]
         surface_id: String,
-        /// Exact lowercase navigation key, or Windows-only j/p with exactly modifiers=[control].
+        /// Exact canonical key name; Windows supports general single-key chords.
         /// Shortcut strings such as Ctrl+P are unsupported. The exact surface must already be foreground/focused.
         #[schemars(schema_with = "webcodex_core::computer_input_contract::computer_key_schema")]
         key: String,
         /// Unique canonical modifiers; omission/null means none. Windows maps option to Alt, rejects
-        /// command, option+Tab, option+Escape, and any control+Escape chord. macOS uses the named
+        /// command, option+Tab, option+Escape, control+Escape and control+option+Delete. macOS uses the named
         /// Shift/Control/Option/Command flags. Held/interfering keys can fail native preflight.
         #[schemars(schema_with = "webcodex_core::computer_input_contract::computer_key_modifiers_schema")]
         #[serde(default)]

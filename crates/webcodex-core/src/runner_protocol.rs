@@ -1088,6 +1088,13 @@ runner_capabilities! {
         #[serde(default, skip_serializing_if = "is_false")]
         pub computer_letter_shortcuts: bool = false;
     }
+    /// General Windows single-key chords; neither navigation nor the legacy
+    /// Ctrl+J/Ctrl+P capability implies this larger vocabulary or chord set.
+    ComputerKeyChords => RUNNER_CAPABILITY_COMPUTER_KEY_CHORDS("computer_key_chords"),
+    v2_baseline = false {
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub computer_key_chords: bool = false;
+    }
     /// Native exact-window activation/raise. Missing on older Runners is false and
     /// is never inferred from accessibility control, observation, or platform.
     ComputerWindowActivate => RUNNER_CAPABILITY_COMPUTER_WINDOW_ACTIVATE("computer_window_activate"),
@@ -2994,6 +3001,7 @@ mod envelope_tests {
                 computer_key_input: false,
                 computer_selection: false,
                 computer_letter_shortcuts: false,
+                computer_key_chords: false,
                 computer_window_activate: false,
                 computer_text_input: false,
                 job_state_reconciliation: false,
@@ -3352,6 +3360,24 @@ mod envelope_tests {
         assert_eq!(
             RunnerCapabilityId::from_wire_name("computer_letter_shortcuts"),
             Some(RunnerCapabilityId::ComputerLetterShortcuts)
+        );
+    }
+
+    #[test]
+    fn computer_key_chords_capability_is_not_implied_by_legacy_keys() {
+        let legacy: RunnerCapabilities =
+            serde_json::from_str(r#"{"computer_key_input":true,"computer_letter_shortcuts":true}"#)
+                .unwrap();
+        assert!(!legacy.computer_key_chords);
+        let chords: RunnerCapabilities =
+            serde_json::from_str(r#"{"computer_key_chords":true}"#).unwrap();
+        assert!(chords.supports(RunnerCapabilityId::ComputerKeyChords));
+        assert!(!chords.computer_key_input);
+        assert!(!chords.computer_letter_shortcuts);
+        assert!(!RunnerCapabilities::default().computer_key_chords);
+        assert_eq!(
+            RunnerCapabilityId::from_wire_name("computer_key_chords"),
+            Some(RunnerCapabilityId::ComputerKeyChords)
         );
     }
 

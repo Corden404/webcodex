@@ -3012,12 +3012,12 @@ mod key_input_runtime_tests {
             .iter()
             .map(|modifier| modifier.to_string())
             .collect::<Vec<_>>();
-        for key in COMPUTER_KEY_INPUT_KEYS {
+        for key in webcodex_core::computer_input_contract::computer_key_input_keys() {
             assert!(validate_key_input(key, &[]).is_ok());
             assert!(validate_key_input(key, &modifiers).is_ok());
         }
         assert!(validate_key_input("tab", &["shift".to_string()]).is_ok());
-        assert!(validate_key_input("a", &[]).is_err());
+        assert!(validate_key_input("unknown", &[]).is_err());
         assert!(validate_key_input("enter", &["shift".to_string(), "shift".to_string()]).is_err());
     }
 }

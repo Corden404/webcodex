@@ -175,7 +175,7 @@ impl PendingDispatchFence {
                                 "invalid_request: invalid computer key input chord".into(),
                             );
                         }
-                        return webcodex_core::computer_input_contract::computer_key_input_capabilities(&input.key)
+                        return webcodex_core::computer_input_contract::computer_key_input_capabilities(&input.key, &input.modifiers, runner.supports(RunnerFeature::ComputerKeyChords))
                             .iter().any(|feature| !runner.supports(*feature))
                             .then(|| "capability_unavailable: Computer key input capability changed before dispatch".into());
                     }
