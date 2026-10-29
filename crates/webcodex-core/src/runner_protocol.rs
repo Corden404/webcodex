@@ -1057,6 +1057,12 @@ runner_capabilities! {
         #[serde(default, skip_serializing_if = "is_false")]
         pub computer_control: bool = false;
     }
+    /// Native Windows replacement selection; never inferred from general control.
+    ComputerSelection => RUNNER_CAPABILITY_COMPUTER_SELECTION("computer_selection"),
+    v2_baseline = false {
+        #[serde(default, skip_serializing_if = "is_false")]
+        pub computer_selection: bool = false;
+    }
     /// Native semantic scroll-to-visible on one exact observed Accessibility element.
     /// Missing on older Runners is false and is never inferred from computer_control.
     ComputerScrollToElement => RUNNER_CAPABILITY_COMPUTER_SCROLL_TO_ELEMENT("computer_scroll_to_element"),
@@ -2993,6 +2999,7 @@ mod envelope_tests {
                 computer_control: false,
                 computer_scroll_to_element: false,
                 computer_key_input: false,
+                computer_selection: false,
                 computer_letter_shortcuts: false,
                 computer_key_chords: false,
                 computer_window_activate: false,

@@ -2528,6 +2528,20 @@ impl RunnerRegistry {
         {
             return Err("computer request payload is invalid or too large".to_string());
         }
+        let control_payload = if kind == "computer_control" {
+            Some(
+                serde_json::from_str::<serde_json::Value>(&payload)
+                    .map_err(|_| "invalid computer control payload".to_string())?,
+            )
+        } else {
+            None
+        };
+        let control_action = control_payload
+            .as_ref()
+            .and_then(|v| v.get("action"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let is_selection = control_action == "select";
         let key_input = if kind == "computer_key_input" {
             let input = serde_json::from_str::<
                 webcodex_core::computer_input_contract::ComputerKeyInputPayload,
@@ -2554,8 +2568,23 @@ impl RunnerRegistry {
             "computer_accessibility_status" | "computer_accessibility_tree" => {
                 &[RunnerFeature::ComputerAccessibilityObserve]
             }
-            "computer_element_state" => &[RunnerFeature::ComputerElementState],
-            "computer_control" => &[RunnerFeature::ComputerControl],
+            "computer_element_state" => {
+                let state: serde_json::Value = serde_json::from_str(&payload)
+                    .map_err(|_| "invalid computer element state payload".to_string())?;
+                if state.get("include_selection") == Some(&serde_json::Value::Bool(true)) {
+                    &[
+                        RunnerFeature::ComputerElementState,
+                        RunnerFeature::ComputerSelection,
+                    ]
+                } else {
+                    &[RunnerFeature::ComputerElementState]
+                }
+            }
+            "computer_control" => {
+                webcodex_core::computer_input_contract::computer_control_capabilities(
+                    control_action,
+                )
+            }
             "computer_scroll_to_element" => &[RunnerFeature::ComputerScrollToElement],
             "computer_key_input" => &[RunnerFeature::ComputerKeyInput],
             "computer_pointer_move" | "computer_pointer_click" => {
@@ -2596,7 +2625,10 @@ impl RunnerRegistry {
         let key_instance = key_input
             .as_ref()
             .map(|_| current.runner_instance_id.clone());
-        let expected_runner_instance_id = expected_runner_instance_id.or(key_instance.as_deref());
+        let selection_instance = is_selection.then(|| current.runner_instance_id.clone());
+        let expected_runner_instance_id = expected_runner_instance_id
+            .or(key_instance.as_deref())
+            .or(selection_instance.as_deref());
         if let Some(expected) = expected_runner_instance_id {
             if expected.is_empty() || current.runner_instance_id != expected {
                 return Err(
@@ -2604,6 +2636,7 @@ impl RunnerRegistry {
                 );
             }
             if kind != "computer_key_input"
+                && !is_selection
                 && !current.supports(RunnerFeature::ComputerAccessibilityObserve)
             {
                 return Err("capability_unavailable: post-observation requires computer_accessibility_observe".into());

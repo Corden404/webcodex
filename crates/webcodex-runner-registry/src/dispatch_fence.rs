@@ -147,6 +147,21 @@ impl PendingDispatchFence {
                 }
                 use webcodex_core::runner_operation::RunnerComputerOperationKind;
                 if let RunnerOperation::Computer(op) = operation {
+                    if op.kind == RunnerComputerOperationKind::Control {
+                        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&op.payload)
+                        else {
+                            return Some(
+                                "invalid_request: invalid computer control payload".into(),
+                            );
+                        };
+                        if payload.get("action").and_then(serde_json::Value::as_str)
+                            == Some("select")
+                        {
+                            return webcodex_core::computer_input_contract::computer_control_capabilities("select")
+                                .iter().any(|feature| !runner.supports(*feature))
+                                .then(|| "capability_unavailable: Computer selection capability changed before dispatch".into());
+                        }
+                    }
                     if op.kind == RunnerComputerOperationKind::KeyInput {
                         let Ok(input) = serde_json::from_str::<
                             webcodex_core::computer_input_contract::ComputerKeyInputPayload,

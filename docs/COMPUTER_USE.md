@@ -245,6 +245,47 @@ The Windows Runner revalidates the exact xcap-observed HWND/PID before obtaining
 
 `observe_computer(action=find_elements)` remains a Control-side adapter over the canonical bounded tree, so Windows support adds no finder-specific Runner protocol. `observe_computer(action=element_state)` re-resolves the exact UIA lineage before returning normalized state. W1 deliberately reports all mutation `can_*` affordances false because the corresponding Windows effect capabilities remain independently unavailable until later parity slices.
 
+### Windows native replacement selection
+
+`control_computer(action=select, client_id, surface_id, element_id)` selects one
+exact observed UIA ListItem or TabItem using `SelectionItemPattern.Select`.
+It **clears other selections in that container**, including when the target is
+already one of several selected items. `press` continues to require InvokePattern.
+There is no add/remove/toggle mode, implicit focus/activation, coordinate fallback,
+or `observe_after` on select. After success, observe the business state separately.
+
+The action requires both `computer_control` and additive `computer_selection`,
+advertised only by supporting Windows Runners. The accepted Runner instance,
+access and capabilities are checked at admission and dequeue. Old Runners and
+unsupported platforms cannot receive the new effect through general control alone.
+The Server requests selection state with the internal `include_selection=true`
+field only after observing that capability. A legacy element-state request retains
+its original response shape and does not query selection patterns, so a new Runner
+remains compatible with an old Server's closed response validator. This negotiation
+adds no model-facing argument.
+
+Windows `element_state` adds `can_select` and `selected`. Missing fields from an
+older Runner mean unknown, not false; protected targets suppress selected state.
+These observations grant no authority. Execution re-resolves complete target
+lineage and verifies that the native selection container is an unprotected,
+observed ancestor in the same exact window. A same-process match is insufficient.
+A container may omit SelectionPattern (as observed on Word's Account navigation);
+this does not prove that it is single-select and does not prevent an explicit
+replacement selection. Only a selected target in a proven single-select container
+skips the native call; all other supported cases call Select once.
+
+Bounded read-back confirms the same target and container. Native errors after the
+attempt, target changes, read failures or confirmation timeout produce
+`outcome_unknown`, without repeating the effect. Target selection does not prove
+that the entire application settled or independently verify all siblings when
+the provider omits container selection facts.
+
+Manual Windows native regression (launches only an owned WPF fixture):
+
+```powershell
+cargo test --locked -p webcodex-computer --lib computer_windows_selection_live -- --ignored --exact windows_uia_tests::selection::computer_windows_selection_live
+```
+
 Windows tree observation reads ComboBox current values independently of text-input eligibility. It prefers the native `ValuePattern`; when unavailable, a single native `SelectionPattern` selection supplies its bounded display name. Missing or ambiguous selection remains unknown. Unavailable or unsupported properties on the selected item also leave its value unknown; an unavailable password/protection property prevents reading its name. Native deadlines and unexpected provider failures remain errors. Protected controls suppress values. This read-only observation does not admit ComboBox focus, text input, selection or pointer effects.
 
 Both `accessibility_tree` and `find_elements` accept an optional `root_element_id` from the latest observation on that exact surface. The existing `computer_accessibility_tree` Runner operation re-resolves the complete window-to-element lineage before a scoped read. On macOS, the root must carry positive identifier, title, description or placeholder evidence, using the same admission as `element_state`; anonymous roots return `stale_element` without expanding to an unscoped read. Secure text roles and subroles contribute to the same inherited protection marker as `AXProtectedContent`: their titles, descriptions, placeholders and values, and those of their descendants, remain redacted across repeated scoped observations. Relative depth remains at most 8 and returned nodes at most 256; absolute lineage is capped at 32 edges, and existing native deadlines include root resolution. The returned tree starts at relative depth zero, retains full private lineage and inherited protection, and replaces all prior element IDs on that surface. Concurrent retirement of the supplied root discards the result. No cursor store or new authority is introduced.
