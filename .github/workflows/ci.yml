@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'release/**'
+      - 'feat/computer-key-chords'
       - 'fix/work-result-null-session'
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
