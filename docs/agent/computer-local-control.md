@@ -32,6 +32,13 @@ appearance depend on the Windows compositor and capture provider.
 The Runner and its interactive helper use the same gate for request admission and
 native effect entry. Resume never releases a Browser user handoff.
 
+An admitted request is still revocable while it waits for an input lock or native
+target preflight. The same pause/epoch guard is checked again after the lock and
+at the first native effect commit point. A rejected commit performs no input and
+does not consume a pointer snapshot generation. A sequence already committed may
+finish its key releases and native cleanup; its original success or uncertain
+outcome is retained.
+
 The additive `computer_local_control` capability declares software support even
 before an interactive helper is ready; control waits for its first epoch.
 The Server stamps control requests with the Runner's advertised local control

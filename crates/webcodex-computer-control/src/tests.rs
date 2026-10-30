@@ -1,6 +1,61 @@
 use super::*;
 
 #[test]
+fn control_commit_rechecks_pause_and_epoch_after_preflight() {
+    for pause in [false, true] {
+        let control = LocalControl::new();
+        let epoch = control.snapshot().unwrap().epoch;
+        let pending = control.begin(true, Some(&epoch)).unwrap();
+        if pause {
+            control.set_paused(&epoch, true).unwrap();
+        } else {
+            control.invalidate().unwrap();
+        }
+        let mut effects = 0;
+        let error = pending.commit(|| effects += 1).unwrap_err();
+        assert!(error.starts_with(if pause {
+            "computer_control_paused:"
+        } else {
+            "computer_control_changed:"
+        }));
+        assert_eq!(effects, 0);
+    }
+    let observation = LocalControl::new().begin(false, None).unwrap();
+    assert!(observation
+        .commit(|| panic!("observation cannot commit input"))
+        .is_err());
+}
+
+#[test]
+fn pause_after_commit_preserves_sequence_cleanup_and_uncertain_result() {
+    let control = LocalControl::new();
+    let epoch = control.snapshot().unwrap().epoch;
+    let input = control.begin(true, Some(&epoch)).unwrap();
+    let mut steps = 0;
+    let result = input
+        .commit(|| {
+            steps += 1;
+            let paused = control.set_paused(&epoch, true).unwrap();
+            assert!(paused.paused && paused.controlling);
+            assert!(control.set_paused(&paused.epoch, false).is_err());
+            // Once the first effect crossed the commit boundary, finish necessary
+            // key releases/native ownership cleanup and retain the original outcome.
+            steps += 1;
+            Err::<(), _>("outcome_unknown: native sequence could not be confirmed")
+        })
+        .unwrap();
+    assert_eq!(
+        result.unwrap_err(),
+        "outcome_unknown: native sequence could not be confirmed"
+    );
+    assert_eq!(steps, 2);
+    drop(input);
+    let paused = control.snapshot().unwrap();
+    assert!(!paused.controlling);
+    control.set_paused(&paused.epoch, false).unwrap();
+}
+
+#[test]
 fn pause_is_independent_from_observation_and_waits_for_controls_before_resume() {
     let control = LocalControl::new();
     let epoch = control.snapshot().unwrap().epoch;

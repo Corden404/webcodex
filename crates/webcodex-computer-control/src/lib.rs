@@ -146,14 +146,7 @@ impl LocalControl {
             .lock()
             .map_err(|_| "computer_control_unavailable")?;
         if control {
-            if state.paused {
-                return Err(
-                    "computer_control_paused: resume Computer Control on the local device".into(),
-                );
-            }
-            if expected_epoch.is_some_and(|epoch| epoch != state.epoch) {
-                return Err("computer_control_changed: reacquire current Computer state before another control request".into());
-            }
+            check_control(&state, expected_epoch.unwrap_or(&state.epoch))?;
             state.controls = state
                 .controls
                 .checked_add(1)
@@ -166,7 +159,7 @@ impl LocalControl {
         }
         Ok(ActivityGuard {
             owner: self.clone(),
-            control,
+            control_epoch: control.then(|| state.epoch.clone()),
         })
     }
 }
@@ -199,7 +192,42 @@ fn persist(path: &Path, paused: bool) -> Result<(), String> {
 
 pub struct ActivityGuard {
     owner: Arc<LocalControl>,
-    control: bool,
+    control_epoch: Option<String>,
+}
+
+fn check_control(state: &State, expected_epoch: &str) -> Result<(), String> {
+    if state.paused {
+        return Err("computer_control_paused: resume Computer Control on the local device".into());
+    }
+    if expected_epoch != state.epoch {
+        return Err("computer_control_changed: reacquire current Computer state before another control request".into());
+    }
+    Ok(())
+}
+
+impl ActivityGuard {
+    /// Admission alone never authorizes an effect after a lock or native preflight.
+    pub fn check_control(&self) -> Result<(), String> {
+        let expected = self
+            .control_epoch
+            .as_deref()
+            .ok_or("computer_control_unavailable: control activity required")?;
+        let state = self
+            .owner
+            .state
+            .lock()
+            .map_err(|_| "computer_control_unavailable")?;
+        check_control(&state, expected)
+    }
+
+    /// Linearize the first effect against pause/invalidation after all waiting
+    /// and preflight. The closure must enter native dispatch immediately. Once
+    /// committed, the same operation may finish its sequence and cleanup while
+    /// pause independently closes admission; its guard still blocks resume.
+    pub fn commit<T>(&self, effect: impl FnOnce() -> T) -> Result<T, String> {
+        self.check_control()?;
+        Ok(effect())
+    }
 }
 
 impl Drop for ActivityGuard {
@@ -209,7 +237,7 @@ impl Drop for ActivityGuard {
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()
                 .map(|value| value.as_millis().min(u64::MAX as u128) as u64);
-            if self.control {
+            if self.control_epoch.is_some() {
                 state.controls -= 1;
                 state.last_control_at_ms = now;
             } else {
