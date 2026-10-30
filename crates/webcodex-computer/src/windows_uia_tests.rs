@@ -982,6 +982,54 @@ fn computer_windows_window_activation_live_smoke() {
 }
 
 #[test]
+#[ignore = "interactive Windows desktop; owned WinForms fixture verifies the final native pause boundary"]
+fn computer_windows_paused_preflight_fixture_live_smoke() {
+    let mut fixture = WindowsControlFixture::start();
+    let candidate = fixture.wait_for_window(WINDOWS_CONTROL_FIXTURE_TITLE, "paused input fixture");
+    assert_eq!(candidate.pid, fixture.child.id());
+    let record = surface_record(candidate);
+    let surface = "surface_paused_preflight_fixture";
+    platform::activate_window(surface, &record, &test_native_activity()).unwrap();
+    let tree = platform::accessibility_tree(surface, &record, 4, 64).unwrap();
+    let (edit_id, edit) = tree
+        .elements
+        .iter()
+        .find(|(_, element)| {
+            element.target_fingerprint().is_some_and(|fingerprint| {
+                fingerprint.role == "AXTextField" && !fingerprint.protected
+            })
+        })
+        .unwrap();
+    platform::control(
+        surface,
+        edit_id,
+        &record,
+        edit,
+        ComputerAction::Focus,
+        &test_native_activity(),
+    )
+    .unwrap();
+    // A request was admitted before the local user paused. Native UIA lookup
+    // and validation still run, but ValuePattern.SetValue must never be called.
+    let control = local_control::LocalControl::new();
+    let admitted = control.begin(true, None).unwrap();
+    let epoch = control.snapshot().unwrap().epoch;
+    let paused = control.set_paused(&epoch, true).unwrap();
+    let error =
+        platform::input_text(surface, edit_id, &record, edit, "blocked", &admitted).unwrap_err();
+    assert!(error.starts_with("computer_control_paused:"), "{error}");
+    let state = platform::element_state(surface, edit_id, 1, &record, edit, false).unwrap();
+    assert_eq!(state["value_empty"], true);
+    assert_eq!(state["can_input_text"], true);
+    drop(admitted);
+    control.set_paused(&paused.epoch, false).unwrap();
+    let fresh = control.begin(true, None).unwrap();
+    platform::input_text(surface, edit_id, &record, edit, "resumed", &fresh).unwrap();
+    let state = platform::element_state(surface, edit_id, 1, &record, edit, false).unwrap();
+    assert_eq!(state["value_empty"], false);
+}
+
+#[test]
 #[ignore = "requires an interactive Windows desktop; creates and closes a private WinForms control fixture"]
 fn computer_windows_control_fixture_live_smoke() {
     let mut fixture = WindowsControlFixture::start();
