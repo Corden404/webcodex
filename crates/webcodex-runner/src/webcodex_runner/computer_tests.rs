@@ -1,7 +1,36 @@
 use super::*;
 
+#[test]
+fn computer_local_pause_and_old_epoch_reject_before_native_clipboard_dispatch() {
+    let runtime = ComputerRuntime::new(ComputerConfig {
+        max_encoded_image_bytes: MAX_MCP_IMAGE_BYTES,
+    });
+    let control = runtime.local_control();
+    let epoch = control.snapshot().unwrap().epoch;
+    let operation = RunnerComputerOperation {
+        control_epoch: Some(epoch.clone()),
+        kind: RunnerComputerOperationKind::WriteClipboard,
+        payload: r#"{"text":"must never be written"}"#.into(),
+        timeout_secs: 1,
+    };
+    let paused = control.set_paused(&epoch, true).unwrap();
+    let rejected = handle_computer_operation_with_runtime(&runtime, &operation);
+    assert!(rejected
+        .error
+        .unwrap()
+        .starts_with("computer_control_paused:"));
+    control.set_paused(&paused.epoch, false).unwrap();
+    let stale = handle_computer_operation_with_runtime(&runtime, &operation);
+    assert!(stale
+        .error
+        .unwrap()
+        .starts_with("computer_control_changed:"));
+    assert!(!control.snapshot().unwrap().controlling);
+}
+
 fn request(kind: &str, payload: &str) -> RunnerRequest {
     RunnerRequest {
+        computer_control_epoch: None,
         login: false,
         shell: None,
         request_id: "computer-test".to_string(),
@@ -182,6 +211,7 @@ fn computer_selection_uses_existing_control_wire_and_rejects_extra_effects() {
         let result = handle_computer_operation_with_runtime(
             &runtime,
             &RunnerComputerOperation {
+                control_epoch: None,
                 kind: RunnerComputerOperationKind::Control,
                 payload: payload.to_string(),
                 timeout_secs: 5,

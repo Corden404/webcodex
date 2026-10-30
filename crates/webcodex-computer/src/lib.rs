@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
+pub use webcodex_computer_control as local_control;
+#[cfg(test)]
+mod local_control_tests;
 #[cfg(any(test, target_os = "macos"))]
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -921,7 +924,13 @@ pub struct ComputerConfig {
     pub max_encoded_image_bytes: usize,
 }
 
+struct NativeEffectGuard<'a> {
+    _handoff: MutexGuard<'a, HashMap<String, SurfaceRecord>>,
+    _activity: local_control::ActivityGuard,
+}
+
 pub struct ComputerRuntime {
+    local_control: Arc<local_control::LocalControl>,
     config: ComputerConfig,
     browser_user_handoffs: Mutex<HashMap<String, SurfaceRecord>>,
     surfaces: Mutex<HashMap<String, SurfaceRecord>>,
@@ -934,6 +943,7 @@ pub struct ComputerRuntime {
 impl ComputerRuntime {
     pub fn new(config: ComputerConfig) -> Self {
         Self {
+            local_control: local_control::LocalControl::new(),
             config,
             browser_user_handoffs: Mutex::new(HashMap::new()),
             surfaces: Mutex::new(HashMap::new()),
@@ -942,6 +952,15 @@ impl ComputerRuntime {
             displays: Mutex::new(HashMap::new()),
             display_snapshots: Mutex::new(DisplaySnapshotRegistry::default()),
         }
+    }
+
+    pub fn with_local_control(mut self, control: Arc<local_control::LocalControl>) -> Self {
+        self.local_control = control;
+        self
+    }
+
+    pub fn local_control(&self) -> &Arc<local_control::LocalControl> {
+        &self.local_control
     }
 
     pub fn read_clipboard(&self) -> Result<Value, String> {
@@ -1043,9 +1062,8 @@ impl ComputerRuntime {
         Ok(())
     }
 
-    fn native_effect_guard(
-        &self,
-    ) -> Result<MutexGuard<'_, HashMap<String, SurfaceRecord>>, String> {
+    fn native_effect_guard(&self) -> Result<NativeEffectGuard<'_>, String> {
+        let activity = self.local_control.begin(true, None)?;
         let holds = self
             .browser_user_handoffs
             .lock()
@@ -1056,7 +1074,10 @@ impl ComputerRuntime {
                     .into(),
             );
         }
-        Ok(holds)
+        Ok(NativeEffectGuard {
+            _handoff: holds,
+            _activity: activity,
+        })
     }
 
     /// Runner-internal Browser handoff. The caller must retain an exact live

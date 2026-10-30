@@ -22,7 +22,8 @@ pub(super) fn send_provider_metadata(
         }
         let provider_update = config.external_tools.claim_status_update();
         let availability_update = crate::webcodex_runner::computer_session::changed_availability();
-        if provider_update.is_none() && availability_update.is_none() {
+        let control_epoch = crate::webcodex_runner::computer_session::changed_control_epoch();
+        if provider_update.is_none() && availability_update.is_none() && control_epoch.is_none() {
             return;
         }
         let had_provider_update = provider_update.is_some();
@@ -40,6 +41,7 @@ pub(super) fn send_provider_metadata(
                 tool_providers: status,
                 mcp_gateway_providers: Some(runtime.mcp_gateway().provider_inventory()),
                 computer_session_availability: availability_update,
+                computer_control_epoch: control_epoch.clone(),
             },
         ) {
             if had_provider_update {
@@ -47,6 +49,9 @@ pub(super) fn send_provider_metadata(
             }
             if let Some(available) = availability_update {
                 crate::webcodex_runner::computer_session::mark_availability_reported(available);
+            }
+            if let Some(epoch) = control_epoch {
+                crate::webcodex_runner::computer_session::mark_control_epoch_reported(epoch);
             }
         } else {
             if had_provider_update {
@@ -81,6 +86,15 @@ pub(crate) fn run_runner(
     let runner_instance_id = uuid::Uuid::new_v4().to_string();
     if let Some(dir) = computer_session_dir {
         crate::webcodex_runner::computer_session::configure(dir, runner_instance_id.clone())?;
+    }
+    #[cfg(windows)]
+    if !crate::webcodex_runner::computer_session::configured() {
+        let dir = config_path
+            .parent()
+            .ok_or("Runner config has no parent")?
+            .join("cu");
+        std::fs::create_dir_all(&dir).map_err(|_| "computer control directory unavailable")?;
+        crate::webcodex_runner::computer::configure_local_control(&dir)?;
     }
     let transport = cfg
         .transport

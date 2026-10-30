@@ -32,10 +32,12 @@ struct ClientConfig {
     dir: PathBuf,
     runner_epoch: String,
     helper_epoch: Arc<Mutex<Option<String>>>,
+    control_epoch: Arc<Mutex<Option<String>>>,
 }
 
 static CLIENT: OnceLock<ClientConfig> = OnceLock::new();
 static REPORTED_AVAILABILITY: Mutex<Option<bool>> = Mutex::new(None);
+static REPORTED_CONTROL_EPOCH: Mutex<Option<String>> = Mutex::new(None);
 static SESSION_INVALIDATION: AtomicU64 = AtomicU64::new(0);
 // The helper is never granted Computer authority through an older Server that
 // cannot echo and honor runtime session availability at registration.
@@ -51,6 +53,14 @@ pub(crate) fn set_server_availability_contract(confirmed: bool) {
         if !confirmed {
             if let Ok(mut known) = CLIENT.get().unwrap().helper_epoch.lock() {
                 *known = None;
+            }
+            // A replacement Server registration starts with unavailable state.
+            // Re-publish live facts even if the helper itself did not change.
+            if let Ok(mut reported) = REPORTED_AVAILABILITY.lock() {
+                *reported = None;
+            }
+            if let Ok(mut reported) = REPORTED_CONTROL_EPOCH.lock() {
+                *reported = None;
             }
         }
     }
@@ -74,12 +84,41 @@ pub(crate) fn configure(dir: PathBuf, runner_epoch: String) -> Result<(), String
             dir,
             runner_epoch,
             helper_epoch: Arc::new(Mutex::new(None)),
+            control_epoch: Arc::new(Mutex::new(None)),
         })
         .map_err(|_| "computer session already configured".to_string())
 }
 
 pub(crate) fn configured() -> bool {
     CLIENT.get().is_some()
+}
+
+pub(crate) fn control_epoch() -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    if let Some(client) = CLIENT.get() {
+        // A probe refreshes the local revision even when availability is unchanged.
+        let _ = availability();
+        client
+            .control_epoch
+            .lock()
+            .ok()
+            .and_then(|epoch| epoch.clone())
+    } else {
+        super::computer::local_control_epoch()
+    }
+}
+
+pub(crate) fn changed_control_epoch() -> Option<String> {
+    let current = control_epoch()?;
+    (REPORTED_CONTROL_EPOCH.lock().ok()?.as_ref() != Some(&current)).then_some(current)
+}
+
+pub(crate) fn mark_control_epoch_reported(epoch: String) {
+    if let Ok(mut reported) = REPORTED_CONTROL_EPOCH.lock() {
+        *reported = Some(epoch);
+    }
 }
 
 pub(crate) fn availability() -> Option<bool> {
@@ -97,7 +136,11 @@ pub(crate) fn availability() -> Option<bool> {
             Ok(WireResponse::Ready {
                 available: true,
                 helper_epoch,
+                control_epoch,
             }) => {
+                if let Ok(mut known) = config.control_epoch.lock() {
+                    *known = control_epoch;
+                }
                 let Ok(mut known) = config.helper_epoch.lock() else {
                     return false;
                 };
@@ -179,6 +222,7 @@ pub(crate) fn dispatch(operation: &RunnerComputerOperation) -> CommandResult {
         kind: operation.kind.wire_kind().to_string(),
         payload: operation.payload.clone(),
         timeout_secs: operation.timeout_secs.min(MAX_OPERATION_TIMEOUT.as_secs()),
+        control_epoch: operation.control_epoch.clone(),
     };
     let timeout = Duration::from_secs(operation.timeout_secs.max(1)).min(MAX_OPERATION_TIMEOUT);
     match exchange(config, request, timeout) {
@@ -200,6 +244,8 @@ enum WireRequest {
         kind: String,
         payload: String,
         timeout_secs: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        control_epoch: Option<String>,
     },
 }
 
@@ -209,6 +255,8 @@ enum WireResponse {
     Ready {
         available: bool,
         helper_epoch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        control_epoch: Option<String>,
     },
     Result {
         result: WireResult,
@@ -270,7 +318,8 @@ impl HelperState {
             helper_epoch: uuid::Uuid::new_v4().to_string(),
             runtime: ComputerRuntime::new(ComputerConfig {
                 max_encoded_image_bytes: MAX_MCP_IMAGE_BYTES,
-            }),
+            })
+            .with_local_control(super::computer::computer_runtime().local_control().clone()),
             observed_invalidation: SESSION_INVALIDATION.load(Ordering::Acquire),
         }
     }
@@ -308,6 +357,12 @@ impl HelperState {
                 WireRequest::Probe { .. } => WireResponse::Ready {
                     available: false,
                     helper_epoch: self.helper_epoch.clone(),
+                    control_epoch: self
+                        .runtime
+                        .local_control()
+                        .snapshot()
+                        .ok()
+                        .map(|s| s.epoch),
                 },
                 WireRequest::Execute { .. } => WireResponse::Rejected {
                     error: "not_started: login session is locked or inactive".to_string(),
@@ -329,12 +384,19 @@ impl HelperState {
             WireRequest::Probe { .. } => WireResponse::Ready {
                 available: true,
                 helper_epoch: self.helper_epoch.clone(),
+                control_epoch: self
+                    .runtime
+                    .local_control()
+                    .snapshot()
+                    .ok()
+                    .map(|s| s.epoch),
             },
             WireRequest::Execute {
                 helper_epoch,
                 kind,
                 payload,
                 timeout_secs,
+                control_epoch,
                 ..
             } => {
                 if helper_epoch != self.helper_epoch {
@@ -360,6 +422,7 @@ impl HelperState {
                     };
                 }
                 let operation = RunnerComputerOperation {
+                    control_epoch,
                     kind,
                     payload,
                     timeout_secs,
@@ -373,10 +436,13 @@ impl HelperState {
         }
     }
     fn reset(&mut self) {
+        let control = self.runtime.local_control().clone();
+        let _ = control.invalidate();
         self.helper_epoch = uuid::Uuid::new_v4().to_string();
         self.runtime = ComputerRuntime::new(ComputerConfig {
             max_encoded_image_bytes: MAX_MCP_IMAGE_BYTES,
-        });
+        })
+        .with_local_control(control);
     }
 }
 
@@ -448,6 +514,8 @@ use platform::{exchange, native_session_available};
 
 pub(crate) fn run_helper(dir: &Path) -> Result<(), String> {
     validate_dir(dir, true)?;
+    #[cfg(windows)]
+    super::computer::configure_local_control(dir)?;
     std::thread::Builder::new()
         .name("computer-session-monitor".to_string())
         .spawn(|| {
@@ -487,9 +555,14 @@ mod tests {
             "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
         )
         .unwrap();
+        mark_availability_reported(true);
+        mark_control_epoch_reported("previous-registration".into());
         set_server_availability_contract(false);
+        assert!(REPORTED_AVAILABILITY.lock().unwrap().is_none());
+        assert!(REPORTED_CONTROL_EPOCH.lock().unwrap().is_none());
         assert_eq!(availability(), Some(false));
         let result = dispatch(&RunnerComputerOperation {
+            control_epoch: None,
             kind: RunnerComputerOperationKind::AccessibilityStatus,
             payload: "{}".into(),
             timeout_secs: 1,
@@ -530,12 +603,14 @@ mod tests {
         let WireResponse::Ready {
             available: true,
             helper_epoch,
+            ..
         } = first
         else {
             panic!("probe failed")
         };
         let rejected = state.handle(
             WireRequest::Execute {
+                control_epoch: None,
                 runner_epoch: runner_a.clone(),
                 helper_epoch: "stale-helper".to_string(),
                 kind: "computer_read_clipboard".to_string(),
@@ -548,6 +623,7 @@ mod tests {
         assert!(matches!(rejected, WireResponse::Rejected { .. }));
         let unknown_kind = state.handle(
             WireRequest::Execute {
+                control_epoch: None,
                 runner_epoch: runner_a.clone(),
                 helper_epoch,
                 kind: "shell".to_string(),

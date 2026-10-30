@@ -22,6 +22,10 @@ const STOP_RUNTIME_ID: &str = "tray.stop_runtime";
 const CONNECT_ID: &str = "tray.connections";
 const STOP_QUICK_SHARE_ID: &str = "tray.stop_quick_share";
 const CANCEL_OPERATION_PREFIX: &str = "tray.cancel_operation:";
+const PAUSE_COMPUTER_PREFIX: &str = "tray.pause_computer:";
+const RESUME_COMPUTER_PREFIX: &str = "tray.resume_computer:";
+const COMPUTER_EDGE_ID: &str = "tray.computer_edge";
+const COMPUTER_SHORTCUT_ID: &str = "tray.computer_shortcut";
 const LAUNCH_AT_LOGIN_ID: &str = "tray.launch_at_login";
 const QUIT_ID: &str = "tray.quit";
 
@@ -54,6 +58,11 @@ enum ConnectionAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TrayProjection {
+    computer_edge: bool,
+    computer_shortcut: bool,
+    shortcut_unavailable: bool,
+    computer_status: &'static str,
+    computer: Option<webcodex_computer_control::ControlSnapshot>,
     locale: DesktopLocale,
     lightweight_available: bool,
     runtime_status: RuntimeStatus,
@@ -69,6 +78,8 @@ struct TrayProjection {
 
 #[derive(Default)]
 pub struct TrayPresentationCache {
+    computer_io: tokio::sync::Mutex<()>,
+    computer: Mutex<Option<crate::computer_control::Observation>>,
     projection: Mutex<Option<TrayProjection>>,
     launch_at_login: Mutex<Option<bool>>,
 }
@@ -142,6 +153,11 @@ impl TrayProjection {
                     operation.cancellable && operation.phase == DesktopOperationPhase::Running
                 });
         Self {
+            computer_edge: false,
+            computer_shortcut: false,
+            shortcut_unavailable: false,
+            computer_status: "tray.computerUnavailable",
+            computer: None,
             locale,
             lightweight_available: true,
             runtime_status,
@@ -243,6 +259,47 @@ pub fn start_background_observer(app: &AppHandle) {
     });
 }
 
+pub fn start_computer_observer(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(300));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if app
+                .state::<desktop_shell::DesktopShellState>()
+                .close_disposition()
+                == desktop_shell::CloseDisposition::AllowExit
+            {
+                break;
+            }
+            let snapshot = app.state::<AppState>().get_state();
+            let cache = app.state::<TrayPresentationCache>();
+            let _io = cache.computer_io.lock().await;
+            let observed =
+                tokio::task::spawn_blocking(move || crate::computer_control::observe(&snapshot))
+                    .await
+                    .ok()
+                    .flatten();
+            let snapshot = app.state::<AppState>().get_state();
+            let observed = observed.filter(|observation| observation.matches(&snapshot));
+            let edge_activity = observed.as_ref().is_some_and(|observation| {
+                observation.state.controlling
+                    || crate::computer_control::status_key(Some(&observation.state))
+                        == "tray.computerRecentControl"
+            });
+            *app.state::<TrayPresentationCache>()
+                .computer
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = observed;
+            refresh_from_snapshot(&app, &snapshot);
+            // WebView construction stays on the asynchronous observer, never
+            // inside a synchronous native menu callback.
+            crate::computer_control::presentation::update_edge(&app, edge_activity);
+        }
+    });
+}
+
 fn should_refresh_persistent_status(snapshot: &DesktopStateSnapshot) -> bool {
     snapshot.persistent_environment.is_some() && snapshot.current_operation.is_none()
 }
@@ -253,7 +310,7 @@ pub fn refresh_from_snapshot(app: &AppHandle, snapshot: &DesktopStateSnapshot) {
         .launch_at_login
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let projection = TrayProjection::from_snapshot(
+    let mut projection = TrayProjection::from_snapshot(
         snapshot,
         launch_at_login,
         app.state::<DesktopLocaleState>().get(),
@@ -262,6 +319,22 @@ pub fn refresh_from_snapshot(app: &AppHandle, snapshot: &DesktopStateSnapshot) {
         app.state::<desktop_shell::DesktopShellState>()
             .can_enter_lightweight(),
     );
+    projection.computer = cache
+        .computer
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .filter(|observation| observation.matches(snapshot))
+        .map(|observation| observation.state.clone());
+    projection.computer_status = crate::computer_control::status_key(projection.computer.as_ref());
+    let presentation = app.state::<crate::computer_control::presentation::Presentation>();
+    projection.computer_edge = presentation.edge.load(std::sync::atomic::Ordering::Acquire);
+    projection.computer_shortcut = presentation
+        .shortcut
+        .load(std::sync::atomic::Ordering::Acquire);
+    projection.shortcut_unavailable = presentation
+        .shortcut_unavailable
+        .load(std::sync::atomic::Ordering::Acquire);
     {
         let cached = cache
             .projection
@@ -274,6 +347,12 @@ pub fn refresh_from_snapshot(app: &AppHandle, snapshot: &DesktopStateSnapshot) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
+    if cfg!(windows) {
+        let _ = tray.set_tooltip(Some(format!(
+            "WebCodex · {}",
+            projection.locale.text(projection.computer_status)
+        )));
+    }
     match build_menu(app, &projection).and_then(|menu| tray.set_menu(Some(menu))) {
         Ok(()) => {
             cache
@@ -304,6 +383,56 @@ fn observe_launch_at_login(app: &AppHandle) {
 fn build_menu(app: &AppHandle, projection: &TrayProjection) -> tauri::Result<Menu<tauri::Wry>> {
     let locale = projection.locale;
     let menu = Menu::new(app)?;
+    if cfg!(windows) {
+        let computer = MenuItem::new(
+            app,
+            locale.text(projection.computer_status),
+            false,
+            None::<&str>,
+        )?;
+        menu.append(&computer)?;
+        if let Some(state) = &projection.computer {
+            let prefix = if state.paused {
+                RESUME_COMPUTER_PREFIX
+            } else {
+                PAUSE_COMPUTER_PREFIX
+            };
+            let key = if state.paused {
+                "tray.computerResume"
+            } else {
+                "tray.computerPause"
+            };
+            let action = MenuItem::with_id(
+                app,
+                format!("{prefix}{}", state.epoch),
+                locale.text(key),
+                !state.paused || !state.controlling,
+                None::<&str>,
+            )?;
+            menu.append(&action)?;
+        }
+        let edge = CheckMenuItem::with_id(
+            app,
+            COMPUTER_EDGE_ID,
+            locale.text("tray.computerEdge"),
+            true,
+            projection.computer_edge,
+            None::<&str>,
+        )?;
+        let shortcut = CheckMenuItem::with_id(
+            app,
+            COMPUTER_SHORTCUT_ID,
+            locale.text(if projection.shortcut_unavailable {
+                "tray.computerShortcutUnavailable"
+            } else {
+                "tray.computerShortcut"
+            }),
+            true,
+            projection.computer_shortcut,
+            None::<&str>,
+        )?;
+        menu.append_items(&[&edge, &shortcut])?;
+    }
     let runtime = MenuItem::new(
         app,
         match projection.runtime_status {
@@ -432,6 +561,35 @@ fn build_menu(app: &AppHandle, projection: &TrayProjection) -> tauri::Result<Men
 }
 
 pub(crate) fn handle_menu_event(app: &AppHandle, id: &str) {
+    if id == COMPUTER_EDGE_ID || id == COMPUTER_SHORTCUT_ID {
+        use std::sync::atomic::Ordering;
+        let settings = app.state::<crate::computer_control::presentation::Presentation>();
+        if id == COMPUTER_EDGE_ID {
+            settings.edge.fetch_xor(true, Ordering::AcqRel);
+        } else {
+            settings.shortcut.fetch_xor(true, Ordering::AcqRel);
+        }
+        refresh_from_snapshot(app, &app.state::<AppState>().get_state());
+        return;
+    }
+    for (prefix, paused) in [
+        (PAUSE_COMPUTER_PREFIX, true),
+        (RESUME_COMPUTER_PREFIX, false),
+    ] {
+        if let Some(epoch) = id.strip_prefix(prefix) {
+            let observed = app
+                .state::<TrayPresentationCache>()
+                .computer
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            if let Some(observed) = observed.filter(|observation| observation.state.epoch == epoch)
+            {
+                set_computer_paused(app, observed, paused);
+            }
+            return;
+        }
+    }
     match id {
         OPEN_ID => {
             let _ = desktop_shell::show_main_window(app);
@@ -473,6 +631,42 @@ pub(crate) fn handle_menu_event(app: &AppHandle, id: &str) {
             }
         }
     }
+}
+
+pub(crate) fn pause_computer(app: &AppHandle) {
+    let observed = app
+        .state::<TrayPresentationCache>()
+        .computer
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    if let Some(observed) = observed {
+        set_computer_paused(app, observed, true);
+    }
+}
+
+fn set_computer_paused(
+    app: &AppHandle,
+    observed: crate::computer_control::Observation,
+    paused: bool,
+) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let cache = app.state::<TrayPresentationCache>();
+        let _io = cache.computer_io.lock().await;
+        let snapshot = app.state::<AppState>().get_state();
+        let updated = tokio::task::spawn_blocking(move || {
+            crate::computer_control::set_paused(&snapshot, observed, paused)
+        })
+        .await
+        .ok()
+        .flatten();
+        *app.state::<TrayPresentationCache>()
+            .computer
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = updated;
+        refresh_from_snapshot(&app, &app.state::<AppState>().get_state());
+    });
 }
 
 fn cancel_action_from_menu_id(id: &str) -> Option<TrayStateAction> {
