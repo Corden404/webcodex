@@ -31,6 +31,7 @@ pub(super) fn computer_runtime() -> &'static ComputerRuntime {
     })
 }
 
+#[cfg(windows)]
 pub(crate) fn configure_local_control(dir: &std::path::Path) -> Result<(), String> {
     let control = webcodex_computer::local_control::LocalControl::persistent(dir)?;
     webcodex_computer::local_control::serve(dir, control.clone())?;
