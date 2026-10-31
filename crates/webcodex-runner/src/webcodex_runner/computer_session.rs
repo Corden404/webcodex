@@ -110,14 +110,27 @@ pub(crate) fn control_epoch() -> Option<String> {
     }
 }
 
-pub(crate) fn changed_control_epoch() -> Option<String> {
-    let current = control_epoch()?;
-    (REPORTED_CONTROL_EPOCH.lock().ok()?.as_ref() != Some(&current)).then_some(current)
+pub(crate) fn publish_control_epoch_update(publish: impl FnOnce(Option<String>) -> bool) {
+    publish_epoch_update(&REPORTED_CONTROL_EPOCH, control_epoch, publish);
 }
 
-pub(crate) fn mark_control_epoch_reported(epoch: String) {
-    if let Ok(mut reported) = REPORTED_CONTROL_EPOCH.lock() {
-        *reported = Some(epoch);
+fn publish_epoch_update(
+    reported: &Mutex<Option<String>>,
+    current: impl FnOnce() -> Option<String>,
+    publish: impl FnOnce(Option<String>) -> bool,
+) {
+    // Snapshot, enqueue and commit the report under one lock. A second publisher
+    // must not enqueue an older snapshot after a newer one while leaving the
+    // reported marker at the newer epoch, which would suppress its repair.
+    // Registration resets use this same mutex and cannot be lost mid-publication.
+    let Ok(mut reported) = reported.lock() else {
+        return;
+    };
+    let update = current().filter(|epoch| reported.as_ref() != Some(epoch));
+    if publish(update.clone()) {
+        if let Some(epoch) = update {
+            *reported = Some(epoch);
+        }
     }
 }
 
@@ -536,6 +549,116 @@ pub(crate) fn run_helper(dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_epoch_publication_serializes_snapshot_enqueue_and_record() {
+        use std::sync::mpsc;
+        let reported = Arc::new(Mutex::new(None));
+        let current = Arc::new(AtomicU64::new(1));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let (out_tx, out_rx) = mpsc::channel();
+        let first = {
+            let reported = reported.clone();
+            let current = current.clone();
+            let out = out_tx.clone();
+            std::thread::spawn(move || {
+                publish_epoch_update(
+                    &reported,
+                    || {
+                        assert!(matches!(
+                            reported.try_lock(),
+                            Err(std::sync::TryLockError::WouldBlock)
+                        ));
+                        Some(current.load(Ordering::Acquire).to_string())
+                    },
+                    |epoch| {
+                        entered_tx.send(()).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                        out.send(epoch).unwrap();
+                        true
+                    },
+                );
+            })
+        };
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // The enqueue callback is paused. Its version must remain protected
+        // until the actual enqueue and successful-report record both finish.
+        let publication_locked = matches!(
+            reported.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        );
+        current.store(2, Ordering::Release);
+        let second = {
+            let reported = reported.clone();
+            let current = current.clone();
+            std::thread::spawn(move || {
+                publish_epoch_update(
+                    &reported,
+                    || Some(current.load(Ordering::Acquire).to_string()),
+                    |epoch| {
+                        out_tx.send(epoch).unwrap();
+                        true
+                    },
+                );
+            })
+        };
+        release_tx.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
+        assert!(
+            publication_locked,
+            "epoch publication released its lock before enqueue"
+        );
+        assert_eq!(
+            out_rx.try_iter().collect::<Vec<_>>(),
+            [Some("1".into()), Some("2".into())]
+        );
+        assert_eq!(reported.lock().unwrap().as_deref(), Some("2"));
+        publish_epoch_update(
+            &reported,
+            || Some("2".into()),
+            |epoch| {
+                assert!(epoch.is_none());
+                true
+            },
+        );
+    }
+
+    #[test]
+    fn control_epoch_publication_retries_failed_enqueue_without_marking_reported() {
+        let reported = Mutex::new(Some("old".into()));
+        publish_epoch_update(
+            &reported,
+            || Some("current".into()),
+            |epoch| {
+                assert_eq!(epoch.as_deref(), Some("current"));
+                false
+            },
+        );
+        assert_eq!(reported.lock().unwrap().as_deref(), Some("old"));
+        publish_epoch_update(
+            &reported,
+            || Some("current".into()),
+            |epoch| {
+                assert_eq!(epoch.as_deref(), Some("current"));
+                true
+            },
+        );
+        assert_eq!(reported.lock().unwrap().as_deref(), Some("current"));
+        // An unavailable epoch must still allow unrelated provider metadata,
+        // without claiming that the previous control epoch was superseded.
+        publish_epoch_update(
+            &reported,
+            || None,
+            |epoch| {
+                assert!(epoch.is_none());
+                true
+            },
+        );
+        assert_eq!(reported.lock().unwrap().as_deref(), Some("current"));
+    }
+
     #[test]
     fn old_server_without_availability_echo_cannot_authorize_brokered_computer() {
         assert!(!registration_echo_confirms_contract(None));
@@ -560,7 +683,7 @@ mod tests {
             )
             .unwrap();
             mark_availability_reported(true);
-            mark_control_epoch_reported("previous-registration".into());
+            *REPORTED_CONTROL_EPOCH.lock().unwrap() = Some("previous-registration".into());
             set_server_availability_contract(false);
             assert!(REPORTED_AVAILABILITY.lock().unwrap().is_none());
             assert!(REPORTED_CONTROL_EPOCH.lock().unwrap().is_none());

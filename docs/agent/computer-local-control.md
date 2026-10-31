@@ -50,6 +50,12 @@ control requests. They are rejected rather than replayed, including clipboard
 writes that do not carry a window or element handle. New control requires a fresh
 request after local resume and observation of current desktop state.
 
+On push transports, reading the current control epoch, enqueueing its metadata,
+and recording the successful publication share one critical section with
+registration resets. Concurrent heartbeat and result publishers cannot leave an
+older epoch queued after a newer epoch while marking the newer one as reported.
+Failed enqueue attempts retain the previous marker so publication can retry.
+
 The pause setting is stored independently of opaque Computer IDs. Restarting the
 Runner or helper preserves a confirmed pause and creates a fresh control epoch.
 Malformed saved state prevents enabling input. A failed pause persistence attempt
