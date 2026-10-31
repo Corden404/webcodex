@@ -313,5 +313,7 @@
   "tray.computerResume": "恢复 Computer Control",
   "tray.computerPause": "暂停 Computer Control",
   "tray.computerRecentControl": "Computer：刚刚处理了控制请求",
-  "tray.computerRecentObservation": "Computer：刚刚观察过桌面"
+  "tray.computerRecentObservation": "Computer：刚刚观察过桌面",
+  "tray.computerPauseNotSaved": "Computer：后续输入已阻断，但暂停状态保存失败；重启后可能恢复控制",
+  "tray.computerRetryPause": "重试保存暂停 Computer Control"
 }

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 pub struct ControlSnapshot {
     pub epoch: String,
     pub paused: bool,
+    pub pause_persistence_failed: bool,
     pub observing: bool,
     pub controlling: bool,
     pub last_observation_at_ms: Option<u64>,
@@ -17,6 +18,7 @@ pub struct ControlSnapshot {
 struct State {
     epoch: String,
     paused: bool,
+    pause_persistence_failed: bool,
     observations: usize,
     controls: usize,
     last_observation_at_ms: Option<u64>,
@@ -34,6 +36,7 @@ impl LocalControl {
             state: Mutex::new(State {
                 epoch: uuid::Uuid::new_v4().to_string(),
                 paused: false,
+                pause_persistence_failed: false,
                 observations: 0,
                 controls: 0,
                 last_observation_at_ms: None,
@@ -70,6 +73,7 @@ impl LocalControl {
             state: Mutex::new(State {
                 epoch: uuid::Uuid::new_v4().to_string(),
                 paused,
+                pause_persistence_failed: false,
                 observations: 0,
                 controls: 0,
                 last_observation_at_ms: None,
@@ -127,8 +131,14 @@ impl LocalControl {
         // Retry persistence even when a previous failed pause already closed
         // the in-memory gate. Only durable confirmation can report success.
         if let Some(path) = &self.persistence {
-            persist(path, paused)?;
+            if let Err(error) = persist(path, paused) {
+                if paused {
+                    state.pause_persistence_failed = true;
+                }
+                return Err(error);
+            }
         }
+        state.pause_persistence_failed = false;
         if changed && !paused {
             state.paused = false;
             state.epoch = uuid::Uuid::new_v4().to_string();
@@ -168,6 +178,7 @@ fn snapshot(state: &State) -> ControlSnapshot {
     ControlSnapshot {
         epoch: state.epoch.clone(),
         paused: state.paused,
+        pause_persistence_failed: state.pause_persistence_failed,
         observing: state.observations != 0,
         controlling: state.controls != 0,
         last_observation_at_ms: state.last_observation_at_ms,

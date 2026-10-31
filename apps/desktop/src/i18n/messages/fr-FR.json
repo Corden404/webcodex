@@ -313,5 +313,7 @@
   "tray.computerResume": "Reprendre Computer Control",
   "tray.computerPause": "Suspendre Computer Control",
   "tray.computerRecentControl": "Computer : commande récemment traitée",
-  "tray.computerRecentObservation": "Computer : observation récente"
+  "tray.computerRecentObservation": "Computer : observation récente",
+  "tray.computerPauseNotSaved": "Computer : entrées bloquées, pause non enregistrée ; le redémarrage peut réactiver le contrôle",
+  "tray.computerRetryPause": "Réessayer d’enregistrer la pause Computer Control"
 }

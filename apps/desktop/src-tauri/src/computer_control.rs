@@ -51,11 +51,11 @@ pub fn set_paused(
     snapshot: &DesktopStateSnapshot,
     observed: Observation,
     paused: bool,
-) -> Option<Observation> {
+) -> Result<Observation, String> {
     // Retain the exact observed environment and epoch through the side effect;
     // never redirect an old menu to the newly selected environment.
     if target(snapshot).as_ref() != Some(&observed.target) {
-        return None;
+        return Err("computer_control_changed: refresh local status".into());
     }
     let expected_epoch = observed.state.epoch;
     let request = if paused {
@@ -63,9 +63,8 @@ pub fn set_paused(
     } else {
         LocalRequest::Resume { expected_epoch }
     };
-    let state =
-        local_control::request(&observed.target.dir, &observed.target.runner, &request).ok()?;
-    Some(Observation {
+    let state = local_control::request(&observed.target.dir, &observed.target.runner, &request)?;
+    Ok(Observation {
         target: observed.target,
         state,
     })
@@ -74,6 +73,7 @@ pub fn set_paused(
 pub fn status_key(state: Option<&ControlSnapshot>) -> &'static str {
     match state {
         None => "tray.computerUnavailable",
+        Some(state) if state.pause_persistence_failed => "tray.computerPauseNotSaved",
         Some(state) if state.paused && state.controlling => "tray.computerPausing",
         Some(state) if state.paused && state.observing => "tray.computerPausedObserving",
         Some(state) if state.paused => "tray.computerPaused",
@@ -82,6 +82,16 @@ pub fn status_key(state: Option<&ControlSnapshot>) -> &'static str {
         Some(state) if recent(state.last_control_at_ms) => "tray.computerRecentControl",
         Some(state) if recent(state.last_observation_at_ms) => "tray.computerRecentObservation",
         Some(_) => "tray.computerIdle",
+    }
+}
+
+pub fn menu_action(state: &ControlSnapshot) -> (bool, &'static str, bool) {
+    if state.pause_persistence_failed {
+        (true, "tray.computerRetryPause", true)
+    } else if state.paused {
+        (false, "tray.computerResume", !state.controlling)
+    } else {
+        (true, "tray.computerPause", true)
     }
 }
 
@@ -104,6 +114,7 @@ mod tests {
         let mut state = ControlSnapshot {
             epoch: "epoch".into(),
             paused: true,
+            pause_persistence_failed: false,
             observing: true,
             controlling: false,
             last_observation_at_ms: None,
@@ -117,5 +128,29 @@ mod tests {
         state.controlling = false;
         assert_eq!(status_key(Some(&state)), "tray.computerObserving");
         assert_eq!(status_key(None), "tray.computerUnavailable");
+    }
+
+    #[test]
+    fn unsaved_pause_stays_visible_and_offers_retry_instead_of_resume() {
+        let mut state = ControlSnapshot {
+            epoch: "epoch".into(),
+            paused: true,
+            pause_persistence_failed: true,
+            observing: true,
+            controlling: true,
+            last_observation_at_ms: None,
+            last_control_at_ms: None,
+        };
+        assert_eq!(status_key(Some(&state)), "tray.computerPauseNotSaved");
+        assert_eq!(menu_action(&state), (true, "tray.computerRetryPause", true));
+        state.controlling = false;
+        assert_eq!(menu_action(&state), (true, "tray.computerRetryPause", true));
+        state.pause_persistence_failed = false;
+        assert_eq!(status_key(Some(&state)), "tray.computerPausedObserving");
+        assert_eq!(menu_action(&state), (false, "tray.computerResume", true));
+        state.controlling = true;
+        assert_eq!(menu_action(&state), (false, "tray.computerResume", false));
+        state.paused = false;
+        assert_eq!(menu_action(&state), (true, "tray.computerPause", true));
     }
 }

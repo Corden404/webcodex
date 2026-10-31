@@ -313,5 +313,7 @@
   "tray.computerResume": "Computer Control を再開",
   "tray.computerPause": "Computer Control を一時停止",
   "tray.computerRecentControl": "Computer：直前に操作要求を処理",
-  "tray.computerRecentObservation": "Computer：直前にデスクトップを観察"
+  "tray.computerRecentObservation": "Computer：直前にデスクトップを観察",
+  "tray.computerPauseNotSaved": "Computer：以後の入力は停止しましたが、一時停止を保存できませんでした。再起動後に操作が再開する可能性があります",
+  "tray.computerRetryPause": "Computer Control の一時停止を再保存"
 }

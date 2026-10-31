@@ -313,5 +313,7 @@
   "tray.computerResume": "Resume Computer Control",
   "tray.computerPause": "Pause Computer Control",
   "tray.computerRecentControl": "Computer: recent control request",
-  "tray.computerRecentObservation": "Computer: recent observation"
+  "tray.computerRecentObservation": "Computer: recent observation",
+  "tray.computerPauseNotSaved": "Computer: further input blocked; pause not saved; restart may enable control",
+  "tray.computerRetryPause": "Retry saving Computer Control pause"
 }

@@ -378,21 +378,17 @@ fn build_menu(app: &AppHandle, projection: &TrayProjection) -> tauri::Result<Men
     let menu = Menu::new(app)?;
     if cfg!(windows) {
         if let Some(state) = &projection.computer {
-            let prefix = if state.paused {
-                RESUME_COMPUTER_PREFIX
-            } else {
+            let (paused, key, enabled) = crate::computer_control::menu_action(state);
+            let prefix = if paused {
                 PAUSE_COMPUTER_PREFIX
-            };
-            let key = if state.paused {
-                "tray.computerResume"
             } else {
-                "tray.computerPause"
+                RESUME_COMPUTER_PREFIX
             };
             let action = MenuItem::with_id(
                 app,
                 format!("{prefix}{}", state.epoch),
                 locale.text(key),
-                !state.paused || !state.controlling,
+                enabled,
                 None::<&str>,
             )?;
             menu.append(&action)?;
@@ -610,7 +606,16 @@ fn set_computer_paused(
         let _io = cache.computer_io.lock().await;
         let snapshot = app.state::<AppState>().get_state();
         let updated = tokio::task::spawn_blocking(move || {
-            crate::computer_control::set_paused(&snapshot, observed, paused)
+            match crate::computer_control::set_paused(&snapshot, observed, paused) {
+                Ok(updated) => Some(updated),
+                Err(error) => {
+                    eprintln!("WebCodex Computer control action failed: {error}");
+                    // Status owns the sticky persistence failure as well as the
+                    // new epoch. Re-read after a failed action to offer a fenced
+                    // retry rather than restoring an older menu observation.
+                    crate::computer_control::observe(&snapshot)
+                }
+            }
         })
         .await
         .ok()

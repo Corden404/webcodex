@@ -54,7 +54,12 @@ The pause setting is stored independently of opaque Computer IDs. Restarting the
 Runner or helper preserves a confirmed pause and creates a fresh control epoch.
 Malformed saved state prevents enabling input. A failed pause persistence attempt
 leaves the in-memory gate closed and reports an error; a retry must persist before
-it can confirm success.
+it can confirm success. The gate retains that failure in local status until a
+successful save. Desktop shows that further input is blocked but the pause was
+not saved, warns that a restart may enable control, and offers **Retry saving
+Computer Control pause** instead of Resume. Status polling and Desktop reconnects
+do not acknowledge an unsaved pause. Local status without the persistence-failure
+field is unavailable rather than assumed durable; update Desktop and Runner together.
 
 The Windows management pipe accepts only status/pause/resume, is scoped to the
 interactive session, rejects remote pipe clients, and grants access to its creating

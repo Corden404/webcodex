@@ -132,6 +132,77 @@ fn failed_pause_persistence_cannot_be_acknowledged_by_an_idempotent_retry() {
 }
 
 #[test]
+fn pause_persistence_failure_survives_status_reads_until_a_durable_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let control = LocalControl::persistent(dir.path()).unwrap();
+    let path = dir.path().join("computer-control-state");
+    std::fs::create_dir(&path).unwrap();
+    let initial = control.snapshot().unwrap();
+    assert!(control.set_paused(&initial.epoch, true).is_err());
+    for _ in 0..3 {
+        let status = serde_json::to_value(control.snapshot().unwrap()).unwrap();
+        assert_eq!(status["paused"], true);
+        assert_eq!(status["pause_persistence_failed"], true);
+    }
+    // Preserve the obstruction so the retry changes only the persistence boundary.
+    std::fs::rename(&path, dir.path().join("blocked-state-path")).unwrap();
+    let failed = control.snapshot().unwrap();
+    let saved = control.set_paused(&failed.epoch, true).unwrap();
+    assert_eq!(saved.epoch, failed.epoch);
+    assert_eq!(
+        serde_json::to_value(&saved).unwrap()["pause_persistence_failed"],
+        false
+    );
+    assert!(
+        LocalControl::persistent(dir.path())
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .paused
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn locked_enabled_file_reports_unsaved_pause_and_retry_survives_restart() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("computer-control-state");
+    std::fs::write(&path, b"enabled\n").unwrap();
+    let control = LocalControl::persistent(dir.path()).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&path)
+        .unwrap();
+    let initial = control.snapshot().unwrap();
+    assert!(control.set_paused(&initial.epoch, true).is_err());
+    let failed = control.snapshot().unwrap();
+    assert!(failed.paused);
+    assert_eq!(
+        serde_json::to_value(&failed).unwrap()["pause_persistence_failed"],
+        true
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"enabled\n");
+    assert!(
+        !LocalControl::persistent(dir.path())
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .paused
+    );
+    drop(lock);
+    control.set_paused(&failed.epoch, true).unwrap();
+    assert!(
+        LocalControl::persistent(dir.path())
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .paused
+    );
+}
+
+#[test]
 fn local_protocol_is_closed_and_does_not_accept_native_operations() {
     for request in [
         r#"{"action":"resume","expected_epoch":"a","payload":"b"}"#,
@@ -139,6 +210,12 @@ fn local_protocol_is_closed_and_does_not_accept_native_operations() {
     ] {
         assert!(serde_json::from_str::<LocalRequest>(request).is_err());
     }
+    let mut old_status = serde_json::to_value(LocalControl::new().snapshot().unwrap()).unwrap();
+    old_status
+        .as_object_mut()
+        .unwrap()
+        .remove("pause_persistence_failed");
+    assert!(serde_json::from_value::<ControlSnapshot>(old_status).is_err());
 }
 
 #[cfg(windows)]
@@ -198,5 +275,43 @@ fn windows_management_pipe_confirms_exact_server_and_keeps_input_paused() {
     )
     .unwrap();
     assert!(!resumed.paused);
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(dir.path().join("computer-control-state"))
+            .unwrap();
+        assert!(request(
+            dir.path(),
+            &exe,
+            &LocalRequest::Pause {
+                expected_epoch: resumed.epoch
+            }
+        )
+        .is_err());
+        let mut failed = request(dir.path(), &exe, &LocalRequest::Status).unwrap();
+        for _ in 0..3 {
+            failed = request(dir.path(), &exe, &LocalRequest::Status).unwrap();
+            assert!(failed.paused && failed.pause_persistence_failed);
+        }
+        drop(locked);
+        let saved = request(
+            dir.path(),
+            &exe,
+            &LocalRequest::Pause {
+                expected_epoch: failed.epoch,
+            },
+        )
+        .unwrap();
+        assert!(saved.paused && !saved.pause_persistence_failed);
+        assert!(
+            LocalControl::persistent(dir.path())
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .paused
+        );
+    }
     assert!(serve(dir.path(), LocalControl::new()).is_err());
 }
