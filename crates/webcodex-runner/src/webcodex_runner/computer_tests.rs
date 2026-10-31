@@ -1,5 +1,35 @@
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn headless_windows_local_control_preserves_runner_startup_without_input_authority() {
+    let original = webcodex_computer::local_control::LocalControl::new();
+    let active = local_control_after_pipe_start(original.clone(), Ok(())).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&active, &original));
+
+    let disabled = local_control_after_pipe_start(
+        original,
+        Err(webcodex_computer::local_control::INTERACTIVE_SESSION_REQUIRED_ERROR.into()),
+    )
+    .unwrap();
+    let epoch = disabled.snapshot().unwrap().epoch;
+    assert!(disabled.snapshot().unwrap().paused);
+    assert!(disabled.begin(true, Some(&epoch)).is_err());
+    assert!(
+        disabled.begin(false, None).is_ok(),
+        "headless observation remains non-effectful"
+    );
+
+    assert!(
+        local_control_after_pipe_start(
+            webcodex_computer::local_control::LocalControl::new(),
+            Err("computer_control_unavailable: pipe ACL".into()),
+        )
+        .is_err(),
+        "unexpected management failures must not silently downgrade"
+    );
+}
+
 #[test]
 fn computer_local_pause_and_old_epoch_reject_before_native_clipboard_dispatch() {
     let runtime = ComputerRuntime::new(ComputerConfig {

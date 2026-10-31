@@ -72,13 +72,23 @@ interactive session, rejects remote pipe clients, and grants access to its creat
 account and LocalSystem. Desktop pins the server executable and the observed epoch.
 Management is independent of the serialized native-operation pipe. It carries no
 credentials, screenshots, window titles, typed text or clipboard contents. There is
-no remote Computer tool for resuming the gate.
+no remote Computer tool for resuming the gate. This is a gate for WebCodex
+Computer operations, not an operating-system sandbox for separately authorized
+Shell/script execution. Code running as the same interactive account could still
+use native input APIs or access the account-scoped management pipe; the local
+pause must not be presented as a security boundary against such code.
 
 Update Desktop, Runner and Server together. An updated managed Windows Runner
 rejects unfenced control from an older Server while retaining the observation
 contract. Older Runners retain their existing behavior and cannot provide this
 local pause guarantee. The shared state machine is platform neutral; the local
 management transport and Desktop controls currently require Windows.
+
+An unmanaged Windows Runner started without a Computer Helper in noninteractive
+Session 0 continues to serve Shell, file and Job tools, but keeps all native
+Computer effects disabled. Without an interactive desktop there is no local
+management pipe or Resume entrypoint. Other pipe initialization failures remain
+fatal rather than silently enabling Computer input.
 
 The focused native pipe test uses disposable local state and checks server identity,
 pause/resume, stale epochs, duplicate ownership and client disconnect recovery.

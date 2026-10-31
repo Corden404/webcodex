@@ -34,10 +34,34 @@ pub(super) fn computer_runtime() -> &'static ComputerRuntime {
 #[cfg(windows)]
 pub(crate) fn configure_local_control(dir: &std::path::Path) -> Result<(), String> {
     let control = webcodex_computer::local_control::LocalControl::persistent(dir)?;
-    webcodex_computer::local_control::serve(dir, control.clone())?;
+    let serve_result = webcodex_computer::local_control::serve(dir, control.clone());
+    let control = local_control_after_pipe_start(control, serve_result)?;
     LOCAL_CONTROL
         .set(control)
         .map_err(|_| "computer control already configured".to_string())
+}
+
+#[cfg(windows)]
+fn local_control_after_pipe_start(
+    control: std::sync::Arc<webcodex_computer::local_control::LocalControl>,
+    serve_result: Result<(), String>,
+) -> Result<std::sync::Arc<webcodex_computer::local_control::LocalControl>, String> {
+    match serve_result {
+        Ok(()) => Ok(control),
+        Err(error)
+            if error == webcodex_computer::local_control::INTERACTIVE_SESSION_REQUIRED_ERROR =>
+        {
+            // An unmanaged Runner launched as a Windows Session 0 task still
+            // needs to serve its independent Shell/file/Job requests. There is
+            // no physical desktop for a management pipe, so fail the Computer
+            // gate closed rather than failing the entire Runner process.
+            tracing::warn!(
+                "No interactive Computer session; native control is disabled for this Runner"
+            );
+            Ok(webcodex_computer::local_control::LocalControl::disabled())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 static LOCAL_CONTROL: OnceLock<std::sync::Arc<webcodex_computer::local_control::LocalControl>> =

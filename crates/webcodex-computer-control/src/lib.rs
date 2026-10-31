@@ -32,10 +32,21 @@ pub struct LocalControl {
 
 impl LocalControl {
     pub fn new() -> Arc<Self> {
+        Self::ephemeral(false)
+    }
+
+    /// Keep all native control effects closed when no interactive local
+    /// management endpoint can exist (for example a Session 0 Runner).
+    /// The ordinary Runner may still offer Shell, file, and Job tools.
+    pub fn disabled() -> Arc<Self> {
+        Self::ephemeral(true)
+    }
+
+    fn ephemeral(paused: bool) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(State {
                 epoch: uuid::Uuid::new_v4().to_string(),
-                paused: false,
+                paused,
                 pause_persistence_failed: false,
                 observations: 0,
                 controls: 0,
@@ -258,6 +269,12 @@ impl Drop for ActivityGuard {
         }
     }
 }
+
+/// Exact local-management error that means this process has no interactive
+/// desktop. Callers may continue as a non-Computer Runner with the gate closed.
+#[cfg(windows)]
+pub const INTERACTIVE_SESSION_REQUIRED_ERROR: &str =
+    "computer_control_unavailable: interactive session required";
 
 #[cfg(windows)]
 mod windows;

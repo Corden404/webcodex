@@ -86,7 +86,7 @@ fn wide(value: &OsStr) -> Vec<u16> {
 fn session(pid: u32) -> Result<u32, String> {
     let mut value = 0;
     if unsafe { ProcessIdToSessionId(pid, &mut value) } == 0 || value == 0 {
-        return Err("computer_control_unavailable: interactive session required".into());
+        return Err(INTERACTIVE_SESSION_REQUIRED_ERROR.into());
     }
     Ok(value)
 }
