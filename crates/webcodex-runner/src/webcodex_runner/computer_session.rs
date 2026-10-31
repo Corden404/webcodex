@@ -544,34 +544,39 @@ mod tests {
     }
     #[test]
     fn persistent_runner_rejects_computer_until_server_echoes_availability() {
-        let dir = tempfile::tempdir().unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        configure(
-            dir.path().to_path_buf(),
-            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
-        )
-        .unwrap();
-        mark_availability_reported(true);
-        mark_control_epoch_reported("previous-registration".into());
-        set_server_availability_contract(false);
-        assert!(REPORTED_AVAILABILITY.lock().unwrap().is_none());
-        assert!(REPORTED_CONTROL_EPOCH.lock().unwrap().is_none());
-        assert_eq!(availability(), Some(false));
-        let result = dispatch(&RunnerComputerOperation {
-            control_epoch: None,
-            kind: RunnerComputerOperationKind::AccessibilityStatus,
-            payload: "{}".into(),
-            timeout_secs: 1,
+        // Configuration and registration facts belong to the whole Runner
+        // process. Keep this fixture out of other loopback transport sessions.
+        crate::tests::IsolatedEnv::new().run("computer-session-availability", || {
+            let dir = tempfile::tempdir().unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            }
+            configure(
+                dir.path().to_path_buf(),
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
+            )
+            .unwrap();
+            mark_availability_reported(true);
+            mark_control_epoch_reported("previous-registration".into());
+            set_server_availability_contract(false);
+            assert!(REPORTED_AVAILABILITY.lock().unwrap().is_none());
+            assert!(REPORTED_CONTROL_EPOCH.lock().unwrap().is_none());
+            assert_eq!(availability(), Some(false));
+            let result = dispatch(&RunnerComputerOperation {
+                control_epoch: None,
+                kind: RunnerComputerOperationKind::AccessibilityStatus,
+                payload: "{}".into(),
+                timeout_secs: 1,
+            });
+            assert!(result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Server cannot confirm"));
         });
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Server cannot confirm"));
     }
     #[test]
     fn wire_limits_cover_max_computer_payload_and_image() {
