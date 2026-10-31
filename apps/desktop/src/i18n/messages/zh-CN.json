@@ -313,8 +313,5 @@
   "tray.computerResume": "恢复 Computer Control",
   "tray.computerPause": "暂停 Computer Control",
   "tray.computerRecentControl": "Computer：刚刚处理了控制请求",
-  "tray.computerRecentObservation": "Computer：刚刚观察过桌面",
-  "tray.computerEdge": "显示屏幕边缘活动提示",
-  "tray.computerShortcut": "启用暂停快捷键 · Ctrl+Alt+Shift+F10",
-  "tray.computerShortcutUnavailable": "暂停快捷键不可用 · 可重新尝试启用"
+  "tray.computerRecentObservation": "Computer：刚刚观察过桌面"
 }

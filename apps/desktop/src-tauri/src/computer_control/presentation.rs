@@ -1,21 +1,22 @@
-//! Optional native UI. Visibility and hotkeys never own execution authority.
-use std::sync::atomic::{AtomicBool, Ordering};
+//! Native activity hints and local Escape detection never own execution authority.
+use std::sync::atomic::AtomicBool;
+#[cfg(windows)]
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager};
 
 #[derive(Default)]
 pub struct Presentation {
-    pub edge: AtomicBool,
-    pub shortcut: AtomicBool,
-    pub shortcut_unavailable: AtomicBool,
+    pub controlling: AtomicBool,
+    #[cfg(windows)]
+    pub shortcut_ready: AtomicBool,
 }
 
 pub fn update_edge(app: &AppHandle, activity: bool) {
-    let enabled = app.state::<Presentation>().edge.load(Ordering::Acquire);
     let monitors = app.available_monitors().unwrap_or_default();
     for (index, monitor) in monitors.iter().enumerate().take(16) {
         let label = format!("computer-activity-{index}");
         let existing = app.get_webview_window(&label);
-        if !enabled || !activity {
+        if !activity {
             if let Some(window) = existing {
                 let _ = window.hide();
             }
@@ -75,59 +76,133 @@ pub fn start_shortcut_listener(app: &AppHandle) {
         .name("computer-pause-shortcut".into())
         .spawn(move || {
             let app = listener_app;
-            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-                RegisterHotKey, UnregisterHotKey,
-            };
+            use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                PeekMessageW, MSG, PM_REMOVE, WM_HOTKEY,
+                PeekMessageW, SetWindowsHookExW, UnhookWindowsHookEx, MSG, PM_REMOVE,
+                WH_KEYBOARD_LL,
             };
-            const ID: i32 = 1339;
-            let mut registered = false;
+            let hook = unsafe {
+                SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    Some(keyboard_hook),
+                    GetModuleHandleW(std::ptr::null()),
+                    0,
+                )
+            };
+            if hook.is_null() {
+                eprintln!(
+                    "WebCodex Computer Esc listener unavailable: {}",
+                    std::io::Error::last_os_error()
+                );
+                return;
+            }
+            app.state::<Presentation>()
+                .shortcut_ready
+                .store(true, Ordering::Release);
             loop {
-                let desired = app.state::<Presentation>().shortcut.load(Ordering::Acquire);
-                if desired != registered {
-                    if desired {
-                        // Ctrl+Alt+Shift+F10, no autorepeat. Escape remains available
-                        // to the foreground application and Computer key vocabulary.
-                        registered =
-                            unsafe { RegisterHotKey(std::ptr::null_mut(), ID, 0x4007, 0x79) } != 0;
-                        app.state::<Presentation>()
-                            .shortcut_unavailable
-                            .store(!registered, Ordering::Release);
-                        if !registered {
-                            app.state::<Presentation>()
-                                .shortcut
-                                .store(false, Ordering::Release);
-                        }
-                    } else {
-                        unsafe { UnregisterHotKey(std::ptr::null_mut(), ID) };
-                        registered = false;
-                    }
-                }
                 let mut message: MSG = unsafe { std::mem::zeroed() };
                 while unsafe { PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) }
                     != 0
+                {}
+                if ESCAPE_REQUESTED.with(|requested| requested.replace(false))
+                    && app
+                        .state::<Presentation>()
+                        .controlling
+                        .load(Ordering::Acquire)
                 {
-                    if registered && message.message == WM_HOTKEY && message.wParam == ID as usize {
-                        crate::tray::pause_computer(&app);
-                    }
+                    crate::tray::pause_computer(&app);
                 }
                 if app
                     .state::<crate::desktop_shell::DesktopShellState>()
                     .close_disposition()
                     == crate::desktop_shell::CloseDisposition::AllowExit
                 {
-                    if registered {
-                        unsafe { UnregisterHotKey(std::ptr::null_mut(), ID) };
-                    }
+                    unsafe { UnhookWindowsHookEx(hook) };
+                    app.state::<Presentation>()
+                        .shortcut_ready
+                        .store(false, Ordering::Release);
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(30));
             }
         });
     if result.is_err() {
-        app.state::<Presentation>()
-            .shortcut_unavailable
-            .store(true, Ordering::Release);
+        eprintln!("WebCodex Computer Esc listener thread could not start");
+    }
+}
+
+#[cfg(windows)]
+thread_local! {
+    static ESCAPE_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(windows)]
+fn physical_escape(
+    code: i32,
+    message: usize,
+    key: &windows_sys::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT,
+) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{LLKHF_INJECTED, WM_KEYDOWN, WM_SYSKEYDOWN};
+    code == 0
+        && matches!(message as u32, WM_KEYDOWN | WM_SYSKEYDOWN)
+        && key.vkCode == u32::from(VK_ESCAPE)
+        && key.flags & LLKHF_INJECTED == 0
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn keyboard_hook(code: i32, message: usize, data: isize) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CallNextHookEx, KBDLLHOOKSTRUCT};
+    if code == 0 && physical_escape(code, message, &*(data as *const KBDLLHOOKSTRUCT)) {
+        ESCAPE_REQUESTED.with(|requested| requested.set(true));
+    }
+    // Observe only: Escape still reaches the foreground app, and injected
+    // Computer input cannot trigger this local-user pause path.
+    CallNextHookEx(std::ptr::null_mut(), code, message, data)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLKHF_LOWER_IL_INJECTED, WM_KEYDOWN, WM_KEYUP,
+        WM_SYSKEYDOWN,
+    };
+
+    #[test]
+    fn escape_pause_accepts_local_key_down_and_rejects_injected_input() {
+        let mut key = KBDLLHOOKSTRUCT {
+            vkCode: u32::from(VK_ESCAPE),
+            scanCode: 0,
+            flags: 0,
+            time: 0,
+            dwExtraInfo: 0,
+        };
+        assert!(physical_escape(0, WM_KEYDOWN as usize, &key));
+        assert!(physical_escape(0, WM_SYSKEYDOWN as usize, &key));
+        assert!(!physical_escape(-1, WM_KEYDOWN as usize, &key));
+        assert!(!physical_escape(0, WM_KEYUP as usize, &key));
+        key.flags = LLKHF_INJECTED;
+        assert!(!physical_escape(0, WM_KEYDOWN as usize, &key));
+        key.flags |= LLKHF_LOWER_IL_INJECTED;
+        assert!(!physical_escape(0, WM_KEYDOWN as usize, &key));
+        key.flags = 0;
+        key.vkCode = 0x41;
+        assert!(!physical_escape(0, WM_KEYDOWN as usize, &key));
+
+        key.vkCode = u32::from(VK_ESCAPE);
+        ESCAPE_REQUESTED.with(|requested| requested.set(false));
+        for flags in [LLKHF_INJECTED, 0] {
+            key.flags = flags;
+            unsafe {
+                keyboard_hook(0, WM_KEYDOWN as usize, &key as *const _ as isize);
+            }
+            assert_eq!(
+                ESCAPE_REQUESTED.with(|requested| requested.replace(false)),
+                flags == 0,
+                "only a local Escape should reach the pause dispatcher"
+            );
+        }
     }
 }

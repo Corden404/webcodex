@@ -313,8 +313,5 @@
   "tray.computerResume": "Computer Control fortsetzen",
   "tray.computerPause": "Computer Control pausieren",
   "tray.computerRecentControl": "Computer: kürzlich verarbeitete Steuerungsanfrage",
-  "tray.computerRecentObservation": "Computer: kürzliche Beobachtung",
-  "tray.computerEdge": "Aktivitätshinweis am Bildschirmrand anzeigen",
-  "tray.computerShortcut": "Pausentaste aktivieren · Ctrl+Alt+Shift+F10",
-  "tray.computerShortcutUnavailable": "Pausentaste nicht verfügbar · erneut aktivieren"
+  "tray.computerRecentObservation": "Computer: kürzliche Beobachtung"
 }

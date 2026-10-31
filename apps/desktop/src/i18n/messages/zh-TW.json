@@ -313,8 +313,5 @@
   "tray.computerResume": "恢復 Computer Control",
   "tray.computerPause": "暫停 Computer Control",
   "tray.computerRecentControl": "Computer：剛剛處理了控制請求",
-  "tray.computerRecentObservation": "Computer：剛剛觀察過桌面",
-  "tray.computerEdge": "顯示螢幕邊緣活動提示",
-  "tray.computerShortcut": "啟用暫停快速鍵 · Ctrl+Alt+Shift+F10",
-  "tray.computerShortcutUnavailable": "暫停快速鍵無法使用 · 可重新嘗試啟用"
+  "tray.computerRecentObservation": "Computer：剛剛觀察過桌面"
 }

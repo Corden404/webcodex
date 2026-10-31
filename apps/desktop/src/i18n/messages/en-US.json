@@ -313,8 +313,5 @@
   "tray.computerResume": "Resume Computer Control",
   "tray.computerPause": "Pause Computer Control",
   "tray.computerRecentControl": "Computer: recent control request",
-  "tray.computerRecentObservation": "Computer: recent observation",
-  "tray.computerEdge": "Show screen-edge activity hint",
-  "tray.computerShortcut": "Enable pause shortcut · Ctrl+Alt+Shift+F10",
-  "tray.computerShortcutUnavailable": "Pause shortcut unavailable · try enabling again"
+  "tray.computerRecentObservation": "Computer: recent observation"
 }

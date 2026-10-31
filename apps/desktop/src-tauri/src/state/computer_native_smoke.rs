@@ -28,13 +28,27 @@ pub(crate) fn exercise(app: &AppHandle) {
         ENVIRONMENT_SCHEMA,
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        keybd_event, RegisterHotKey, UnregisterHotKey, KEYEVENTF_KEYUP,
+        keybd_event, KEYEVENTF_KEYUP, VK_ESCAPE,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindowDisplayAffinity,
-        GetWindowLongPtrW, SetForegroundWindow, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, GetForegroundWindow,
+        GetWindowDisplayAffinity, GetWindowLongPtrW, SetForegroundWindow, SetWindowLongPtrW,
+        GWLP_WNDPROC, GWL_EXSTYLE, WM_KEYUP, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
         WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
+    static ESCAPE_RECEIVED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    unsafe extern "system" fn keyboard_window_proc(
+        window: windows_sys::Win32::Foundation::HWND,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        if message == WM_KEYUP && wparam == usize::from(VK_ESCAPE) {
+            ESCAPE_RECEIVED.store(true, Ordering::Release);
+        }
+        DefWindowProcW(window, message, wparam, lparam)
+    }
 
     let state = app.state::<AppState>();
     // Keep the unrelated service observer out of this private metadata fixture.
@@ -74,8 +88,10 @@ pub(crate) fn exercise(app: &AppHandle) {
     control::serve(&dir, gate.clone()).unwrap();
     state.published.write().unwrap().persistent_environment = Some(environment_id.into());
     let settings = app.state::<Presentation>();
-    assert!(!settings.edge.load(Ordering::Acquire));
-    assert!(!settings.shortcut.load(Ordering::Acquire));
+    assert!(!settings.controlling.load(Ordering::Acquire));
+    wait_until("OS Escape listener installed automatically", || {
+        settings.shortcut_ready.load(Ordering::Acquire)
+    });
     assert!(app.get_webview_window("main").is_none());
 
     let initial = gate.snapshot().unwrap();
@@ -132,7 +148,6 @@ pub(crate) fn exercise(app: &AppHandle) {
         .unwrap();
     let foreground = unsafe { GetForegroundWindow() };
     let activity = gate.begin(true, None).unwrap();
-    menu(app, "tray.computer_edge");
     wait_until("native overlay on every attached monitor", || {
         app.available_monitors()
             .unwrap()
@@ -185,7 +200,6 @@ pub(crate) fn exercise(app: &AppHandle) {
         app.get_webview_window("computer-activity-0")
             .is_some_and(|window| !window.is_visible().unwrap())
     });
-    menu(app, "tray.computer_edge");
     eprintln!("NATIVE_COMPUTER overlay monitors={monitor_count} pointer=transparent focus=preserved capture=excluded main=absent");
 
     // A plain owned native window receives any unhandled keys. It contains no
@@ -213,6 +227,16 @@ pub(crate) fn exercise(app: &AppHandle) {
             )
         };
         assert!(!window.is_null());
+        assert_ne!(
+            unsafe {
+                SetWindowLongPtrW(
+                    window,
+                    GWLP_WNDPROC,
+                    keyboard_window_proc as *const () as isize,
+                )
+            },
+            0
+        );
         unsafe { SetForegroundWindow(window) };
         tx.send(window as usize).unwrap();
     })
@@ -222,47 +246,39 @@ pub(crate) fn exercise(app: &AppHandle) {
         (unsafe { GetForegroundWindow() }) as usize == keyboard_target
     });
     assert!(app.get_webview_window("main").is_none());
-    // Confirm availability before enabling, then observe the production listener's
-    // real OS registration. Inject only while this isolated test window has focus.
-    assert_ne!(
-        unsafe { RegisterHotKey(std::ptr::null_mut(), 1340, 0x4007, 0x79) },
-        0
-    );
-    unsafe { UnregisterHotKey(std::ptr::null_mut(), 1340) };
-    menu(app, "tray.computer_shortcut");
-    wait_until("OS hotkey registered", || {
-        let reserved = unsafe { RegisterHotKey(std::ptr::null_mut(), 1340, 0x4007, 0x79) } != 0;
-        if reserved {
-            unsafe { UnregisterHotKey(std::ptr::null_mut(), 1340) };
-        }
-        !reserved
-            && settings.shortcut.load(Ordering::Acquire)
-            && !settings.shortcut_unavailable.load(Ordering::Acquire)
+    // Computer's injected Escape must remain usable while local physical Escape
+    // is enabled. This cannot prove physical hardware input; the packet classifier
+    // has separate regression coverage.
+    let activity = gate.begin(true, None).unwrap();
+    wait_until("Escape enabled during control activity", || {
+        settings.controlling.load(Ordering::Acquire)
     });
+    assert_eq!(
+        unsafe { GetForegroundWindow() } as usize,
+        keyboard_target,
+        "inject only into the owned keyboard fixture"
+    );
     unsafe {
-        for key in [0x11, 0x12, 0x10, 0x79] {
-            keybd_event(key, 0, 0, 0);
-        }
-        for key in [0x79, 0x10, 0x12, 0x11] {
-            keybd_event(key, 0, KEYEVENTF_KEYUP, 0);
-        }
+        keybd_event(VK_ESCAPE as u8, 0, 0, 0);
+        keybd_event(VK_ESCAPE as u8, 0, KEYEVENTF_KEYUP, 0);
     }
-    wait_until("real WM_HOTKEY pauses local gate", || {
-        gate.snapshot().unwrap().paused
+    wait_until("injected Escape reaches the foreground application", || {
+        ESCAPE_RECEIVED.load(Ordering::Acquire)
     });
-    assert!(app.get_webview_window("main").is_none());
-    menu(app, "tray.computer_shortcut");
-    wait_until("shortcut disabled", || {
-        !settings.shortcut.load(Ordering::Acquire)
-    });
+    std::thread::sleep(Duration::from_millis(300));
     assert!(
-        gate.snapshot().unwrap().paused,
-        "disabling shortcut must not resume input"
+        !gate.snapshot().unwrap().paused,
+        "injected Escape paused control"
     );
+    assert!(app.get_webview_window("main").is_none());
+    drop(activity);
+    wait_until("Escape disabled after control activity", || {
+        !settings.controlling.load(Ordering::Acquire)
+    });
     app.run_on_main_thread(move || {
         assert_ne!(unsafe { DestroyWindow(keyboard_target as _) }, 0);
     })
     .unwrap();
-    eprintln!("NATIVE_COMPUTER global_hotkey=os_registered pause=confirmed main=absent disable_keeps=paused");
+    eprintln!("NATIVE_COMPUTER escape_listener=os_hooked injected_escape=ignored activity_scoped=yes main=absent");
     state.published.write().unwrap().persistent_environment = None;
 }

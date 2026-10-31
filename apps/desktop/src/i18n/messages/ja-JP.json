@@ -313,8 +313,5 @@
   "tray.computerResume": "Computer Control を再開",
   "tray.computerPause": "Computer Control を一時停止",
   "tray.computerRecentControl": "Computer：直前に操作要求を処理",
-  "tray.computerRecentObservation": "Computer：直前にデスクトップを観察",
-  "tray.computerEdge": "画面端に操作状況を表示",
-  "tray.computerShortcut": "一時停止キーを有効化 · Ctrl+Alt+Shift+F10",
-  "tray.computerShortcutUnavailable": "一時停止キーを使用できません · 再度有効化してください"
+  "tray.computerRecentObservation": "Computer：直前にデスクトップを観察"
 }

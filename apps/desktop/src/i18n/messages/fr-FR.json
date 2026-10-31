@@ -313,8 +313,5 @@
   "tray.computerResume": "Reprendre Computer Control",
   "tray.computerPause": "Suspendre Computer Control",
   "tray.computerRecentControl": "Computer : commande récemment traitée",
-  "tray.computerRecentObservation": "Computer : observation récente",
-  "tray.computerEdge": "Afficher l’activité au bord de l’écran",
-  "tray.computerShortcut": "Activer le raccourci de pause · Ctrl+Alt+Shift+F10",
-  "tray.computerShortcutUnavailable": "Raccourci de pause indisponible · réessayer"
+  "tray.computerRecentObservation": "Computer : observation récente"
 }

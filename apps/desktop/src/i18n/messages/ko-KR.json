@@ -313,8 +313,5 @@
   "tray.computerResume": "Computer Control 재개",
   "tray.computerPause": "Computer Control 일시 중지",
   "tray.computerRecentControl": "Computer: 최근 제어 요청 처리됨",
-  "tray.computerRecentObservation": "Computer: 최근 데스크톱 관찰됨",
-  "tray.computerEdge": "화면 가장자리에 활동 표시",
-  "tray.computerShortcut": "일시 중지 단축키 사용 · Ctrl+Alt+Shift+F10",
-  "tray.computerShortcutUnavailable": "일시 중지 단축키 사용 불가 · 다시 활성화하세요"
+  "tray.computerRecentObservation": "Computer: 최근 데스크톱 관찰됨"
 }

@@ -1,6 +1,6 @@
 # Local Computer Control
 
-Windows Desktop shows Computer activity in its native tray. On a saved environment
+Windows Desktop shows Computer activity in its native tray tooltip. On a saved environment
 with a local Runner, **Pause Computer Control** blocks further native input for all
 remote clients using that Runner. **Resume Computer Control** requires an explicit
 local action. The main Desktop window can be closed while the tray and Runner remain
@@ -17,10 +17,12 @@ permissions remain unchanged, including screenshots, accessibility/window querie
 and clipboard reads. A pause does not undo an operation that already entered native
 execution. Resume stays disabled until admitted controls finish.
 
-The tray also offers an optional screen-edge hint and an optional
-**Ctrl+Alt+Shift+F10** pause shortcut. Both start disabled for each Desktop run.
-The shortcut never resumes control. Registration conflicts are shown in the tray;
-Escape remains available to the foreground application. The edge hint is placed
+The tray menu contains a single Computer action: pause, or resume after pausing.
+The screen-edge hint appears automatically during control activity and for 1.5
+seconds afterward. Pressing a physical **Esc** key during that activity pauses
+control; it never resumes control. Injected keys, including Computer Escape input,
+do not trigger the shortcut. Escape still reaches the foreground application.
+Observation alone does not enable the shortcut or edge hint. The edge hint is placed
 on up to sixteen connected displays without activation or pointer interception and
 requests Windows capture exclusion. Actual capture exclusion and full-screen
 appearance depend on the Windows compositor and capture provider.
