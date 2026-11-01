@@ -1421,6 +1421,10 @@ pub enum ComputerControlToolCall {
         #[schemars(schema_with = "webcodex_core::computer_scroll_contract::computer_scroll_amount_schema")]
         #[serde(default)]
         amount: Option<webcodex_core::computer_scroll_contract::ComputerScrollAmount>,
+        /// One fresh bounded tree of the same window after confirmed success,
+        /// including an observed boundary no-op. Requires independent read authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        observe_after: Option<ComputerPostObservation>,
     },
     ScrollToElement {
         #[schemars(length(min = 1, max = 128))]
@@ -1495,7 +1499,9 @@ pub enum ComputerControlToolCall {
 impl ComputerControlToolCall {
     pub fn observe_after(&self) -> Option<&ComputerPostObservation> {
         match self {
-            Self::Press { observe_after, .. } | Self::InputText { observe_after, .. } => observe_after.as_ref(),
+            Self::Press { observe_after, .. }
+            | Self::InputText { observe_after, .. }
+            | Self::Scroll { observe_after, .. } => observe_after.as_ref(),
             _ => None,
         }
     }
